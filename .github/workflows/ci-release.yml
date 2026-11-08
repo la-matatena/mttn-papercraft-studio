@@ -1,0 +1,84 @@
+name: CI & Release
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+      - "tweak/**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install GoogleTest for OpenFX C++ suite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtest-dev
+
+      - name: Build Linux OpenFX binary
+        run: |
+          g++ -std=c++17 -O3 -fPIC -shared -fvisibility=hidden \
+            -DPAPERCRAFT_STANDALONE_OFX \
+            -Iofx -Iofx/openfx_include \
+            -Wl,--version-script=ofx/openfx_sym.lds \
+            ofx/papercraft_kernel.cc ofx/papercraft_ofx_plugin.cc \
+            -o PaperCraftStudioPro.ofx
+          chmod 0755 PaperCraftStudioPro.ofx
+
+      - name: Run C++ OpenFX host & rendering tests
+        run: |
+          g++ -std=c++17 -O2 -DPAPERCRAFT_STANDALONE_OFX \
+            -Iofx -Iofx/openfx_include \
+            ofx/papercraft_ofx_test.cc \
+            -lgtest -lgtest_main -ldl -lpthread \
+            -o papercraft_ofx_test
+          PAPERCRAFT_OFX_PATH="$PWD/PaperCraftStudioPro.ofx" ./papercraft_ofx_test
+
+      - name: Run Python .drfx, Foley WAV, and bundle tests
+        run: python3 -B papercraft_pro_test.py -v
+
+      - name: Assemble PaperCraft Studio Pro release bundle
+        run: |
+          python3 -B build_papercraft_bundle.py \
+            --output_dir=dist \
+            --readme_path=README.md \
+            --linux_ofx_path=PaperCraftStudioPro.ofx
+
+      - name: Upload workflow build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: papercraft-studio-pro-bundle
+          path: |
+            dist/PaperCraft_Studio_Pro_Full_Bundle.zip
+            dist/PaperCraft_Studio_Pro.drfx
+
+      - name: Publish GitHub Release on version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          PRERELEASE_ARGS=()
+          if [[ "${TAG_NAME}" == *-* ]]; then
+            PRERELEASE_ARGS+=(--prerelease)
+          fi
+          gh release create "${TAG_NAME}" \
+            dist/PaperCraft_Studio_Pro_Full_Bundle.zip \
+            dist/PaperCraft_Studio_Pro.drfx \
+            --title "PaperCraft Studio Pro ${TAG_NAME}" \
+            --generate-notes \
+            "${PRERELEASE_ARGS[@]}"

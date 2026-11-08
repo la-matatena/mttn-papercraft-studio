@@ -1,0 +1,23 @@
+# Python artifacts and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# macOS Finder metadata
+.DS_Store
+._*
+
+# Compiled binaries and generated release bundles
+build/
+dist/
+release/
+*.ofx
+*.ofx.bundle/
+*.drfx
+*.zip
+papercraft_ofx_test
