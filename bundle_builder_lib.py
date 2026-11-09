@@ -51,6 +51,7 @@ _DOC_RELPATHS = (
 _REPO_ROOT_FILES = (
     "BUILD",
     "LICENSE",
+    "README.en.md",
     "README.md",
     "build_papercraft_bundle.py",
     "bundle_builder_lib.py",
@@ -305,6 +306,16 @@ def build_and_write_release(
       f.write(resolved_readme)
     written_paths["readme"] = readme_out
 
+  readme_en_src = os.path.join(pkg_dir, "README.en.md")
+  readme_en_bytes = (
+      _read_bytes(readme_en_src) if os.path.isfile(readme_en_src) else None
+  )
+  if readme_en_bytes is not None:
+    readme_en_out = os.path.join(output_dir, "README.en.md")
+    with open(readme_en_out, "wb") as f:
+      f.write(readme_en_bytes)
+    written_paths["readme_en"] = readme_en_out
+
   license_src = os.path.join(pkg_dir, "LICENSE")
   license_bytes = _read_bytes(license_src) if os.path.isfile(license_src) else None
   if license_bytes is not None:
@@ -325,6 +336,8 @@ def build_and_write_release(
       full_zip_map[f"Templates_Unpacked/{rel_path}"] = raw_bytes
   if resolved_readme is not None:
     full_zip_map["README.md"] = resolved_readme.encode("utf-8")
+  if readme_en_bytes is not None:
+    full_zip_map["README.en.md"] = readme_en_bytes
 
   full_zip_bytes = _write_deterministic_zip(full_zip_map)
   full_zip_path = os.path.join(

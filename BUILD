@@ -110,6 +110,7 @@ filegroup(
 filegroup(
     name = "docs_files",
     srcs = [
+        "README.en.md",
         "README.md",
         "docs/design_doc.md",
         "docs/developer_guide.md",

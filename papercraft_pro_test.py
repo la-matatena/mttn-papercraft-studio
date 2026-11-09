@@ -242,6 +242,7 @@ class PapercraftProTest(absltest.TestCase):
 
       for md_entry in (
           "papercraft_pro/README.md",
+          "papercraft_pro/README.en.md",
           "papercraft_pro/docs/design_doc.md",
           "papercraft_pro/docs/user_guide.md",
           "papercraft_pro/docs/developer_guide.md",
