@@ -168,6 +168,7 @@ class PapercraftProTest(absltest.TestCase):
     with zipfile.ZipFile(out["full_zip"], "r") as zf:
       names = set(zf.namelist())
       self.assertIn("PaperCraft_Studio_Pro.drfx", names)
+      self.assertIn("LICENSE", names)
       self.assertIn("README.md", names)
       self.assertIn("docs/design_doc.md", names)
       self.assertIn("docs/user_guide.md", names)
@@ -196,6 +197,7 @@ class PapercraftProTest(absltest.TestCase):
       rnames = set(rzf.namelist())
       expected_repo_entries = (
           "papercraft_pro/BUILD",
+          "papercraft_pro/LICENSE",
           "papercraft_pro/README.md",
           "papercraft_pro/docs/design_doc.md",
           "papercraft_pro/docs/user_guide.md",

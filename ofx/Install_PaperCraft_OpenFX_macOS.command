@@ -106,7 +106,7 @@ main() {
   fi
   echo "Installed ${BUNDLE_NAME} to ${dest_dir}/${BUNDLE_NAME}"
   echo "Restart DaVinci Resolve (Blackmagic Design website build; Mac App Store sandbox blocks third-party OFX)."
-  echo "Find plugins on the Edit tab under Open FX, Generators, and Video Transitions > PaperCraft Studio."
+  echo "Find plugins on the Edit tab under Open FX, Generators, and Video Transitions > MTTN PaperCraft Studio."
 }
 
 main "$@"

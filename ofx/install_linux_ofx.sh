@@ -77,7 +77,7 @@ main() {
     sudo cp -a "${src_bundle}" "${dest_dir}/"
   fi
   echo "Installed ${BUNDLE_NAME} to ${dest_dir}/${BUNDLE_NAME}"
-  echo "Restart DaVinci Resolve and open Effects > Open FX / Generators / Video Transitions > PaperCraft Studio on the Edit tab."
+  echo "Restart DaVinci Resolve and open Effects > Open FX / Generators / Video Transitions > MTTN PaperCraft Studio on the Edit tab."
 }
 
 main "$@"

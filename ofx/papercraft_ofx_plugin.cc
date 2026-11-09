@@ -27,7 +27,7 @@ namespace {
 
 constexpr int kPluginCount = 4;
 constexpr int kVersionMajor = 2;
-constexpr int kVersionMinor = 0;
+constexpr int kVersionMinor = 1;
 
 enum class PluginRole {
   kCutout = 0,
@@ -587,7 +587,7 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
 
   const char* label = "Paper Cutout FX";
   const char* short_label = "PaperCutout";
-  const char* long_label = "PaperCraft Studio: Paper Cutout FX";
+  const char* long_label = "MTTN PaperCraft Studio: Paper Cutout FX";
   const char* desc =
       "Real-time torn paper cutout border, fiber texture, fold creases, "
       "green screen key, intro/outro paper animations, and stop-motion jitter.";
@@ -597,7 +597,7 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
     case PluginRole::kUnfoldTransition:
       label = "Paper Unfold Transition";
       short_label = "PaperUnfold";
-      long_label = "PaperCraft Studio: Paper Unfold Transition";
+      long_label = "MTTN PaperCraft Studio: Paper Unfold Transition";
       desc =
           "3D folded paper sheet transition with directional drop shadow and "
           "stop-motion frame stepping.";
@@ -605,7 +605,7 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
     case PluginRole::kCrumpleTransition:
       label = "Paper Crumple Transition";
       short_label = "PaperCrumple";
-      long_label = "PaperCraft Studio: Paper Crumple Transition";
+      long_label = "MTTN PaperCraft Studio: Paper Crumple Transition";
       desc =
           "Faceted paper crumple-ball and uncrumple transition for Edit-tab "
           "timelines.";
@@ -613,7 +613,7 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
     case PluginRole::kRipWipeTransition:
       label = "Paper Rip Wipe Transition";
       short_label = "PaperRipWipe";
-      long_label = "PaperCraft Studio: Paper Rip Wipe Transition";
+      long_label = "MTTN PaperCraft Studio: Paper Rip Wipe Transition";
       desc =
           "Jagged torn-paper reveal wipe with exposed cardstock rim and "
           "cast shadow.";
@@ -624,12 +624,12 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
   s.prop->propSetString(props, kOfxPropShortLabel, 0, short_label);
   s.prop->propSetString(props, kOfxPropLongLabel, 0, long_label);
   s.prop->propSetString(props, kOfxImageEffectPluginPropGrouping, 0,
-                        "PaperCraft Studio");
+                        "MTTN PaperCraft Studio");
   s.prop->propSetString(props, kOfxPropPluginDescription, 0, desc);
 
   const int version[2] = {kVersionMajor, kVersionMinor};
   s.prop->propSetIntN(props, kOfxPropVersion, 2, version);
-  s.prop->propSetString(props, kOfxPropVersionLabel, 0, "2.0.0");
+  s.prop->propSetString(props, kOfxPropVersionLabel, 0, "2.1.0");
 
   if (role == PluginRole::kCutout) {
     const char* contexts[2] = {kOfxImageEffectContextFilter,

@@ -7,19 +7,19 @@
 	<key>CFBundleExecutable</key>
 	<string>PaperCraftStudioPro.ofx</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.papercraft.studio.pro.ofx</string>
+	<string>com.lamatatena.mttn.papercraft.ofx</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>PaperCraftStudioPro</string>
+	<string>MTTN PaperCraft Studio</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0.0</string>
+	<string>2.1.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>2.0.0</string>
+	<string>2.1.0</string>
 	<key>CSResourcesFileMapped</key>
 	<true/>
 </dict>

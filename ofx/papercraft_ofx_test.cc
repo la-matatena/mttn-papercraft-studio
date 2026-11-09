@@ -941,7 +941,7 @@ TEST(PaperCraftOfxTest,
   ASSERT_EQ(MockPropGetString(ToPropHandle(&global_desc.props),
                               kOfxImageEffectPluginPropGrouping, 0, &grouping),
             kOfxStatOK);
-  EXPECT_STREQ(grouping, "PaperCraft Studio");
+  EXPECT_STREQ(grouping, "MTTN PaperCraft Studio");
 
   // 1) Filter context: green-screen subject inside solid green backdrop.
   {

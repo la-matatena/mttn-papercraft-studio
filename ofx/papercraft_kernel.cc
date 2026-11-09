@@ -295,17 +295,18 @@ RgbaColor EvaluateDemoSticker(float nx, float ny, float aspect) {
     return {};
   }
 
-  // Coral outer circle, teal ring, ivory core, golden 6-point emblem.
-  RgbaColor col = {0.91f, 0.34f, 0.21f, 1.0f};
+  // La Matatena purple outer badge (#8367c7), deep purple ring (#6a4fb3),
+  // warm paper core, and 6-point Matatena jack emblem.
+  RgbaColor col = {0.514f, 0.404f, 0.780f, 1.0f};
   const float ring_mask = Smoothstep(0.185f, 0.178f, r);
-  col = LerpColor(col, {0.20f, 0.64f, 0.53f, 1.0f}, ring_mask);
+  col = LerpColor(col, {0.416f, 0.310f, 0.702f, 1.0f}, ring_mask);
 
   const float inner_disk = Smoothstep(0.145f, 0.138f, r);
-  col = LerpColor(col, {0.97f, 0.94f, 0.86f, 1.0f}, inner_disk);
+  col = LerpColor(col, {0.97f, 0.95f, 0.99f, 1.0f}, inner_disk);
 
-  const float star_r = 0.075f + 0.030f * std::cos(angle * 5.0f);
+  const float star_r = 0.075f + 0.032f * std::cos(angle * 6.0f);
   const float star_mask = Smoothstep(star_r + 0.004f, star_r - 0.004f, r);
-  col = LerpColor(col, {0.95f, 0.67f, 0.18f, 1.0f}, star_mask);
+  col = LerpColor(col, {0.514f, 0.404f, 0.780f, 1.0f}, star_mask);
 
   return {col.r * outer_mask, col.g * outer_mask, col.b * outer_mask,
           outer_mask};

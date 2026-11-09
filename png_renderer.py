@@ -248,24 +248,24 @@ def render_demo_sticker_png(size: int = 512) -> bytes:
 
       if dist < outer_r + 1.5:
         edge_a = min(1.0, max(0.0, (outer_r + 1.0 - dist) * 0.8))
-        # Subtle warm coral-orange gradient badge.
+        # La Matatena brand purple gradient (#8367c7 -> #6a4fb3).
         t_y = (py - (center - outer_r)) / max(1.0, 2.0 * outer_r)
-        base_r = _clamp_byte(242 - 35 * t_y)
-        base_g = _clamp_byte(105 - 30 * t_y)
-        base_b = _clamp_byte(62 + 25 * t_y)
+        base_r = _clamp_byte(131 - 25 * t_y)
+        base_g = _clamp_byte(103 - 24 * t_y)
+        base_b = _clamp_byte(199 - 20 * t_y)
         if dist > inner_r:
           # Crisp cream sticker rim.
-          _blend_over(canvas, size, size, px, py, (252, 248, 240), edge_a)
+          _blend_over(canvas, size, size, px, py, (252, 249, 255), edge_a)
         else:
           _blend_over(
               canvas, size, size, px, py, (base_r, base_g, base_b), edge_a
           )
 
-        # Inner tilted folded paper diamond emblem.
-        star_bound = star_r * (1.0 + 0.16 * math.cos(angle * 4.0))
-        if abs(dx) + abs(dy) < star_bound:
-          inner_a = min(1.0, (star_bound - (abs(dx) + abs(dy))) * 0.25)
-          shade = (255, 250, 240) if dx + dy < 0 else (232, 224, 210)
+        # Inner 6-pointed La Matatena paper emblem.
+        star_bound = star_r * (1.0 + 0.22 * math.cos(angle * 6.0))
+        if dist < star_bound:
+          inner_a = min(1.0, (star_bound - dist) * 0.35)
+          shade = (255, 252, 255) if dx + dy < 0 else (232, 224, 248)
           _blend_over(canvas, size, size, px, py, shade, inner_a)
 
   return encode_rgba_png(size, size, bytes(canvas))
