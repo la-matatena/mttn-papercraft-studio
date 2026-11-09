@@ -1,4 +1,4 @@
-# PaperCraft Studio Pro
+# MTTN PaperCraft Studio
 
 Add organic stop-motion paper cutouts, torn cardstock borders, 3D paper fold
 transitions, and paper Foley sound effects directly on the DaVinci Resolve 20
