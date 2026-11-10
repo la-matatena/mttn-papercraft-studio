@@ -122,32 +122,10 @@ def _draw_variant_motif(
       dx = px - cx
       dy = py - cy
       alpha = 0.0
-      if variant == "generator":
-        dist = math.hypot(dx, dy)
-        if abs(dist - 10.5) < 1.8:
-          alpha = max(0.0, 1.0 - abs(dist - 10.5) / 1.8)
-        elif abs(dx) < 5.5 and abs(dy) < 1.6:
-          alpha = 1.0
-        elif abs(dy) < 5.5 and abs(dx) < 1.6:
-          alpha = 1.0
-      elif variant == "effect":
+      if variant == "effect":
         star_dist = abs(dx) + abs(dy)
         if star_dist < 10.5:
           alpha = min(1.0, (10.5 - star_dist) * 0.6)
-      elif variant == "unfold":
-        if abs(dy) < 9.5 and abs(dx) < 12.0:
-          fold_gap = abs(dx)
-          if fold_gap > 1.2:
-            alpha = 0.92 if dx < 0 else 0.7
-      elif variant == "crumple":
-        poly = math.hypot(dx, dy) + 2.6 * math.sin(math.atan2(dy, dx) * 5.0)
-        if poly < 11.0:
-          alpha = min(1.0, (11.0 - poly) * 0.7)
-      else:
-        if abs(dy) < 10.0 and abs(dx) < 13.0:
-          tear_x = 1.8 * math.sin(py * 0.65)
-          if abs(dx - tear_x) > 1.6:
-            alpha = 0.9 if dx < tear_x else 0.65
 
       if alpha > 0.0:
         _blend_over(canvas, width, height, px, py, accent_rgb, alpha)
@@ -161,7 +139,7 @@ def render_thumbnail_png(
 
   Args:
     accent_rgb: Accent RGB tuple in 0..255 range for the card icon.
-    variant: Motif key ('generator', 'effect', 'unfold', 'crumple', or 'rip').
+    variant: Motif key (currently only 'effect').
 
   Returns:
     PNG file bytes at 104x58 resolution.
@@ -222,50 +200,3 @@ def render_thumbnail_png(
 
   _draw_variant_motif(canvas, width, height, accent_rgb, variant)
   return encode_rgba_png(width, height, bytes(canvas))
-
-
-def render_demo_sticker_png(size: int = 512) -> bytes:
-  """Renders a 512x512 RGBA transparent demo sticker for File Browser mode.
-
-  Args:
-    size: Square pixel size of the generated sticker PNG.
-
-  Returns:
-    PNG file bytes with crisp alpha channel and studio emblem graphic.
-  """
-  canvas = bytearray(size * size * 4)
-  center = size * 0.5
-  outer_r = size * 0.40
-  inner_r = size * 0.34
-  star_r = size * 0.21
-
-  for py in range(size):
-    for px in range(size):
-      dx = px - center
-      dy = py - center
-      dist = math.hypot(dx, dy)
-      angle = math.atan2(dy, dx)
-
-      if dist < outer_r + 1.5:
-        edge_a = min(1.0, max(0.0, (outer_r + 1.0 - dist) * 0.8))
-        # La Matatena brand purple gradient (#8367c7 -> #6a4fb3).
-        t_y = (py - (center - outer_r)) / max(1.0, 2.0 * outer_r)
-        base_r = _clamp_byte(131 - 25 * t_y)
-        base_g = _clamp_byte(103 - 24 * t_y)
-        base_b = _clamp_byte(199 - 20 * t_y)
-        if dist > inner_r:
-          # Crisp cream sticker rim.
-          _blend_over(canvas, size, size, px, py, (252, 249, 255), edge_a)
-        else:
-          _blend_over(
-              canvas, size, size, px, py, (base_r, base_g, base_b), edge_a
-          )
-
-        # Inner 6-pointed La Matatena paper emblem.
-        star_bound = star_r * (1.0 + 0.22 * math.cos(angle * 6.0))
-        if dist < star_bound:
-          inner_a = min(1.0, (star_bound - dist) * 0.35)
-          shade = (255, 252, 255) if dx + dy < 0 else (232, 224, 248)
-          _blend_over(canvas, size, size, px, py, shade, inner_a)
-
-  return encode_rgba_png(size, size, bytes(canvas))

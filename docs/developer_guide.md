@@ -1,8 +1,9 @@
 # PaperCraft Studio Pro developer and build guide
 
 This guide helps engineers build, test, package, compile standalone OpenFX
-bundles, and extend PaperCraft Studio Pro inside Blaze or from the exported
-repository archive.
+bundles, and extend PaperCraft Studio Pro 3.0.0 inside Blaze or from the
+exported repository archive. Version 3.0.0 ships a single OpenFX filter,
+**Paper Cutout FX** (`com.papercraft.CutoutFX`).
 
 ## Before you begin
 
@@ -32,13 +33,13 @@ document, and prebuilt release deliverable:
 :                                               : details, rendering math, and design       :
 :                                               : trade-offs                                :
 | `docs/user_guide.md`                          | End-user installation, Edit-page          |
-:                                               : workflows, 44+ Inspector parameters, SFX  :
+:                                               : workflows, 44 Inspector parameters, SFX   :
 :                                               : reference, and troubleshooting            :
 | `docs/developer_guide.md`                     | Build, standalone compilation, test       |
 :                                               : execution, and extension guide            :
 | `ofx/papercraft_kernel.h` and                 | Platform-independent C++17 paper cutout,  |
-: `ofx/papercraft_kernel.cc`                    : SDF border, 3D transition, and            :
-:                                               : compositing kernels                       :
+: `ofx/papercraft_kernel.cc`                    : SDF border, intro and outro animation,    :
+:                                               : and compositing kernels                   :
 | `ofx/papercraft_ofx_plugin.cc`                | OpenFX 1.4 plugin registration,           |
 :                                               : parameters, suites, and multi-thread      :
 :                                               : dispatch                                  :
@@ -51,10 +52,10 @@ document, and prebuilt release deliverable:
 : and `ofx/install_linux_ofx.sh`                : Linux x86-64                              :
 | `sfx_synthesizer.py`                          | Procedural synthesizer creating the 24    |
 :                                               : stereo 48 kHz, 24-bit Paper SFX WAV files :
-| `png_renderer.py`                             | Pure-Python PNG generator for thumbnails  |
-:                                               : and demo sticker art                      :
-| `fusion_templates.py` and `drfx_validator.py` | Legacy `.setting` macro builder and       |
-:                                               : structural validator                      :
+| `png_renderer.py`                             | Pure-Python PNG generator for the effect  |
+:                                               : thumbnail                                 :
+| `fusion_templates.py` and `drfx_validator.py` | Legacy **Paper Cutout FX** `.setting`     |
+:                                               : macro builder and structural validator    :
 | `bundle_builder_lib.py` and                   | Deterministic bundle assembler writing    |
 : `build_papercraft_bundle.py`                  : `.drfx`,                                  :
 :                                               : `PaperCraft_Studio_Pro_Full_Bundle.zip`,  :
@@ -151,15 +152,20 @@ each layer so host suites, validators, and packs stay synchronized.
 
 ### Add or update an OpenFX Inspector control
 
-1.  Add the parameter field and default value to `CutoutParams` or
-    `TransitionParams` in `ofx/papercraft_kernel.h`.
-2.  Read and apply the field in `RenderCutoutFrame` or `RenderTransitionFrame`
-    in `ofx/papercraft_kernel.cc`.
-3.  Define the Inspector control inside `DefineCutoutParameters` or
-    `DefineTransitionParameters`, add its `OfxParamHandle` slot in
-    `PluginInstance`, bind it in `HandleCreateInstance`, and populate it in
-    `HandleRender` inside `ofx/papercraft_ofx_plugin.cc`.
+1.  Add the parameter field and default value to `CutoutParams` in
+    `ofx/papercraft_kernel.h`.
+2.  Read and apply the field in `RenderCutoutFrame` in
+    `ofx/papercraft_kernel.cc`.
+3.  Define the Inspector control inside `DefineCutoutParameters`, add its
+    `OfxParamHandle` slot in `PluginInstance`, bind it in
+    `HandleCreateInstance`, and populate it in `ReadCutoutParams` inside
+    `ofx/papercraft_ofx_plugin.cc`.
 4.  Add a targeted GUnit regression test in `ofx/papercraft_ofx_test.cc`.
+
+> [!NOTE] Keep existing parameter identifiers stable, even when their names no
+> longer match their purpose. For example, the intro and outro group is still
+> named `TransitionGroup` and the **Glide Angle** control is still
+> `transitionAngle`, so projects saved with earlier versions keep their values.
 
 ### Add a Paper SFX Foley sound
 

@@ -8,31 +8,31 @@ engineering trade-offs if you maintain, audit, or extend PaperCraft Studio Pro.
 
 Video editors on the DaVinci Resolve 20 and 21 Edit pages often rely on complex
 Fusion node graphs to create stop-motion paper cutouts, torn cardstock rims, and
-3D folded paper transitions. Distributing effects solely as `.drfx` Fusion
-`MacroOperator` templates forces DaVinci Resolve to spin out background Fusion
-render passes that increase timeline caching latency, risk opaque matte clipping
-on `V2` or higher overlay tracks, and break when host updates change node
-defaults.
+3D folded paper intro and outro animations. Distributing effects solely as
+`.drfx` Fusion `MacroOperator` templates forces DaVinci Resolve to spin out
+background Fusion render passes that increase timeline caching latency, risk
+opaque matte clipping on `V2` or higher overlay tracks, and break when host
+updates change node defaults.
 
-PaperCraft Studio Pro solves this bottleneck by compiling the primary toolkit as
-a self-contained C++17 OpenFX 1.4 bundle (`PaperCraftStudioPro.ofx.bundle`) that
-runs directly inside the Edit page OpenFX host while shipping deterministic
-Python builders for 48 kHz, 24-bit stereo Paper SFX WAV files and validated
-legacy `.drfx` templates.
+PaperCraft Studio Pro 3.0.0 solves this bottleneck by compiling the **Paper
+Cutout FX** filter as a self-contained C++17 OpenFX 1.4 bundle
+(`PaperCraftStudioPro.ofx.bundle`) that runs directly inside the Edit page
+OpenFX host while shipping deterministic Python builders for 48 kHz, 24-bit
+stereo Paper SFX WAV files and a validated legacy `.drfx` template.
 
 ### Goals
 
--   **Direct Edit-page execution**: Register effect, generator, and transition
-    plugins directly under **PaperCraft Studio** in the Edit page **Effects**
+-   **Direct Edit-page execution**: Register a single filter plugin directly
+    under **Open FX** > **MTTN PaperCraft Studio** in the Edit page **Effects**
     panel without opening Fusion.
 -   **Compatibility across Free and Studio editions**: Use standard CPU OpenFX
-    1.4 APIs so DaVinci Resolve Free and DaVinci Resolve Studio run every effect
+    1.4 APIs so DaVinci Resolve Free and DaVinci Resolve Studio run the effect
     without watermarks on Linux x86-64 and macOS (`arm64` and `x86_64`).
 -   **Upper-track alpha fidelity**: Preserve straight, premultiplied, and opaque
-    input alpha channels across effects and transitions so upper-track (`V2` and
-    higher) overlays keep lower tracks visible.
+    input alpha channels so upper-track (`V2` and higher) overlays keep lower
+    tracks visible.
 -   **Hermetic, deterministic packaging**: Synthesize all stereo Foley WAV
-    files, thumbnails, demo assets, validated `.drfx` bundles, and source
+    files, thumbnails, validated `.drfx` bundles, and source
     archives from Python and C++ source without network access or checked-in
     binary blobs.
 
@@ -66,7 +66,7 @@ flowchart TD
 
   H["DaVinci Resolve Host (OpenFX 1.4)"] --> E["OfxGetPlugin Entry Table (papercraft_ofx_plugin.cc)"]
   E --> T["Multi-Thread Row Slicer (OfxMultiThreadSuiteV1)"]
-  T --> K["CPU Pixel Kernels (RenderCutoutFrame / RenderTransitionFrame)"]
+  T --> K["CPU Pixel Kernel (RenderCutoutFrame)"]
 ```
 
 ### Module responsibilities
@@ -119,16 +119,14 @@ flowchart TD
 :                                               :          : PCM Paper SFX WAV    :
 :                                               :          : files using biquad   :
 :                                               :          : modal filters        :
-| `png_renderer.py`                             | Python   | Generates `104x58`   |
-:                                               :          : Effect Library       :
-:                                               :          : thumbnails and a     :
-:                                               :          : `512x512` procedural :
-:                                               :          : sticker PNG          :
-| `fusion_templates.py`                         | Python   | Builds repaired      |
-:                                               :          : legacy `.setting`    :
-:                                               :          : Fusion               :
+| `png_renderer.py`                             | Python   | Generates the        |
+:                                               :          : `104x58` Effect      :
+:                                               :          : Library thumbnail    :
+| `fusion_templates.py`                         | Python   | Builds the legacy    |
+:                                               :          : **Paper Cutout FX**  :
+:                                               :          : `.setting` Fusion    :
 :                                               :          : `MacroOperator`      :
-:                                               :          : graphs for `.drfx`   :
+:                                               :          : graph for `.drfx`    :
 :                                               :          : export               :
 | `drfx_validator.py`                           | Python   | Validates `.setting` |
 :                                               :          : delimiter balance,   :
@@ -165,30 +163,24 @@ symbols cannot collide with DaVinci Resolve libraries. On macOS, the installer
 script passes the `-Wl,-exported_symbol` linker flag for both symbols alongside
 `-fvisibility=hidden`.
 
-### Registered plugin roles
+### Registered plugin
 
-A single templated wrapper (`RoleCallbacks<PluginRole>`) routes host callbacks
-for four distinct OpenFX descriptors inside the **PaperCraft Studio** group:
+The bundle registers one OpenFX descriptor inside the **MTTN PaperCraft Studio**
+group. A single `SetHost` and `MainEntry` pair routes every host callback
+through `DispatchAction`:
 
-| OpenFX identifier                  | Supported contexts | Display label    |
-| :--------------------------------- | :----------------- | :--------------- |
-| `com.papercraft.CutoutFX`          | Filter and         | **Paper Cutout   |
-:                                    : Generator          : FX**             :
-| `com.papercraft.UnfoldTransition`  | Transition         | **Paper Unfold   |
-:                                    :                    : Transition**     :
-| `com.papercraft.CrumpleTransition` | Transition         | **Paper Crumple  |
-:                                    :                    : Transition**     :
-| `com.papercraft.RipWipeTransition` | Transition         | **Paper Rip Wipe |
-:                                    :                    : Transition**     :
+| OpenFX identifier         | Supported contexts | Display label        |
+| :------------------------ | :----------------- | :------------------- |
+| `com.papercraft.CutoutFX` | Filter             | **Paper Cutout FX**  |
 
-In Transition context, the `DefineTransitionParameters` function registers the
-mandatory OpenFX `Transition` parameter (`kOfxImageEffectTransitionParamName`),
-letting the DaVinci Resolve timeline engine drive normalized `0.0` to `1.0`
-progress between the `SourceFrom` clip and the `SourceTo` clip.
+The descriptor reports version `3.0` (version label `3.0.0`). The
+`HandleDescribeInContext` action returns `kOfxStatErrMissingHostFeature` for
+every context other than Filter, so the host never instantiates the plugin as
+a generator or transition.
 
 ### Pixel depths, alpha modes, and region mapping
 
-All plugins accept `OfxBitDepthFloat` (32-bit float), `OfxBitDepthShort` (16-bit
+The plugin accepts `OfxBitDepthFloat` (32-bit float), `OfxBitDepthShort` (16-bit
 unsigned integer), and `OfxBitDepthByte` (8-bit unsigned integer) RGBA buffers.
 The `HandleGetClipPreferences` action reads unmapped source bit depth from the
 host and propagates it so 8-bit timelines do not force unnecessary format
@@ -203,8 +195,8 @@ When reading pixels, the `ReadPixel` function inspects `AlphaMode`:
 -   `AlphaMode::kOpaque`: forces alpha to `1.0` so RGB footage with zeroed
     fourth bytes renders visibly.
 -   `AlphaMode::kUnPremultiplied`: premultiplies RGB channels by clamped alpha
-    before bilinear filtering in `SampleBilinearClamped` to prevent color
-    fringes around straight-alpha titles and PNG stickers.
+    before bilinear filtering in `SampleBilinearTransparentOutside` to prevent
+    color fringes around straight-alpha titles and PNG stickers.
 -   `AlphaMode::kPremultiplied`: reads premultiplied linear values directly.
 
 During sampling, the `EffectiveRod` helper maps normalized frame coordinates
@@ -214,17 +206,17 @@ to transparent black.
 
 ### Threading and tiling strategy
 
-All plugins advertise `kOfxImageEffectRenderFullySafe` and set
+The plugin advertises `kOfxImageEffectRenderFullySafe` and sets
 `kOfxImageEffectPluginPropHostFrameThreading` to `1`. Inside `HandleRender`, the
-`DispatchParallelRows` adapter delegates scanline ranges `[y_start, y_end)` to
-the host `OfxMultiThreadSuiteV1` pool (`multiThread`), falling back to
-sequential execution if the host omits the threading suite or runs with a single
-worker.
+`parallel_for` lambda (`ParallelRowsFn`) delegates scanline ranges
+`[y_start, y_end)` to the host `OfxMultiThreadSuiteV1` pool (`multiThread`),
+falling back to sequential execution if the host omits the threading suite or
+runs with a single worker.
 
 The `HandleDescribe` action explicitly sets `kOfxImageEffectPropSupportsTiles`
-to `0` on `CutoutFX` (and disables tiling on clip descriptors across all
-plugins). Because torn paper collars can expand up to 15% of frame width around
-off-edge subjects and fold transitions shift geometry across the whole canvas,
+to `0` on `CutoutFX` and disables tiling on both clip descriptors. Because torn
+paper collars can expand up to 15% of frame width around off-edge subjects and
+intro and outro animations shift geometry across the whole canvas,
 requiring full-frame buffers eliminates visible rectangular tile seam artifacts
 while still honoring host `renderWindow` bounds during rendering.
 
@@ -248,8 +240,8 @@ flowchart TD
 
 ### Chroma key extraction and subject framing
 
-If `source_mode` selects the built-in paper sticker or the plugin runs as a
-Generator, the `EvaluateSubjectAtCanonicalPx` function procedurally draws an
+If `source_mode` selects the built-in paper sticker or the source clip is
+unavailable, the `EvaluateSubjectAtCanonicalPx` function procedurally draws an
 anti-aliased layered craft badge. Otherwise, it transforms canonical output
 coordinates inversely using frame-constant subject scale, rotation, and offset
 values in `SubjectTransform` and samples the source image through the
@@ -281,9 +273,10 @@ border width evaluation.
 For each pixel inside `render_window`, `MapOutputToPaperCanonical` applies the
 inverse global cutout transform, inverse flip axes, inverse 2D glide offset,
 inverse pop scale, and an inverse 3D hinge perspective divide across both
-horizontal and vertical mirror directions. When an unfold or crumple transition
-is active (`crumple_warp_norm > 0.0001`), the `CrumpleDisplacement` helper adds
-a faceted ridged Voronoi-style crease offset and extracts facet lighting terms.
+horizontal and vertical mirror directions. When a **Paper Unfold (3D)** or
+**Crumple Ball** intro or outro is active (`crumple_warp_norm > 0.0001`), the
+`CrumpleDisplacement` helper adds a faceted ridged Voronoi-style crease offset
+and extracts facet lighting terms.
 
 To reduce per-pixel ALU cost on 4K timelines, `RenderCutoutFrame` invokes
 `MapOutputToPaperCanonical` with `apply_crumple = false` when looking up the
@@ -313,23 +306,6 @@ midpoint. Enabling stop-motion stepping quantizes timeline progress to
 `holdFrames` buckets and derives deterministic pseudo-random per-step XY jitter,
 rotational wobble, and border tear boiling.
 
-### Upper-track transition compositing
-
-The `RenderTransitionFrame` function drives three transitions (`kUnfold`,
-`kCrumple`, and `kRipWipe`):
-
--   **Paper Unfold Transition** and **Paper Crumple Transition**: Apply
-    perspective hinge fold or faceted ball crumple geometry onto the active
-    outgoing or incoming sheet (`fg`) while preserving `fg.a`
-    (`out_fg_a = Clamp01(fg.a) * sheet_alpha`), rendering premultiplied cast
-    shadows (`shadow_a`) weighted by foreground sheet alpha instead of painting
-    an opaque background plate.
--   **Paper Rip Wipe Transition**: Restricts multi-octave `TearEdgeNoise` and
-    dual-clip sampling to the narrow torn paper strip around the wipe plane,
-    multiplying background shadow cleanly by `1 - outer_mask` so transparent
-    foreground clips on Video Track 2 or higher never leak ghosts of the
-    outgoing clip.
-
 ## Physical-modeling Foley audio synthesis
 
 The `sfx_synthesizer.py` module generates 24 stereo 48 kHz, 24-bit PCM WAV files
@@ -353,17 +329,17 @@ across six folders without relying on pre-recorded samples:
 
 ## Legacy Fusion template generation and static validation
 
-For existing `.drfx` workflows, `fusion_templates.py` builds five Fusion
-`.setting` scripts packaged with `png_renderer.py` icons (`104x58` pixels) and a
-`512x512` sticker PNG. To avoid Edit-page black frames and frozen lengths
-observed in third-party Fusion macros, all generated templates follow strict
-structural invariants verified statically by `drfx_validator.py`:
+For existing `.drfx` workflows, `fusion_templates.py` builds a single **Paper
+Cutout FX** `.setting` script, which `bundle_builder_lib.py` packages under
+`Edit/Effects/MTTN PaperCraft Studio/` with a `png_renderer.py` thumbnail
+(`104x58` pixels). The `validate_drfx_bytes` function rejects any `.drfx` that
+doesn't contain exactly one `.setting` template under `Edit/Effects/`. To avoid
+Edit-page black frames observed in third-party Fusion macros, the template
+follows strict structural invariants verified statically by
+`drfx_validator.py`:
 
 -   Top-level nodes declare `MacroOperator` paired with
     `ViewInfo = OperatorInfo` instead of `GroupOperator` or `GroupInfo`.
--   Generator templates set `GlobalOut = Input { Value = 1000000 }` and
-    `GlobalEnd = 1000000` so you can drag generators freely to any timeline
-    duration.
 -   Every `LBLC_DropDownButton` group count matches the exact number of nested
     child controls declared in `LBLC_NumInputs`.
 -   Every `SimpleExpression` omits Lua `math.` prefixes and C-style `&&` or `||`
@@ -410,17 +386,24 @@ structural invariants verified statically by `drfx_validator.py`:
 | macOS binary | Source-compiled Universal bundle built    | Checking    | Keeps source   |
 : delivery     : with                                      : Mach-O      : control        :
 : from Linux   : `Install_PaperCraft_OpenFX_macOS.command` : binaries or : binary-free,   :
-:              : plus Blaze                                : third-party :                :
-
-\: build : `:papercraft_standalone_compile_check` : cross-compilers :
-supports : : environment : : into source : `arm64` and : : : : control :
-`x86_64` with : : : : : local Xcode : : : : : Command Line : : : : : Tools,
-and : : : : : keeps : : : : : `#include` : : : : : parity checked : : : : : in
-CI : | Paper SFX | Deterministic Python synthesis in | Committing 24 |
-Guarantees | : library : `sfx_synthesizer.py` at build time : multi-megabyte :
-reproducible : : storage : : `.wav` binaries : 48 kHz, 24-bit : : : : into
-Piper : WAV output : : : : : verified by : : : : : automated RMS, : : : : :
-clipping, and : : : : : stereo checks :
+: build        : plus Blaze                                : third-party : supports       :
+: environment  : `:papercraft_standalone_compile_check`    : cross-      : `arm64` and    :
+:              :                                           : compilers   : `x86_64` with  :
+:              :                                           : into source : local Xcode    :
+:              :                                           : control     : Command Line   :
+:              :                                           :             : Tools, and     :
+:              :                                           :             : keeps          :
+:              :                                           :             : `#include`     :
+:              :                                           :             : parity checked :
+:              :                                           :             : in CI          :
+| Paper SFX    | Deterministic Python synthesis in         | Committing  | Guarantees     |
+: library      : `sfx_synthesizer.py` at build time        : 24          : reproducible   :
+: storage      :                                           : multi-      : 48 kHz, 24-bit :
+:              :                                           : megabyte    : WAV output     :
+:              :                                           : `.wav`      : verified by    :
+:              :                                           : binaries    : automated RMS, :
+:              :                                           : into source : clipping, and  :
+:              :                                           : control     : stereo checks  :
 
 ## Verification architecture
 
@@ -429,15 +412,17 @@ Blaze:
 
 1.  **C++ OpenFX 1.4 host compliance and kernel suite
     (`ofx/papercraft_ofx_test.cc`)**: Dynamically loads (`dlopen`) the compiled
-    `PaperCraftStudioPro.ofx` shared library, verifies symbol exports
-    (`OfxGetNumberOfPlugins` and `OfxGetPlugin`), emulates full OpenFX 1.4
-    property/parameter/image/multi-thread host suites, and asserts pixel
-    correctness across float/short/byte depths, negative `row_bytes` scanlines,
-    cropped `bounds` against `rod`, `kOfxImageOpaque` and
-    `kOfxImageUnPreMultiplied` alpha modes, `V2` overlay transparency, `mirrorV`
-    and `mirrorTransV` toggles, and overlapping short-clip intro/outro timing.
+    `PaperCraftStudioPro.ofx` shared library and emulates full OpenFX 1.4
+    property/parameter/image/multi-thread host suites across six tests. The
+    tests verify that the library exports only `OfxGetNumberOfPlugins` and
+    `OfxGetPlugin` and registers only the Filter-context
+    `com.papercraft.CutoutFX` plugin, that Generator and Transition contexts
+    return `kOfxStatErrMissingHostFeature`, and that rendering stays correct
+    across float and byte depths, negative `row_bytes` scanlines, cropped
+    `bounds` against `rod`, `kOfxImageOpaque` input, `V2` overlay transparency,
+    the `mirrorTransV` toggle, and overlapping short-clip intro/outro timing.
 2.  **Python packager and asset suite (`papercraft_pro_test.py`)**: Validates
-    all 24 synthesized WAVs, checks `.setting` graphs and negative mutation
+    all 24 synthesized WAVs, checks the `.setting` graph and negative mutation
     failures in `drfx_validator.py`, tests Bash syntax and `--dry-run` behavior
     of both OS installers, verifies nested-directory installation with
     `install_linux_ofx.sh`, confirms ZIP entry permissions (`0o755` for

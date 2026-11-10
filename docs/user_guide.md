@@ -1,8 +1,13 @@
 # PaperCraft Studio Pro user guide
 
-This guide helps video editors install PaperCraft Studio Pro, apply torn paper
-cutouts and 3D paper transitions on the DaVinci Resolve 20 and 21 Edit pages,
-tune Inspector controls, and mix the 24 included Paper SFX audio clips.
+This guide helps video editors install PaperCraft Studio Pro 3.0.0, apply the
+**Paper Cutout FX** torn paper filter on the DaVinci Resolve 20 and 21 Edit
+pages, tune Inspector controls, and mix the 24 included Paper SFX audio clips.
+
+> [!IMPORTANT] Version 3.0 removes the **Paper Cutout FX** generator and the
+> **Paper Unfold Transition**, **Paper Crumple Transition**, and **Paper Rip
+> Wipe Transition** effects. DaVinci Resolve shows these items as unavailable in
+> projects created with earlier versions, so remove them from your timelines.
 
 ## Before you begin
 
@@ -96,8 +101,9 @@ after installation so it scans the OpenFX directory.
 
 To load the optional Fusion `MacroOperator` templates instead of (or alongside)
 the native OpenFX bundle, double-click `PaperCraft_Studio_Pro.drfx` and approve
-the DaVinci Resolve prompt. Legacy templates appear under **Effects** >
-**Toolbox** > **PaperCraft Studio**.
+the DaVinci Resolve prompt. The `.drfx` file contains a single **Paper Cutout
+FX** effect template, which appears in the **Effects** library under the **MTTN
+PaperCraft Studio** category.
 
 ### Remove the OpenFX bundle
 
@@ -116,15 +122,14 @@ rm -rf "${HOME}/.local/share/OFX/Plugins/PaperCraftStudioPro.ofx.bundle"
 
 ## Create animated paper cutouts on the Edit page
 
-The OpenFX bundle registers **Paper Cutout FX** in both Filter and Generator
-modes so you can animate timeline media or drop in standalone stickers on the
-Edit page.
+The OpenFX bundle registers a single filter, **Paper Cutout FX**, which you
+apply to clips on the Edit page.
 
 ### Apply Paper Cutout FX to a timeline clip
 
 1.  On the **Edit** page, select a video clip, transparent PNG graphic, or title
     on Video Track 1 or higher (`V2+`).
-2.  Open **Effects** > **Open FX** > **PaperCraft Studio**.
+2.  Open **Effects** > **Open FX** > **MTTN PaperCraft Studio**.
 3.  Drag **Paper Cutout FX** onto the clip.
 4.  Open the **Inspector** panel and click the **Effects** tab to adjust
     cardstock width, tear frequency, entrance and exit styles, and stop-motion
@@ -143,30 +148,21 @@ Edit page.
     Gain** and **Key Balance**, and refine the silhouette edge with **Edge Choke
     (px)** before the torn paper border is expanded.
 
-### Create a standalone sticker cutout
+### Show the built-in paper sticker
 
-1.  Open **Effects** > **Generators** > **PaperCraft Studio**.
-2.  Drag **Paper Cutout FX** directly onto an empty track such as `V2`.
-3.  Customize paper texture, animation style, and global cutout position in
-    **Inspector** > **Generator**.
+To preview the look without your own artwork, render the procedural demo
+sticker inside the filter:
 
-## Add paper transitions between clips
-
-Three dedicated CPU OpenFX transitions run directly on Edit-page cuts without
-entering Fusion:
-
-1.  Place two clips next to each other on the same timeline track with enough
-    trimmed media handles on both sides of the cut.
-2.  Open **Effects** > **Video Transitions** > **PaperCraft Studio**.
-3.  Drag **Paper Unfold Transition**, **Paper Crumple Transition**, or **Paper
-    Rip Wipe Transition** onto the cut point.
-4.  Select the transition bar and adjust style, step count, mirror flags, and
-    shadow softness in **Inspector** > **Transition**.
+1.  Apply **Paper Cutout FX** to any clip on the timeline.
+2.  In **Inspector** > **Effects** > **1. Media Source & Placement**, set
+    **Source Mode** to `Built-in Paper Sticker`.
+3.  Customize paper texture, animation style, and cutout position in the
+    remaining groups.
 
 ## Complete Inspector controls reference
 
-The tables that follow list all controls exposed in the DaVinci Resolve
-Inspector for **Paper Cutout FX** and all three paper transitions.
+The table that follows lists all controls exposed in the DaVinci Resolve
+Inspector for **Paper Cutout FX**.
 
 ### Paper Cutout FX controls
 
@@ -177,11 +173,10 @@ Inspector for **Paper Cutout FX** and all three paper transitions.
 | :----------- | :-------------- | :---------- | :----------- | :------------- |
 | **1. Media   | **Source Mode** | Choice      | `Timeline    | Switches       |
 : Source &     :                 : (`Timeline  : Clip`        : between        :
-: Placement**  :                 : Clip`,      : (Filter) or  : timeline clip  :
-:              :                 : `Built-in   : `Built-in    : media and      :
-:              :                 : Paper       : Paper        : procedural     :
-:              :                 : Sticker`)   : Sticker`     : sticker        :
-:              :                 :             : (Generator)  :                :
+: Placement**  :                 : Clip`,      :              : timeline clip  :
+:              :                 : `Built-in   :              : media and      :
+:              :                 : Paper       :              : procedural     :
+:              :                 : Sticker`)   :              : sticker        :
 | **1. Media   | **Premultiplied | Boolean     | `True`       | Disable if     |
 : Source &     : Source Alpha**  :             :              : straight-alpha :
 : Placement**  :                 :             :              : graphics show  :
@@ -380,92 +375,6 @@ Inspector for **Paper Cutout FX** and all three paper transitions.
 : & Master     :                 :             :              : cutout top to  :
 : Transform**  :                 :             :              : bottom         :
 
-### Paper transition controls
-
-Every paper transition shares the host-animated **Progress** slider alongside
-groups **2. Stop-Motion & Orientation** and **3. Shadow & Paper Creases**. Group
-**1. Paper Transition Style** changes according to the transition you place on
-the timeline cut:
-
-| Transition    | Control label | Type and     | Default       | Purpose       |
-:               :               : range        :               :               :
-| :------------ | :------------ | :----------- | :------------ | :------------ |
-| **All three   | **Enable      | Boolean      | `True`        | Quantizes     |
-: transitions** : Stop-Motion** :              :               : transition    :
-:               :               :              :               : progress into :
-:               :               :              :               : discrete      :
-:               :               :              :               : frames        :
-| **All three   | **Stop-Motion | Integer (`2` | `12`          | Sets step     |
-: transitions** : Steps**       : to `60`)     :               : count across  :
-:               :               :              :               : transition    :
-:               :               :              :               : duration      :
-| **All three   | **Reverse     | Boolean      | `False`       | Inverts       |
-: transitions** : Direction**   :              :               : direction     :
-:               :               :              :               : across        :
-:               :               :              :               : incoming and  :
-:               :               :              :               : outgoing      :
-:               :               :              :               : clips         :
-| **All three   | **Mirror      | Boolean      | `False`       | Flips         |
-: transitions** : Horizontal**  :              :               : transition    :
-:               : and **Mirror  :              :               : motion axes   :
-:               : Vertical**    :              :               : horizontally  :
-:               :               :              :               : or vertically :
-| **All three   | **Shadow      | Float (`0.0` | `0.60`        | Styles the    |
-: transitions** : Opacity** and : to `1.0`     : opacity and   : cast drop     :
-:               : **Shadow      : opacity and  : `0.020`       : shadow under  :
-:               : Softness**    : `0.0` to     : softness      : moving paper  :
-:               :               : `0.20`       :               : sheets        :
-:               :               : softness)    :               :               :
-| **All three   | **Crease      | Float (`0.0` | `0.45` blend  | Adds crease   |
-: transitions** : Texture       : to `1.0`)    : and `7` seed  : shading and   :
-:               : Blend** and   : and Integer  :               : deterministic :
-:               : **Texture     : (`0` to      :               : variation     :
-:               : Seed**        : `1000`)      :               :               :
-| **Paper       | **Fold Tilt   | Angle        | `22.0°`       | Sets 3D hinge |
-: Unfold        : Angle**       : (`-90°` to   :               : skew during   :
-: Transition**  :               : `90°`)       :               : sheet unfold  :
-| **Paper       | **Slide       | Float (`0.0` | `0.55`        | Sets          |
-: Unfold        : Distance**    : to `3.0`)    :               : horizontal    :
-: Transition**  :               :              :               : slide travel  :
-:               :               :              :               : during unfold :
-| **Paper       | **Fold Crease | Float (`0.2` | `4.0`         | Scales crease |
-: Unfold        : Scale**       : to `30.0`)   :               : highlights    :
-: Transition**  :               :              :               : across the    :
-:               :               :              :               : unfolding     :
-:               :               :              :               : sheet         :
-| **Paper       | **Crumple     | Float (`0.0` | `0.22`        | Controls      |
-: Crumple       : Intensity**   : to `1.0`)    :               : faceted ball  :
-: Transition**  :               :              :               : distortion    :
-:               :               :              :               : intensity     :
-| **Paper       | **Crumple     | Float (`0.5` | `4.0`         | Sets spatial  |
-: Crumple       : Facet Scale** : to `30.0`)   :               : density of    :
-: Transition**  :               :              :               : crumpled      :
-:               :               :              :               : facets        :
-| **Paper       | **Paper Ball  | Angle        | `35.0°`       | Sets twist    |
-: Crumple       : Spin**        : (`-360°` to  :               : rotation at   :
-: Transition**  :               : `360°`)      :               : transition    :
-:               :               :              :               : midpoint      :
-| **Paper Rip   | **Rip Angle** | Angle        | `12.0°`       | Angles the    |
-: Wipe          :               : (`-180°` to  :               : diagonal torn :
-: Transition**  :               : `180°`)      :               : paper wipe    :
-:               :               :              :               : edge          :
-| **Paper Rip   | **Torn White  | Float (`0.0` | `0.028`       | Sets          |
-: Wipe          : Edge Width**  : to `0.20`)   :               : thickness of  :
-: Transition**  :               :              :               : the exposed   :
-:               :               :              :               : torn          :
-:               :               :              :               : cardstock rim :
-| **Paper Rip   | **Rip         | Float (`0.0` | `0.032`       | Controls      |
-: Wipe          : Jaggedness**  : to `0.25`)   :               : tooth height  :
-: Transition**  :               :              :               : along the rip :
-:               :               :              :               : line          :
-| **Paper Rip   | **Tear        | Float (`1.0` | `24.0`        | Controls      |
-: Wipe          : Frequency**   : to `120.0`)  :               : tooth density :
-: Transition**  :               :              :               : along the rip :
-:               :               :              :               : line          :
-| **Paper Rip   | **Torn Edge   | RGB color    | `0.960,       | Sets color of |
-: Wipe          : Paper Color** : picker       : 0.940, 0.890` : the exposed   :
-: Transition**  :               :              :               : torn edge rim :
-
 ## Mix Foley audio with the Paper SFX library
 
 All 24 WAV files in `Paper_SFX/` are 48 kHz, 24-bit stereo clips trimmed with
@@ -479,25 +388,21 @@ projects.
 | :------------------------- | :--------------------------------------- | :----------- |
 | `01_Page_Turns/`           | `Page_Turn_Crisp_Book_01.wav`,           | **Paper      |
 :                            : `Page_Turn_Heavy_Cardstock_02.wav`,      : Unfold       :
-:                            : `Page_Turn_Newspaper_Broadsheet_03.wav`, : Transition** :
-:                            : `Page_Turn_Quick_Notebook_Flip_04.wav`   : or **Paper   :
-:                            :                                          : Unfold       :
-:                            :                                          : (3D)**       :
+:                            : `Page_Turn_Newspaper_Broadsheet_03.wav`, : (3D)**       :
+:                            : `Page_Turn_Quick_Notebook_Flip_04.wav`   : intro and    :
+:                            :                                          : outro        :
 | `02_Paper_Hits_Impacts/`   | `Paper_Hit_Table_Slap_01.wav`,           | **Flat       |
 :                            : `Paper_Hit_Cardboard_Drop_02.wav`,       : Cutout Pop** :
 :                            : `Paper_Hit_Sticker_Snap_03.wav`,         : landing      :
 :                            : `Paper_Hit_Stack_Thud_04.wav`            : frames       :
 | `03_Crumples_Uncrumples/`  | `Paper_Crumple_Tight_Ball_01.wav`,       | **Crumple    |
 :                            : `Paper_Crumple_Newspaper_02.wav`,        : Ball**       :
-:                            : `Paper_Uncrumple_Smooth_Reveal_03.wav`,  : intro,       :
-:                            : `Paper_Uncrumple_Quick_Open_04.wav`      : outro, and   :
-:                            :                                          : **Paper      :
-:                            :                                          : Crumple      :
-:                            :                                          : Transition** :
-| `04_Rips_Tears/`           | `Paper_Rip_Fast_Tear_01.wav`,            | **Paper Rip  |
-:                            : `Paper_Rip_Slow_Fiber_02.wav`,           : Wipe         :
-:                            : `Paper_Rip_Thick_Kraft_03.wav`,          : Transition** :
-:                            : `Paper_Rip_Short_Snip_04.wav`            :              :
+:                            : `Paper_Uncrumple_Smooth_Reveal_03.wav`,  : intro and    :
+:                            : `Paper_Uncrumple_Quick_Open_04.wav`      : outro        :
+| `04_Rips_Tears/`           | `Paper_Rip_Fast_Tear_01.wav`,            | Hard cuts    |
+:                            : `Paper_Rip_Slow_Fiber_02.wav`,           : and torn     :
+:                            : `Paper_Rip_Thick_Kraft_03.wav`,          : border       :
+:                            : `Paper_Rip_Short_Snip_04.wav`            : reveals      :
 | `05_Little_Bits_Rustles/`  | `Paper_Bits_Confetti_Scatter_01.wav`,    | Continuous   |
 :                            : `Paper_Rustle_StopMotion_Jiggle_02.wav`, : **Paper      :
 :                            : `Paper_Slide_Desk_Scrape_03.wav`,        : Cutout FX**  :
@@ -505,12 +410,12 @@ projects.
 :                            :                                          : **Paper      :
 :                            :                                          : Airplane     :
 :                            :                                          : Glide**      :
-| `06_Designed_Transitions/` | `Paper_Designed_Whoosh_Unfold_01.wav`,   | Full wipe    |
-:                            : `Paper_Designed_Airplane_Swoosh_02.wav`, : and slam     :
-:                            : `Paper_Designed_Crumple_Slam_03.wav`,    : accents      :
-:                            : `Paper_Designed_StopMotion_Pop_04.wav`   : synced at    :
-:                            :                                          : transition   :
-:                            :                                          : midpoints    :
+| `06_Designed_Transitions/` | `Paper_Designed_Whoosh_Unfold_01.wav`,   | Whoosh and   |
+:                            : `Paper_Designed_Airplane_Swoosh_02.wav`, : slam         :
+:                            : `Paper_Designed_Crumple_Slam_03.wav`,    : accents on   :
+:                            : `Paper_Designed_StopMotion_Pop_04.wav`   : intros,      :
+:                            :                                          : outros, and  :
+:                            :                                          : hard cuts    :
 
 ## Improve timeline playback performance
 
@@ -534,10 +439,11 @@ For smooth 4K timeline playback on CPU OpenFX tracks:
 : halo around    : channels filtered : **1. Media Source & Placement**             :
 : straight-alpha : before            :                                             :
 : PNG stickers   : premultiplication :                                             :
-| Lower track    | Legacy template   | Use the native OpenFX **Paper Unfold        |
-: hidden behind  : or mismatched     : Transition**, **Paper Crumple Transition**, :
-: `V2` paper     : track composite   : or **Paper Rip Wipe Transition**            :
-: transition     :                   :                                             :
+| Effect shown   | Project uses the  | Delete the unavailable generator or         |
+: as unavailable : generator or a    : transition from the timeline, then use      :
+: after          : transition        : **Paper Cutout FX** intro and outro styles  :
+: upgrading to   : removed in 3.0    : instead                                     :
+: 3.0            :                   :                                             :
 | Green spill or | Unkeyed           | Increase **Key Gain** and shift **Edge      |
 : rough halo on  : background pixels : Choke (px)** slightly negative (`-1.5` to   :
 : keyed subjects : entering the      : `-3.0`)                                     :

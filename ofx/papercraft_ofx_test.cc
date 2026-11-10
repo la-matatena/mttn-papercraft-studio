@@ -876,7 +876,7 @@ const OfxPlugin* FindPluginById(GetPluginFn get_plugin, int count,
   return nullptr;
 }
 
-TEST(PaperCraftOfxTest, ExportsExactlyFourPluginsAndHidesInternals) {
+TEST(PaperCraftOfxTest, ExportsOnlyCutoutFilterAndHidesInternals) {
   const std::string path = ResolvePluginBinaryPath();
   LoadedOfxBundle bundle(path);
   ASSERT_NE(bundle.raw(), nullptr) << "dlopen failed for " << path << ": "
@@ -887,12 +887,12 @@ TEST(PaperCraftOfxTest, ExportsExactlyFourPluginsAndHidesInternals) {
   ASSERT_NE(get_count, nullptr);
   ASSERT_NE(get_plugin, nullptr);
 
-  EXPECT_EQ(get_count(), 4);
+  EXPECT_EQ(get_count(), 1);
   EXPECT_EQ(get_plugin(-1), nullptr);
-  EXPECT_EQ(get_plugin(4), nullptr);
+  EXPECT_EQ(get_plugin(1), nullptr);
 
   std::vector<std::string> ids;
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 1; ++i) {
     OfxPlugin* p = get_plugin(i);
     ASSERT_NE(p, nullptr);
     EXPECT_STREQ(p->pluginApi, kOfxImageEffectPluginApi);
@@ -903,9 +903,6 @@ TEST(PaperCraftOfxTest, ExportsExactlyFourPluginsAndHidesInternals) {
   }
   EXPECT_EQ(ids, (std::vector<std::string>{
                      "com.papercraft.CutoutFX",
-                     "com.papercraft.UnfoldTransition",
-                     "com.papercraft.CrumpleTransition",
-                     "com.papercraft.RipWipeTransition",
                  }));
 
   // Internal symbols must stay hidden via version script + -fvisibility=hidden.
@@ -914,7 +911,7 @@ TEST(PaperCraftOfxTest, ExportsExactlyFourPluginsAndHidesInternals) {
 }
 
 TEST(PaperCraftOfxTest,
-     CutoutFilterAndGeneratorLifecycleRendersTornPaperAndChromaKey) {
+     CutoutFilterLifecycleRendersTornPaperChromaKeyAndSticker) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
   auto get_count = bundle.Sym<GetNumPluginsFn>("OfxGetNumberOfPlugins");
@@ -1062,20 +1059,36 @@ TEST(PaperCraftOfxTest,
         kOfxStatOK);
   }
 
-  // 2) Generator context: no Source clip at all -> built-in demo sticker.
-  {
-    MockEffectObject gen_desc;
-    gen_desc.host = &host;
+  // 2) Only the Filter context is supported: Generator and Transition must be
+  // rejected so Resolve does not list Paper Cutout FX under those categories.
+  for (const char* ctx : {kOfxImageEffectContextGenerator,
+                          kOfxImageEffectContextTransition}) {
+    MockEffectObject bad_desc;
+    bad_desc.host = &host;
     MockPropertySet ctx_in;
     MockPropSetString(ToPropHandle(&ctx_in), kOfxImageEffectPropContext, 0,
-                      kOfxImageEffectContextGenerator);
+                      ctx);
+    EXPECT_EQ(plugin->mainEntry(kOfxImageEffectActionDescribeInContext,
+                                &bad_desc, ToPropHandle(&ctx_in), nullptr),
+              kOfxStatErrMissingHostFeature)
+        << ctx;
+  }
+
+  // 3) Filter context with Source Mode = Built-in Paper Sticker renders the
+  // procedural sticker without reading the source clip.
+  {
+    MockEffectObject sticker_desc;
+    sticker_desc.host = &host;
+    MockPropertySet ctx_in;
+    MockPropSetString(ToPropHandle(&ctx_in), kOfxImageEffectPropContext, 0,
+                      kOfxImageEffectContextFilter);
     ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionDescribeInContext,
-                                &gen_desc, ToPropHandle(&ctx_in), nullptr),
+                                &sticker_desc, ToPropHandle(&ctx_in), nullptr),
               kOfxStatOK);
-    EXPECT_EQ(gen_desc.clips.count("Source"), 0u);
 
     MockEffectObject inst;
-    CloneDescriptorToInstance(gen_desc, &inst, kOfxImageEffectContextGenerator);
+    CloneDescriptorToInstance(sticker_desc, &inst,
+                              kOfxImageEffectContextFilter);
     ASSERT_EQ(
         plugin->mainEntry(kOfxActionCreateInstance, &inst, nullptr, nullptr),
         kOfxStatOK);
@@ -1091,6 +1104,9 @@ TEST(PaperCraftOfxTest,
     MockParamSetValue(reinterpret_cast<OfxParamHandle>(
                           inst.param_set.params["introStyle"].get()),
                       0);
+    MockParamSetValue(reinterpret_cast<OfxParamHandle>(
+                          inst.param_set.params["sourceMode"].get()),
+                      1);
 
     MockPropertySet render_in;
     MockPropSetDouble(ToPropHandle(&render_in), kOfxPropTime, 0, 50.0);
@@ -1117,162 +1133,15 @@ TEST(PaperCraftOfxTest,
 }
 
 TEST(PaperCraftOfxTest,
-     AllThreeTransitionsRespectIdentityEndpointsAndRenderMidpoint) {
-  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
-  ASSERT_NE(bundle.raw(), nullptr);
-  auto get_count = bundle.Sym<GetNumPluginsFn>("OfxGetNumberOfPlugins");
-  auto get_plugin = bundle.Sym<GetPluginFn>("OfxGetPlugin");
-
-  const char* ids[3] = {
-      "com.papercraft.UnfoldTransition",
-      "com.papercraft.CrumpleTransition",
-      "com.papercraft.RipWipeTransition",
-  };
-  constexpr int kW = 64;
-  constexpr int kH = 48;
-  const double range[2] = {0.0, 24.0};
-
-  for (const char* id : ids) {
-    const OfxPlugin* plugin = FindPluginById(get_plugin, get_count(), id);
-    ASSERT_NE(plugin, nullptr) << id;
-
-    MockHost host;
-    host.ofx_host.host = ToPropHandle(&host.host_props);
-    host.ofx_host.fetchSuite = &MockHost::FetchSuite;
-    plugin->setHost(&host.ofx_host);
-    ASSERT_EQ(plugin->mainEntry(kOfxActionLoad, nullptr, nullptr, nullptr),
-              kOfxStatOK);
-
-    MockEffectObject desc;
-    desc.host = &host;
-    ASSERT_EQ(plugin->mainEntry(kOfxActionDescribe, &desc, nullptr, nullptr),
-              kOfxStatOK);
-
-    MockPropertySet ctx_in;
-    MockPropSetString(ToPropHandle(&ctx_in), kOfxImageEffectPropContext, 0,
-                      kOfxImageEffectContextTransition);
-    ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionDescribeInContext, &desc,
-                                ToPropHandle(&ctx_in), nullptr),
-              kOfxStatOK);
-
-    MockEffectObject inst;
-    CloneDescriptorToInstance(desc, &inst, kOfxImageEffectContextTransition);
-    ASSERT_EQ(
-        plugin->mainEntry(kOfxActionCreateInstance, &inst, nullptr, nullptr),
-        kOfxStatOK);
-
-    // Prepare 16-bit SourceFrom (solid warm coral) and SourceTo (solid teal).
-    std::vector<std::uint16_t> from_buf(kW * kH * 4);
-    std::vector<std::uint16_t> to_buf(kW * kH * 4);
-    std::vector<std::uint16_t> out_buf(kW * kH * 4, 0);
-    for (int i = 0; i < kW * kH; ++i) {
-      from_buf[i * 4 + 0] = 60000;
-      from_buf[i * 4 + 1] = 12000;
-      from_buf[i * 4 + 2] = 10000;
-      from_buf[i * 4 + 3] = 65535;
-      to_buf[i * 4 + 0] = 8000;
-      to_buf[i * 4 + 1] = 52000;
-      to_buf[i * 4 + 2] = 48000;
-      to_buf[i * 4 + 3] = 65535;
-    }
-
-    MockPropertySet from_img, to_img, out_img;
-    ConfigureClipAndImage(&host, inst.clips["SourceFrom"].get(), &from_img,
-                          from_buf.data(), kW, kH, kW * 8, kOfxBitDepthShort,
-                          range);
-    ConfigureClipAndImage(&host, inst.clips["SourceTo"].get(), &to_img,
-                          to_buf.data(), kW, kH, kW * 8, kOfxBitDepthShort,
-                          range);
-    ConfigureClipAndImage(&host, inst.clips["Output"].get(), &out_img,
-                          out_buf.data(), kW, kH, kW * 8, kOfxBitDepthShort,
-                          range);
-
-    OfxParamHandle trans_p = reinterpret_cast<OfxParamHandle>(
-        inst.param_set.params[kOfxImageEffectTransitionParamName].get());
-
-    // Endpoint 0.0 -> IsIdentity SourceFrom.
-    MockParamSetValue(trans_p, 0.0);
-    MockPropertySet id_in, id_out;
-    MockPropSetDouble(ToPropHandle(&id_in), kOfxPropTime, 0, 0.0);
-    ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionIsIdentity, &inst,
-                                ToPropHandle(&id_in), ToPropHandle(&id_out)),
-              kOfxStatOK);
-    char* clip_id = nullptr;
-    ASSERT_EQ(
-        MockPropGetString(ToPropHandle(&id_out), kOfxPropName, 0, &clip_id),
-        kOfxStatOK);
-    EXPECT_STREQ(clip_id, kOfxImageEffectTransitionSourceFromClipName);
-
-    // Endpoint 1.0 -> IsIdentity SourceTo.
-    MockParamSetValue(trans_p, 1.0);
-    MockPropReset(ToPropHandle(&id_out), kOfxPropName);
-    ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionIsIdentity, &inst,
-                                ToPropHandle(&id_in), ToPropHandle(&id_out)),
-              kOfxStatOK);
-    ASSERT_EQ(
-        MockPropGetString(ToPropHandle(&id_out), kOfxPropName, 0, &clip_id),
-        kOfxStatOK);
-    EXPECT_STREQ(clip_id, kOfxImageEffectTransitionSourceToClipName);
-
-    // Midpoint 0.5 -> not identity, renders distinct frame from both clips.
-    MockParamSetValue(trans_p, 0.5);
-    EXPECT_EQ(plugin->mainEntry(kOfxImageEffectActionIsIdentity, &inst,
-                                ToPropHandle(&id_in), ToPropHandle(&id_out)),
-              kOfxStatReplyDefault);
-
-    MockPropertySet render_in;
-    MockPropSetDouble(ToPropHandle(&render_in), kOfxPropTime, 0, 12.0);
-    const double rs[2] = {1.0, 1.0};
-    MockPropSetDoubleN(ToPropHandle(&render_in), kOfxImageEffectPropRenderScale,
-                       2, rs);
-    ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionRender, &inst,
-                                ToPropHandle(&render_in), nullptr),
-              kOfxStatOK);
-    EXPECT_EQ(host.active_leased_images, 0);
-    EXPECT_NE(out_buf, from_buf);
-    EXPECT_NE(out_buf, to_buf);
-
-    ASSERT_EQ(
-        plugin->mainEntry(kOfxActionDestroyInstance, &inst, nullptr, nullptr),
-        kOfxStatOK);
-    ASSERT_EQ(plugin->mainEntry(kOfxActionUnload, nullptr, nullptr, nullptr),
-              kOfxStatOK);
-  }
-}
-
-TEST(PaperCraftOfxTest,
      NegativeRowBytesByteBufferPreservesCanaryGuardRowsAndMatchesPositive) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
   auto get_count = bundle.Sym<GetNumPluginsFn>("OfxGetNumberOfPlugins");
   auto get_plugin = bundle.Sym<GetPluginFn>("OfxGetPlugin");
-  const OfxPlugin* plugin = FindPluginById(get_plugin, get_count(),
-                                           "com.papercraft.RipWipeTransition");
-  ASSERT_NE(plugin, nullptr);
 
   MockHost host;
   host.ofx_host.host = ToPropHandle(&host.host_props);
   host.ofx_host.fetchSuite = &MockHost::FetchSuite;
-  plugin->setHost(&host.ofx_host);
-  ASSERT_EQ(plugin->mainEntry(kOfxActionLoad, nullptr, nullptr, nullptr),
-            kOfxStatOK);
-
-  MockEffectObject desc;
-  desc.host = &host;
-  ASSERT_EQ(plugin->mainEntry(kOfxActionDescribe, &desc, nullptr, nullptr),
-            kOfxStatOK);
-  MockPropertySet ctx_in;
-  MockPropSetString(ToPropHandle(&ctx_in), kOfxImageEffectPropContext, 0,
-                    kOfxImageEffectContextTransition);
-  ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionDescribeInContext, &desc,
-                              ToPropHandle(&ctx_in), nullptr),
-            kOfxStatOK);
-
-  MockEffectObject inst;
-  CloneDescriptorToInstance(desc, &inst, kOfxImageEffectContextTransition);
-  ASSERT_EQ(
-      plugin->mainEntry(kOfxActionCreateInstance, &inst, nullptr, nullptr),
-      kOfxStatOK);
 
   constexpr int kW = 72;
   constexpr int kH = 40;
@@ -1280,97 +1149,13 @@ TEST(PaperCraftOfxTest,
   constexpr std::uint8_t kCanary = 0xA5;
   const double range[2] = {0.0, 24.0};
 
-  std::vector<std::uint8_t> from_pos(kH * kStride);
-  std::vector<std::uint8_t> to_pos(kH * kStride);
-  std::vector<std::uint8_t> out_pos(kH * kStride, 0);
-  for (int y = 0; y < kH; ++y) {
-    for (int x = 0; x < kW; ++x) {
-      const int idx = y * kStride + x * 4;
-      from_pos[idx + 0] = static_cast<std::uint8_t>((x * 3) & 255);
-      from_pos[idx + 1] = static_cast<std::uint8_t>((y * 5) & 255);
-      from_pos[idx + 2] = 40;
-      from_pos[idx + 3] = 255;
-
-      to_pos[idx + 0] = 220;
-      to_pos[idx + 1] = static_cast<std::uint8_t>((x * 2) & 255);
-      to_pos[idx + 2] = static_cast<std::uint8_t>((y * 4) & 255);
-      to_pos[idx + 3] = 255;
-    }
-  }
-
-  MockParamSetValue(
-      reinterpret_cast<OfxParamHandle>(
-          inst.param_set.params[kOfxImageEffectTransitionParamName].get()),
-      0.47);
   MockPropertySet render_in;
   MockPropSetDouble(ToPropHandle(&render_in), kOfxPropTime, 0, 10.0);
   const double rs[2] = {1.0, 1.0};
   MockPropSetDoubleN(ToPropHandle(&render_in), kOfxImageEffectPropRenderScale,
                      2, rs);
 
-  // Positive stride render.
-  {
-    MockPropertySet f_img, t_img, o_img;
-    ConfigureClipAndImage(&host, inst.clips["SourceFrom"].get(), &f_img,
-                          from_pos.data(), kW, kH, kStride, kOfxBitDepthByte,
-                          range);
-    ConfigureClipAndImage(&host, inst.clips["SourceTo"].get(), &t_img,
-                          to_pos.data(), kW, kH, kStride, kOfxBitDepthByte,
-                          range);
-    ConfigureClipAndImage(&host, inst.clips["Output"].get(), &o_img,
-                          out_pos.data(), kW, kH, kStride, kOfxBitDepthByte,
-                          range);
-    ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionRender, &inst,
-                                ToPropHandle(&render_in), nullptr),
-              kOfxStatOK);
-  }
-
-  // Negative stride render with canary rows above row 0 and below row kH - 1.
-  std::vector<std::uint8_t> from_neg((kH + 2) * kStride, kCanary);
-  std::vector<std::uint8_t> to_neg((kH + 2) * kStride, kCanary);
-  std::vector<std::uint8_t> out_neg((kH + 2) * kStride, kCanary);
-  for (int y = 0; y < kH; ++y) {
-    const int phys_y = kH - 1 - y;
-    std::memcpy(&from_neg[(phys_y + 1) * kStride], &from_pos[y * kStride],
-                kStride);
-    std::memcpy(&to_neg[(phys_y + 1) * kStride], &to_pos[y * kStride], kStride);
-  }
-  {
-    MockPropertySet f_img, t_img, o_img;
-    ConfigureClipAndImage(&host, inst.clips["SourceFrom"].get(), &f_img,
-                          &from_neg[kH * kStride], kW, kH, -kStride,
-                          kOfxBitDepthByte, range);
-    ConfigureClipAndImage(&host, inst.clips["SourceTo"].get(), &t_img,
-                          &to_neg[kH * kStride], kW, kH, -kStride,
-                          kOfxBitDepthByte, range);
-    ConfigureClipAndImage(&host, inst.clips["Output"].get(), &o_img,
-                          &out_neg[kH * kStride], kW, kH, -kStride,
-                          kOfxBitDepthByte, range);
-    ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionRender, &inst,
-                                ToPropHandle(&render_in), nullptr),
-              kOfxStatOK);
-  }
-
-  // Verify zero corruption of canary rows and bit-exact match per logical row.
-  for (int x = 0; x < kStride; ++x) {
-    EXPECT_EQ(out_neg[x], kCanary);
-    EXPECT_EQ(out_neg[(kH + 1) * kStride + x], kCanary);
-  }
-  for (int y = 0; y < kH; ++y) {
-    const int phys_y = kH - 1 - y;
-    EXPECT_EQ(std::memcmp(&out_neg[(phys_y + 1) * kStride],
-                          &out_pos[y * kStride], kStride),
-              0)
-        << "Mismatch at logical row " << y;
-  }
-
-  ASSERT_EQ(
-      plugin->mainEntry(kOfxActionDestroyInstance, &inst, nullptr, nullptr),
-      kOfxStatOK);
-  ASSERT_EQ(plugin->mainEntry(kOfxActionUnload, nullptr, nullptr, nullptr),
-            kOfxStatOK);
-
-  // Also test CutoutFX with 8-bit negative rowBytes and canary guard rows.
+  // CutoutFX with 8-bit negative rowBytes and canary guard rows.
   const OfxPlugin* cutout =
       FindPluginById(get_plugin, get_count(), "com.papercraft.CutoutFX");
   ASSERT_NE(cutout, nullptr);
@@ -1491,66 +1276,7 @@ OfxStatus RenderFrame(const ScopedPluginInstance& pi, OfxTime time) {
                               ToPropHandle(&render_in), nullptr);
 }
 
-TEST(PaperCraftOfxTest,
-     UpperTrackTransparentOverlaysPreserveAlphaInAllTransitions) {
-  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
-  ASSERT_NE(bundle.raw(), nullptr);
-
-  constexpr int kW = 64;
-  constexpr int kH = 48;
-  const double range[2] = {0.0, 24.0};
-  std::vector<float> from_buf(kW * kH * 4, 0.0f);
-  std::vector<float> to_buf(kW * kH * 4, 0.0f);
-  for (int y = 14; y < 34; ++y) {
-    for (int x = 20; x < 44; ++x) {
-      const std::size_t idx = static_cast<std::size_t>(y * kW + x) * 4;
-      from_buf[idx + 0] = 0.9f;
-      from_buf[idx + 1] = 0.2f;
-      from_buf[idx + 2] = 0.2f;
-      from_buf[idx + 3] = 1.0f;
-      to_buf[idx + 0] = 0.1f;
-      to_buf[idx + 1] = 0.8f;
-      to_buf[idx + 2] = 0.6f;
-      to_buf[idx + 3] = 1.0f;
-    }
-  }
-
-  for (const char* id :
-       {"com.papercraft.UnfoldTransition", "com.papercraft.CrumpleTransition",
-        "com.papercraft.RipWipeTransition"}) {
-    MockHost host;
-    host.ofx_host.host = ToPropHandle(&host.host_props);
-    host.ofx_host.fetchSuite = &MockHost::FetchSuite;
-    ScopedPluginInstance pi;
-    InitPluginInstance(&bundle, id, kOfxImageEffectContextTransition, &host,
-                       &pi);
-
-    std::vector<float> out_buf(kW * kH * 4, 1.0f);
-    MockPropertySet f_img, t_img, o_img;
-    ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &f_img,
-                          from_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &t_img,
-                          to_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    ConfigureClipAndImage(&host, pi.inst.clips["Output"].get(), &o_img,
-                          out_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-
-    MockParamSetValue(
-        reinterpret_cast<OfxParamHandle>(
-            pi.inst.param_set.params[kOfxImageEffectTransitionParamName].get()),
-        0.5);
-    ASSERT_EQ(RenderFrame(pi, 12.0), kOfxStatOK) << id;
-    EXPECT_LT(out_buf[3], 0.01f) << id << " top-left corner leaked alpha";
-    const std::size_t br_idx =
-        static_cast<std::size_t>((kH - 1) * kW + (kW - 1)) * 4;
-    EXPECT_LT(out_buf[br_idx + 3], 0.01f)
-        << id << " bottom-right corner leaked alpha";
-  }
-}
-
-TEST(PaperCraftOfxTest, OpaqueAndUnpremultipliedInputClipsRenderCleanly) {
+TEST(PaperCraftOfxTest, OpaqueInputClipRendersCleanly) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
 
@@ -1605,121 +1331,28 @@ TEST(PaperCraftOfxTest, OpaqueAndUnpremultipliedInputClipsRenderCleanly) {
     EXPECT_GT(out_buf[center + 3], 0.9f);
     EXPECT_LT(out_buf[3], 0.02f);
   }
-
-  // 2) kOfxImageUnPreMultiplied transparent PNG in UnfoldTransition must not
-  // bleed bright RGB from alpha == 0 texels.
-  {
-    ScopedPluginInstance pi;
-    InitPluginInstance(&bundle, "com.papercraft.UnfoldTransition",
-                       kOfxImageEffectContextTransition, &host, &pi);
-
-    constexpr int kW = 64;
-    constexpr int kH = 48;
-    const double range[2] = {0.0, 24.0};
-    std::vector<float> from_buf(kW * kH * 4, 0.0f);
-    std::vector<float> to_buf(kW * kH * 4, 0.0f);
-    std::vector<float> out_buf(kW * kH * 4, 1.0f);
-    for (int i = 0; i < kW * kH; ++i) {
-      from_buf[i * 4 + 0] = 1.0f;
-      from_buf[i * 4 + 2] = 1.0f;
-      from_buf[i * 4 + 3] = 0.0f;
-      to_buf[i * 4 + 0] = 1.0f;
-      to_buf[i * 4 + 1] = 1.0f;
-      to_buf[i * 4 + 3] = 0.0f;
-    }
-    MockPropertySet f_img, t_img, o_img;
-    ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &f_img,
-                          from_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &t_img,
-                          to_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    ConfigureClipAndImage(&host, pi.inst.clips["Output"].get(), &o_img,
-                          out_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    MockPropSetString(ToPropHandle(&f_img),
-                      kOfxImageEffectPropPreMultiplication, 0,
-                      kOfxImageUnPreMultiplied);
-    MockPropSetString(ToPropHandle(&t_img),
-                      kOfxImageEffectPropPreMultiplication, 0,
-                      kOfxImageUnPreMultiplied);
-    MockParamSetValue(
-        reinterpret_cast<OfxParamHandle>(
-            pi.inst.param_set.params[kOfxImageEffectTransitionParamName].get()),
-        0.5);
-
-    ASSERT_EQ(RenderFrame(pi, 12.0), kOfxStatOK);
-    for (float v : out_buf) {
-      EXPECT_NEAR(v, 0.0f, 1e-4f);
-    }
-  }
 }
 
-TEST(PaperCraftOfxTest, MirrorVerticalAndShortClipOverlapBehaveSmoothly) {
+TEST(PaperCraftOfxTest, ShortClipIntroOutroOverlapAndMirrorBehaveSmoothly) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
   MockHost host;
   host.ofx_host.host = ToPropHandle(&host.host_props);
   host.ofx_host.fetchSuite = &MockHost::FetchSuite;
 
-  // 1) Mirror Vertical toggles pixels in CrumpleTransition.
-  {
-    ScopedPluginInstance pi;
-    InitPluginInstance(&bundle, "com.papercraft.CrumpleTransition",
-                       kOfxImageEffectContextTransition, &host, &pi);
-
-    constexpr int kW = 64;
-    constexpr int kH = 48;
-    const double range[2] = {0.0, 24.0};
-    std::vector<float> from_buf(kW * kH * 4);
-    std::vector<float> to_buf(kW * kH * 4, 0.5f);
-    for (int y = 0; y < kH; ++y) {
-      for (int x = 0; x < kW; ++x) {
-        const std::size_t idx = static_cast<std::size_t>(y * kW + x) * 4;
-        from_buf[idx + 0] = static_cast<float>(x) / kW;
-        from_buf[idx + 1] = static_cast<float>(y) / kH;
-        from_buf[idx + 2] = 0.25f;
-        from_buf[idx + 3] = 1.0f;
-      }
-    }
-    std::vector<float> out_a(kW * kH * 4, 0.0f);
-    std::vector<float> out_b(kW * kH * 4, 0.0f);
-    MockPropertySet f_img, t_img, o_img;
-    ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &f_img,
-                          from_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &t_img,
-                          to_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    ConfigureClipAndImage(&host, pi.inst.clips["Output"].get(), &o_img,
-                          out_a.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    MockParamSetValue(
-        reinterpret_cast<OfxParamHandle>(
-            pi.inst.param_set.params[kOfxImageEffectTransitionParamName].get()),
-        0.35);
-    ASSERT_EQ(RenderFrame(pi, 8.0), kOfxStatOK);
-
-    ConfigureClipAndImage(&host, pi.inst.clips["Output"].get(), &o_img,
-                          out_b.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                          range);
-    MockParamSetValue(reinterpret_cast<OfxParamHandle>(
-                          pi.inst.param_set.params["mirrorV"].get()),
-                      1);
-    ASSERT_EQ(RenderFrame(pi, 8.0), kOfxStatOK);
-    EXPECT_NE(out_a, out_b);
-  }
-
-  // 2) Short 20-frame CutoutFX clip with introFrames=14 & outroFrames=14 stays
+  // Short 20-frame CutoutFX clip with introFrames=14 & outroFrames=14 stays
   // continuous across the midpoint and honors mirrorTransV.
   {
     ScopedPluginInstance pi;
     InitPluginInstance(&bundle, "com.papercraft.CutoutFX",
-                       kOfxImageEffectContextGenerator, &host, &pi);
+                       kOfxImageEffectContextFilter, &host, &pi);
 
     constexpr int kW = 64;
     constexpr int kH = 48;
     const double short_range[2] = {0.0, 20.0};
+    MockParamSetValue(reinterpret_cast<OfxParamHandle>(
+                          pi.inst.param_set.params["sourceMode"].get()),
+                      1);
     MockParamSetValue(reinterpret_cast<OfxParamHandle>(
                           pi.inst.param_set.params["enableStopMotion"].get()),
                       0);

@@ -123,43 +123,14 @@ def _resolve_package_defaults(
 
 def build_drfx_entries() -> dict[str, bytes]:
   """Creates the file tree contained inside PaperCraft_Studio_Pro.drfx."""
-  gen_dir = "Edit/Generators/MTTN PaperCraft Studio"
   fx_dir = "Edit/Effects/MTTN PaperCraft Studio"
-  tr_dir = "Edit/Transitions/MTTN PaperCraft Studio"
 
   entries: dict[str, bytes] = {
-      f"{gen_dir}/Paper Animator Pro.setting": (
-          fusion_templates.build_generator_setting().encode("utf-8")
-      ),
-      f"{gen_dir}/Paper Animator Pro.png": png_renderer.render_thumbnail_png(
-          (131, 103, 199), "generator"
-      ),
-      f"{gen_dir}/Assets/demo_sticker.png": (
-          png_renderer.render_demo_sticker_png(512)
-      ),
       f"{fx_dir}/Paper Cutout FX.setting": (
           fusion_templates.build_effect_setting().encode("utf-8")
       ),
       f"{fx_dir}/Paper Cutout FX.png": png_renderer.render_thumbnail_png(
           (106, 79, 179), "effect"
-      ),
-      f"{tr_dir}/Paper Unfold Transition.setting": (
-          fusion_templates.build_unfold_transition_setting().encode("utf-8")
-      ),
-      f"{tr_dir}/Paper Unfold Transition.png": (
-          png_renderer.render_thumbnail_png((159, 133, 227), "unfold")
-      ),
-      f"{tr_dir}/Paper Crumple Transition.setting": (
-          fusion_templates.build_crumple_transition_setting().encode("utf-8")
-      ),
-      f"{tr_dir}/Paper Crumple Transition.png": (
-          png_renderer.render_thumbnail_png((180, 114, 214), "crumple")
-      ),
-      f"{tr_dir}/Paper Rip Wipe Transition.setting": (
-          fusion_templates.build_rip_transition_setting().encode("utf-8")
-      ),
-      f"{tr_dir}/Paper Rip Wipe Transition.png": (
-          png_renderer.render_thumbnail_png((92, 108, 214), "rip")
       ),
   }
   return entries
