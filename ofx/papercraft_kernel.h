@@ -64,14 +64,7 @@ enum class CutoutAnimStyle {
   kFlatPop = 4,
 };
 
-// Transition style presets for dedicated Edit-tab video transitions.
-enum class TransitionKind {
-  kUnfold = 0,
-  kCrumple = 1,
-  kRipWipe = 2,
-};
-
-// Parameter bundle for the Paper Cutout FX Filter/Generator renderer.
+// Parameter bundle for the Paper Cutout FX filter renderer.
 struct CutoutParams {
   // Media source & placement.
   int source_mode = 0;  // 0 = Timeline Clip, 1 = Built-in Paper Sticker
@@ -109,7 +102,7 @@ struct CutoutParams {
   float media_texture_overlay = 0.22f;
   int random_seed = 7;
 
-  // Intro & outro paper transitions across the clip duration.
+  // Intro & outro paper animations across the clip duration.
   int intro_style = 2;
   int intro_frames = 14;
   int outro_style = 1;
@@ -143,59 +136,17 @@ struct CutoutParams {
   double frame_end = 120.0;
 };
 
-// Parameter bundle for Edit-tab Paper Transitions.
-struct TransitionParams {
-  TransitionKind kind = TransitionKind::kUnfold;
-  float progress = 0.5f;
-  bool reverse_direction = false;
-  bool enable_stop_motion = true;
-  int stop_motion_steps = 12;
-  bool mirror_h = false;
-  bool mirror_v = false;
-
-  // Unfold / Crumple / Rip shared styling controls.
-  float fold_tilt_deg = 22.0f;
-  float slide_distance = 0.55f;
-  float crumple_intensity = 0.22f;
-  float crease_scale = 4.0f;
-  float spin_angle_deg = 35.0f;
-  float rip_angle_deg = 12.0f;
-  float tear_width_norm = 0.028f;
-  float tear_roughness_norm = 0.032f;
-  float tear_frequency = 24.0f;
-  float shadow_opacity = 0.60f;
-  float shadow_softness_norm = 0.020f;
-  float crease_intensity = 0.45f;
-  float paper_r = 0.960f;
-  float paper_g = 0.940f;
-  float paper_b = 0.890f;
-  int random_seed = 7;
-};
-
 // Returns true if the image view points to a writable/readable 4-channel RGBA
 // pixel buffer with non-empty bounds and non-zero rowBytes.
 bool IsValidRgbaView(const ImageView& view);
 
-// Computes normalized [0, 1] transition progress after reverse and optional
-// stop-motion quantization, preserving exact 0.0 and 1.0 endpoints.
-float ComputeEffectiveTransitionProgress(const TransitionParams& params);
-
 // Renders Paper Cutout FX into `output` across `render_window` using canonical
 // full-frame geometry `canvas_bounds`. `source` may be empty/invalid when
-// `source_mode == 1` or operating in OpenFX Generator context.
+// `source_mode == 1` (Built-in Paper Sticker) or the source clip is absent.
 void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
                        const ImageView& output, const PixelRect& canvas_bounds,
                        const PixelRect& render_window,
                        const ParallelRowsFn& parallel_for);
-
-// Renders an Edit-tab Paper Transition between `source_from` and `source_to`
-// into `output` across `render_window` using canonical `canvas_bounds`.
-void RenderTransitionFrame(const TransitionParams& params,
-                           const ImageView& source_from,
-                           const ImageView& source_to, const ImageView& output,
-                           const PixelRect& canvas_bounds,
-                           const PixelRect& render_window,
-                           const ParallelRowsFn& parallel_for);
 
 }  // namespace papercraft
 

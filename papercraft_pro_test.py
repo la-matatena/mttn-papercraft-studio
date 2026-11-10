@@ -44,33 +44,18 @@ except ImportError:
 
 class PapercraftProTest(absltest.TestCase):
 
-  def test_png_thumbnail_and_demo_sticker(self):
-    thumb = png_renderer.render_thumbnail_png((232, 93, 56), "generator")
+  def test_png_thumbnail(self):
+    thumb = png_renderer.render_thumbnail_png((232, 93, 56), "effect")
     self.assertTrue(thumb.startswith(b"\x89PNG\r\n\x1a\n"))
     w, h = struct.unpack(">II", thumb[16:24])
     self.assertEqual((w, h), (104, 58))
 
-    sticker = png_renderer.render_demo_sticker_png(128)
-    sw, sh = struct.unpack(">II", sticker[16:24])
-    self.assertEqual((sw, sh), (128, 128))
-
-  def test_all_fusion_templates_validate_as_macro_operator(self):
-    for builder, kind in (
-        (fusion_templates.build_generator_setting, "generator"),
-        (fusion_templates.build_effect_setting, "effect"),
-        (fusion_templates.build_unfold_transition_setting, "transition"),
-        (fusion_templates.build_crumple_transition_setting, "transition"),
-        (fusion_templates.build_rip_transition_setting, "transition"),
-    ):
-      text = builder()
-      self.assertIn("= MacroOperator", text)
-      self.assertNotIn("= GroupOperator", text)
-      self.assertNotIn("ViewInfo = GroupInfo", text)
-      drfx_validator.validate_setting_syntax_and_graph(text, kind)
-
-    gen_text = fusion_templates.build_generator_setting()
-    self.assertIn("GlobalOut = Input { Value = 1000000", gen_text)
-    self.assertIn("GlobalEnd = 1000000", gen_text)
+  def test_effect_fusion_template_validates_as_macro_operator(self):
+    text = fusion_templates.build_effect_setting()
+    self.assertIn("= MacroOperator", text)
+    self.assertNotIn("= GroupOperator", text)
+    self.assertNotIn("ViewInfo = GroupInfo", text)
+    drfx_validator.validate_setting_syntax_and_graph(text, "effect")
 
   def test_validator_rejects_broken_or_group_operator_setting(self):
     valid = fusion_templates.build_effect_setting()
