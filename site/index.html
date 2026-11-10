@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MTTN PaperCraft Studio · Recortes de papel stop-motion para DaVinci Resolve</title>
+  <meta name="description" content="Plugin OpenFX nativo para DaVinci Resolve 20 y 21: recortes de papel stop-motion, bordes de cartulina rasgada, transiciones 3D y 24 sonidos Foley de papel. Gratis y sin marcas de agua.">
+  <meta name="theme-color" content="#15121e">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="alternate" hreflang="es" href="https://la-matatena.github.io/mttn-papercraft-studio/">
+  <link rel="alternate" hreflang="en" href="https://la-matatena.github.io/mttn-papercraft-studio/en/">
+  <meta property="og:title" content="MTTN PaperCraft Studio">
+  <meta property="og:description" content="Recortes de papel stop-motion, transiciones 3D y Foley de papel en la página Edit de DaVinci Resolve.">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="icon.svg" alt="" width="30" height="30">MTTN PaperCraft Studio</a>
+      <nav class="nav" aria-label="Principal">
+        <a href="#efectos">Efectos</a>
+        <a href="#controles">Controles</a>
+        <a href="#sonidos">Sonidos</a>
+        <a href="#instalar">Instalar</a>
+        <a href="https://github.com/la-matatena/mttn-papercraft-studio">GitHub</a>
+        <a class="lang" href="en/" hreflang="en" lang="en">English</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="wrap hero-grid split">
+        <div>
+          <span class="eyebrow">v2.1 · OpenFX 1.4 · C++17 · MIT</span>
+          <h1>Estética de papel hecho a mano, directo en la página Edit.</h1>
+          <p class="lead">Recortes stop-motion orgánicos, bordes de cartulina rasgada, transiciones con dobleces 3D y sonidos Foley de papel para DaVinci Resolve 20 y 21, sin abrir Fusion y sin marcas de agua.</p>
+          <div class="actions">
+            <a class="btn primary" href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">Descargar la última versión</a>
+            <a class="btn" href="https://github.com/la-matatena/mttn-papercraft-studio">Ver en GitHub</a>
+          </div>
+          <ul class="chips" aria-label="Compatibilidad">
+            <li>DaVinci Resolve 20 y 21</li>
+            <li>Free y Studio</li>
+            <li>macOS Universal</li>
+            <li>Linux x86_64</li>
+          </ul>
+        </div>
+        <svg class="paper-art" viewBox="0 0 400 320" role="img" aria-label="Ilustración de dos recortes de cartulina rasgada con la estampa de La Matatena">
+          <defs>
+            <filter id="torn" x="-10%" y="-10%" width="120%" height="120%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="4" seed="7"/>
+              <feDisplacementMap in="SourceGraphic" scale="16"/>
+            </filter>
+            <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="9"/>
+            </filter>
+            <filter id="grain">
+              <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="2" result="noise"/>
+              <feColorMatrix in="noise" type="saturate" values="0"/>
+              <feComponentTransfer><feFuncA type="linear" slope="0.12"/></feComponentTransfer>
+              <feComposite in2="SourceGraphic" operator="in"/>
+            </filter>
+            <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#9f85e3"/>
+              <stop offset="1" stop-color="#583da0"/>
+            </linearGradient>
+          </defs>
+          <g transform="rotate(10 220 160)">
+            <g class="wobble back">
+              <rect x="110" y="40" width="220" height="230" rx="6" fill="#000" opacity="0.45" filter="url(#shadow)" transform="translate(10 14)"/>
+              <rect x="110" y="40" width="220" height="230" rx="6" fill="#d5c7f7" filter="url(#torn)"/>
+            </g>
+          </g>
+          <g class="wobble">
+            <rect x="70" y="50" width="240" height="220" rx="6" fill="#000" opacity="0.5" filter="url(#shadow)" transform="translate(12 16)"/>
+            <rect x="70" y="50" width="240" height="220" rx="6" fill="#f4efe6" filter="url(#torn)"/>
+            <rect x="92" y="72" width="196" height="176" rx="4" fill="url(#ink)" filter="url(#torn)"/>
+            <image href="icon.svg" x="140" y="110" width="100" height="100"/>
+            <rect x="70" y="50" width="240" height="220" fill="#fff" filter="url(#grain)"/>
+            <path d="M190 52 L194 268" stroke="#000" stroke-opacity="0.08" stroke-width="2"/>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <section id="efectos">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Cuatro plugins nativos en la categoría MTTN PaperCraft Studio</h2>
+          <p>Arrástralos desde <strong>Effects</strong> sobre tus clips como cualquier efecto de Resolve. Se ejecutan en C++17 multihilo, sin la sobrecarga del grafo de nodos de Fusion.</p>
+        </div>
+        <div class="grid">
+          <article class="card"><span class="icon" aria-hidden="true">✂️</span><h3>Paper Cutout FX · Filtro</h3><p>Convierte cualquier clip, título, PNG transparente o toma con pantalla verde en un recorte de papel animado.</p></article>
+          <article class="card"><span class="icon" aria-hidden="true">🏷️</span><h3>Paper Cutout FX · Generador</h3><p>Genera una estampa recortada de La Matatena independiente en una pista de video vacía.</p></article>
+          <article class="card"><span class="icon" aria-hidden="true">📄</span><h3>Paper Unfold y Paper Crumple</h3><p>Transiciones que despliegan el siguiente plano con dobleces 3D o arrugan el anterior como una bola de papel.</p></article>
+          <article class="card"><span class="icon" aria-hidden="true">🧻</span><h3>Paper Rip Wipe</h3><p>Una cortinilla de papel rasgado con fibras procedurales entre dos clips de la página Edit.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="controles" class="alt">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Todo se ajusta desde el Inspector</h2>
+          <p>Siete secciones agrupan cada parámetro, desde la extracción de la máscara hasta el temblor fotograma a fotograma.</p>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th scope="col">Sección</th><th scope="col">Qué hace</th></tr></thead>
+            <tbody>
+              <tr><td><strong>1. Media Source and Placement</strong></td><td>Alterna entre el clip de la línea de tiempo y la estampa integrada, y encuadra la imagen dentro del recorte.</td></tr>
+              <tr><td><strong>2. Green Screen and Matte Cleanup</strong></td><td>Extrae al sujeto de fondos verdes o azules con supresión de contaminación de color.</td></tr>
+              <tr><td><strong>3. Torn Paper Cutout Border</strong></td><td>Genera un borde procedural de cartulina rasgada alrededor de la silueta alfa.</td></tr>
+              <tr><td><strong>4. Paper Grain and Fold Creases</strong></td><td>Añade textura de fibra de papel multicapa y pliegues marcados.</td></tr>
+              <tr><td><strong>5. Intro and Outro Paper Animations</strong></td><td>Entradas y salidas Paper Unfold (3D), Crumple Ball, Paper Airplane Glide o Flat Cutout Pop.</td></tr>
+              <tr><td><strong>6. 3D Drop Shadow</strong></td><td>Sombra suave y direccional con profundidad detrás del recorte.</td></tr>
+              <tr><td><strong>7. Stop-Motion and Master Transform</strong></td><td>Cuantiza el movimiento en fotogramas sostenidos y añade una vibración táctil.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="sonidos">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>24 sonidos Foley de papel incluidos</h2>
+          <p>Archivos WAV estéreo a 48 kHz y 24 bits organizados en 6 categorías. Impórtalos en un Power Bin para usarlos en todos tus proyectos.</p>
+        </div>
+        <div class="sfx">
+          <article class="card"><h3>01_Page_Turns</h3><p>Giros de hojas de libro, cartulina, periódico y cambio rápido.</p></article>
+          <article class="card"><h3>02_Paper_Hits_Impacts</h3><p>Golpes sobre mesa, caídas de cartón, stickers y pilas de papel.</p></article>
+          <article class="card"><h3>03_Crumples_Uncrumples</h3><p>Arrugados apretados, crujidos de periódico y desarrugados.</p></article>
+          <article class="card"><h3>04_Rips_Tears</h3><p>Rasgados rápidos, desgarros lentos, kraft grueso y tijeras.</p></article>
+          <article class="card"><h3>05_Little_Bits_Rustles</h3><p>Confeti, balanceos stop-motion, roces de mesa y pliegues.</p></article>
+          <article class="card"><h3>06_Designed_Transitions</h3><p>Barridos en capas, aviones de papel, impactos y apariciones pop.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="instalar" class="alt">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Instalación</h2>
+          <p>Usa DaVinci Resolve descargado desde Blackmagic Design: la edición de la Mac App Store no puede cargar plugins OpenFX de terceros.</p>
+        </div>
+        <ol class="steps">
+          <li>
+            <h3>Descarga</h3>
+            <p>Descarga y descomprime <code>MTTN_PaperCraft_Studio_Full_Bundle.zip</code> desde <a href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">GitHub Releases</a>.</p>
+          </li>
+          <li>
+            <h3>Instala en macOS o Linux</h3>
+            <p>En macOS, haz doble clic en el instalador o ejecútalo desde Terminal (añade <code>--user</code> para instalar sin permisos de administrador):</p>
+            <pre><code>./ofx/<wbr>Install_PaperCraft_<wbr>OpenFX_macOS.command</code></pre>
+            <p>En Linux:</p>
+            <pre><code>./install_linux_ofx.sh</code></pre>
+          </li>
+          <li>
+            <h3>Reinicia Resolve</h3>
+            <p>Abre <strong>Effects</strong> &gt; <strong>Open FX</strong> &gt; <strong>MTTN PaperCraft Studio</strong> y arrastra un efecto sobre tu clip.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="docs">
+      <div class="wrap">
+        <div class="section-head"><h2>Documentación</h2></div>
+        <div class="grid three">
+          <a class="card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/user_guide.md"><h3>Guía de usuario</h3><p>Instalación, flujos en la página Edit, parámetros del Inspector, mezcla de SFX y solución de problemas.</p></a>
+          <a class="card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/design_doc.md"><h3>Documento de diseño</h3><p>Arquitectura, integración con OpenFX 1.4, campos de distancia con signo y síntesis de Foley.</p></a>
+          <a class="card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/developer_guide.md"><h3>Guía de desarrollo</h3><p>Estructura del repositorio, compilación en macOS y Linux, y suites de verificación.</p></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta alt">
+      <div class="wrap">
+        <h2>Dale textura a tu próximo video</h2>
+        <p>Gratis y de código abierto bajo licencia MIT. Desarrollado por La Matatena.</p>
+        <div class="actions">
+          <a class="btn primary" href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">Descargar</a>
+          <a class="btn" href="https://la-matatena.github.io/mttn-autosubs-tool/">Conoce MTTN AutoSubs Tool</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>© 2026 <a href="https://la-matatena.com">La Matatena</a> · Licencia MIT</span>
+      <nav aria-label="Pie de página">
+        <a href="https://github.com/la-matatena/mttn-papercraft-studio">GitHub</a>
+        <a href="https://github.com/la-matatena/mttn-papercraft-studio/issues">Reportar un problema</a>
+        <a href="https://github.com/la-matatena">@la-matatena</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
