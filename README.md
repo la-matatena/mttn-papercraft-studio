@@ -12,8 +12,6 @@
 
 **MTTN PaperCraft Studio** (desarrollado por **[La Matatena](https://la-matatena.com)** · [@la-matatena](https://github.com/la-matatena)) añade recortes de papel estilo stop-motion orgánico, bordes de cartulina rasgada, transiciones con dobleces 3D y efectos de sonido de papel Foley en estéreo de 24 bits directamente sobre la página de Edición (Edit) de DaVinci Resolve 20 y 21 sin necesidad de abrir Fusion. Tanto DaVinci Resolve Free como DaVinci Resolve Studio ejecutan el plugin OpenFX 1.4 nativo en C++17 sin marcas de agua.
 
-> **Convención de Proyectos de La Matatena:** Todas las herramientas bajo [`github.com/la-matatena`](https://github.com/la-matatena) siguen la nomenclatura [**MTTN Standards**](https://github.com/la-matatena/.github/blob/main/CONVENTIONS.md) (**`MTTN` + `NombreDeDosPalabras` + `[Sufijo]`**, ej. **MTTN PaperCraft Studio**, **MTTN AutoSubs Tool**) y la paleta de identidad visual `#8367c7` / `#6a4fb3`.
-
 ## Contenido del paquete
 
 | Componente | Ruta del paquete | Propósito |
