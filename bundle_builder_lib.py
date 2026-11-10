@@ -39,6 +39,7 @@ _OFX_SOURCE_RELPATHS = (
 
 _INSTALLER_NAMES = (
     "Install_PaperCraft_OpenFX_macOS.command",
+    "Uninstall_PaperCraft_OpenFX_macOS.command",
     "install_linux_ofx.sh",
 )
 
@@ -64,6 +65,7 @@ _REPO_ROOT_FILES = (
 
 _REPO_EXTRA_OFX_FILES = (
     "Install_PaperCraft_OpenFX_macOS.command",
+    "Uninstall_PaperCraft_OpenFX_macOS.command",
     "install_linux_ofx.sh",
     "papercraft_ofx_test.cc",
 )

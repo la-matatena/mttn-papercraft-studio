@@ -10,25 +10,26 @@
 [![Platform: macOS & Linux](https://img.shields.io/badge/platform-macOS%20Universal%20%7C%20Linux%20x86__64-6a4fb3.svg)](docs/developer_guide.md)
 [![Brand: La Matatena](https://img.shields.io/badge/La%20Matatena-MTTN-8367c7.svg)](https://github.com/la-matatena)
 
-**MTTN PaperCraft Studio** (by **[La Matatena](https://la-matatena.com)** · [@la-matatena](https://github.com/la-matatena)) adds organic stop-motion paper cutouts, torn cardstock borders, 3D paper fold transitions, and 24-bit stereo paper Foley sound effects directly on the DaVinci Resolve 20 and 21 Edit pages without opening Fusion. Both DaVinci Resolve Free and DaVinci Resolve Studio run the native OpenFX 1.4 C++17 plugin without watermarks.
+**MTTN PaperCraft Studio** (by **[La Matatena](https://la-matatena.com)** · [@la-matatena](https://github.com/la-matatena)) adds organic stop-motion paper cutouts, torn cardstock borders, paper intro and outro animations, and 24-bit stereo paper Foley sound effects directly on the DaVinci Resolve 20 and 21 Edit pages without opening Fusion. Both DaVinci Resolve Free and DaVinci Resolve Studio run the native OpenFX 1.4 C++17 plugin without watermarks.
 
 ## Included deliverables
 
 | Component | Package path | Purpose |
 | :--- | :--- | :--- |
-| Native OpenFX bundle | `PaperCraftStudioPro.ofx.bundle` | Direct C++17 Edit-page effects, generators, and transitions (`MTTN PaperCraft Studio` category) |
+| Native OpenFX bundle | `PaperCraftStudioPro.ofx.bundle` | Native C++17 **Paper Cutout FX** effect for the Edit page (`MTTN PaperCraft Studio` category) |
 | macOS OpenFX installer | `Install_PaperCraft_OpenFX_macOS.command` | Compiles Universal (`x86_64` + `arm64`) or native macOS OpenFX bundle, ad-hoc signs it, and installs to `/Library/OFX/Plugins` |
+| macOS OpenFX uninstaller | `Uninstall_PaperCraft_OpenFX_macOS.command` | Removes the OpenFX plugin (system or `--user`) and the `.drfx` templates from DaVinci Resolve |
 | Linux OpenFX installer | `install_linux_ofx.sh` | Installs `PaperCraftStudioPro.ofx.bundle` into the Linux OpenFX directory |
 | Portable OpenFX source | `OpenFX_Source/` | Standalone C++17 source files and OpenFX 1.4 headers for macOS and Linux builds |
 | Paper SFX library | `Paper_SFX/` (24 stereo WAV files) | 48 kHz, 24-bit stereo Foley sounds organized across six tactile paper categories |
 | Docs & design | `docs/` (`user_guide.md`, `design_doc.md`, `developer_guide.md`) | End-user guide, developer build guide, and technical design architecture |
-| Legacy `.drfx` templates | `MTTN_PaperCraft_Studio.drfx` / `Templates_Unpacked/` | Validated Fusion `MacroOperator` templates with La Matatena purple thumbnails |
+| Legacy `.drfx` templates | `MTTN_PaperCraft_Studio.drfx` / `Templates_Unpacked/` | Validated Fusion `MacroOperator` template for **Paper Cutout FX** with a La Matatena purple thumbnail |
 
 ## Documentation
 
 Read the full documentation set for installation steps, Edit-page workflows, and engineering architecture:
 
-- [User guide](docs/user_guide.md): Installation steps, Edit-page cutout and transition workflows, all Inspector parameters, Paper SFX mixing table, and troubleshooting.
+- [User guide](docs/user_guide.md): Installation steps, the Edit-page Paper Cutout FX workflow, all Inspector parameters, Paper SFX mixing table, and troubleshooting.
 - [Design document](docs/design_doc.md): Architecture overview, OpenFX 1.4 host integration, linear-time signed distance field pipeline, Foley audio synthesis, and engineering trade-offs.
 - [Developer and build guide](docs/developer_guide.md): Repository layout, standalone Linux and macOS compilation, and verification suites.
 
@@ -39,20 +40,34 @@ Read the full documentation set for installation steps, Edit-page workflows, and
 Run DaVinci Resolve installed from the Blackmagic Design website rather than the Mac App Store edition, because Apple sandbox restrictions prevent the Mac App Store build from loading third-party OpenFX bundles in `/Library/OFX/Plugins`.
 
 1. Download and extract `MTTN_PaperCraft_Studio_Full_Bundle.zip` from [GitHub Releases](https://github.com/la-matatena/mttn-papercraft-studio/releases/latest) (or clone this repository).
-2. Double-click `Install_PaperCraft_OpenFX_macOS.command`, or run the installer script from **Terminal**:
+2. Double-click `Install_PaperCraft_OpenFX_macOS.command`, or run it from **Terminal** inside the extracted folder (type `cd `, drag the folder onto the Terminal window, and press Return). In the ZIP the script sits at the top of the folder; in a cloned repository it lives in `ofx/`:
 
    ```bash
-   ./ofx/Install_PaperCraft_OpenFX_macOS.command
+   ./Install_PaperCraft_OpenFX_macOS.command        # Releases ZIP
+   ./ofx/Install_PaperCraft_OpenFX_macOS.command    # cloned repository
    ```
 
    If you prefer user-level installation without administrator privileges, pass `--user` to install into `${HOME}/Library/OFX/Plugins`:
 
    ```bash
-   ./ofx/Install_PaperCraft_OpenFX_macOS.command --user
+   ./Install_PaperCraft_OpenFX_macOS.command --user
    ```
 
 3. Approve the macOS Command Line Tools prompt if `clang++` is not installed yet, then rerun `Install_PaperCraft_OpenFX_macOS.command`.
 4. Restart DaVinci Resolve to scan the OpenFX bundle.
+
+### Uninstall on macOS
+
+1. Quit DaVinci Resolve.
+2. Double-click `Uninstall_PaperCraft_OpenFX_macOS.command` (inside `ofx/` in a cloned repository). It removes the OpenFX plugin, whether you installed it system-wide or with `--user`, plus the optional `.drfx` templates. If the plugin is in `/Library/OFX/Plugins`, it asks for your administrator password.
+
+   To preview what would be removed without deleting anything:
+
+   ```bash
+   ./Uninstall_PaperCraft_OpenFX_macOS.command --dry-run
+   ```
+
+3. Open DaVinci Resolve: the **MTTN PaperCraft Studio** category is gone. Clips that used these effects show them as missing; remove them from your timelines.
 
 ### Install on Linux
 
@@ -73,11 +88,10 @@ Run DaVinci Resolve installed from the Blackmagic Design website rather than the
 
 ## Use MTTN PaperCraft Studio on the Edit page
 
-The OpenFX bundle registers four plugins in the **MTTN PaperCraft Studio** category:
+The OpenFX bundle registers a single effect, **Paper Cutout FX**, in the **MTTN PaperCraft Studio** category. Open **Effects** > **Open FX** > **MTTN PaperCraft Studio** and drag **Paper Cutout FX** directly onto any timeline clip, title, transparent PNG, or green-screen shot.
 
-- **Paper Cutout FX** (filter): Open **Effects** > **Open FX** > **MTTN PaperCraft Studio** and drag **Paper Cutout FX** directly onto any timeline clip, title, transparent PNG, or green-screen shot.
-- **Paper Cutout FX** (generator): Open **Effects** > **Generators** > **MTTN PaperCraft Studio** and drag **Paper Cutout FX** onto an empty video track to generate a standalone animated La Matatena sticker cutout.
-- **Paper Unfold Transition**, **Paper Crumple Transition**, and **Paper Rip Wipe Transition**: Open **Effects** > **Video Transitions** > **MTTN PaperCraft Studio** and drag any transition onto a cut between two Edit-page clips.
+> [!NOTE]
+> Version 3.0 removed the Paper Cutout FX generator and the **Paper Unfold**, **Paper Crumple**, and **Paper Rip Wipe** transitions. If an older project used them, DaVinci Resolve shows them as unavailable; remove them from the timeline.
 
 ## Inspector controls reference
 
@@ -104,12 +118,12 @@ Import the `Paper_SFX/` directory into a DaVinci Resolve Power Bin to reuse all 
 
 ## Optional legacy `.drfx` templates
 
-The validated `MTTN_PaperCraft_Studio.drfx` archive remains included for Fusion-template workflows. Double-click `MTTN_PaperCraft_Studio.drfx` to install Edit-page `MacroOperator` copies under **Effects** > **Toolbox** > **MTTN PaperCraft Studio**. For everyday Edit-page timelines, prefer the native OpenFX bundle because it executes in multi-threaded C++17 without Fusion graph overhead.
+The validated `MTTN_PaperCraft_Studio.drfx` archive remains included for Fusion-template workflows. Double-click `MTTN_PaperCraft_Studio.drfx` to install the Edit-page **Paper Cutout FX** `MacroOperator` copy under **Effects** > **Toolbox** > **MTTN PaperCraft Studio**. For everyday Edit-page timelines, prefer the native OpenFX bundle because it executes in multi-threaded C++17 without Fusion graph overhead.
 
 ## Improve timeline playback and renders
 
 - Set **Playback** > **Render Cache** to **Smart** or **User** after finalizing your cutout parameters.
-- Lower **Playback** > **Timeline Proxy Resolution** to **Half** or **Quarter** when timing stop-motion transitions.
+- Lower **Playback** > **Timeline Proxy Resolution** to **Half** or **Quarter** when timing stop-motion animations.
 
 ## Build & verify from source
 

@@ -51,6 +51,22 @@ after installation so it scans the OpenFX directory.
 
 4.  Restart DaVinci Resolve.
 
+### Uninstall on macOS
+
+1.  Quit DaVinci Resolve.
+2.  Double-click `Uninstall_PaperCraft_OpenFX_macOS.command`, or run it in
+    **Terminal**. It removes the OpenFX bundle from `/Library/OFX/Plugins` and
+    `${HOME}/Library/OFX/Plugins`, plus any installed `.drfx` templates, and
+    asks for your administrator password when needed:
+
+    ```bash
+    ./Uninstall_PaperCraft_OpenFX_macOS.command
+    ```
+
+    Pass `--dry-run` to list what would be removed without deleting anything.
+
+3.  Restart DaVinci Resolve.
+
 ### Install on Linux
 
 1.  Extract the release archive containing `PaperCraftStudioPro.ofx.bundle` and
