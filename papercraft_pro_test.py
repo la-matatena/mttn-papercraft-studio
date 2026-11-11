@@ -171,6 +171,21 @@ class PapercraftProTest(absltest.TestCase):
       self.assertIn("[dry-run]", proc.stdout)
       self.assertIn("PaperCraftStudioPro.ofx.bundle", proc.stdout)
 
+    uninstall_path = os.path.join(
+        pkg_dir, "ofx", "Uninstall_PaperCraft_OpenFX_macOS.command"
+    )
+    subprocess.run(["/bin/bash", "-n", uninstall_path], check=True)
+    uninstall_proc = subprocess.run(
+        ["/bin/bash", uninstall_path, "--dry-run"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    self.assertTrue(
+        "[dry-run]" in uninstall_proc.stdout
+        or "Nothing to remove." in uninstall_proc.stdout
+    )
+
   def test_end_to_end_bundle_creation(self):
     scratch_dir = self.create_tempdir().full_path
     tmp_dir = os.path.join(scratch_dir, "out")
@@ -199,7 +214,7 @@ class PapercraftProTest(absltest.TestCase):
 
     with zipfile.ZipFile(out["full_zip"], "r") as zf:
       names = set(zf.namelist())
-      self.assertIn("PaperCraft_Studio_Pro.drfx", names)
+      self.assertIn("MTTN_PaperCraft_Studio.drfx", names)
       self.assertIn("LICENSE", names)
       self.assertIn("README.md", names)
       self.assertIn("docs/design_doc.md", names)
@@ -212,6 +227,7 @@ class PapercraftProTest(absltest.TestCase):
           )
       )
       self.assertIn("Install_PaperCraft_OpenFX_macOS.command", names)
+      self.assertIn("Uninstall_PaperCraft_OpenFX_macOS.command", names)
       self.assertIn("install_linux_ofx.sh", names)
       self.assertIn("PaperCraftStudioPro.ofx.bundle/Contents/Info.plist", names)
       self.assertIn(
@@ -228,6 +244,7 @@ class PapercraftProTest(absltest.TestCase):
 
       for exe_member in (
           "Install_PaperCraft_OpenFX_macOS.command",
+          "Uninstall_PaperCraft_OpenFX_macOS.command",
           "install_linux_ofx.sh",
           "PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
       ):
@@ -258,9 +275,10 @@ class PapercraftProTest(absltest.TestCase):
           "papercraft_pro/ofx/papercraft_ofx_plugin.cc",
           "papercraft_pro/ofx/papercraft_ofx_test.cc",
           "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
+          "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/ofx/install_linux_ofx.sh",
           "papercraft_pro/ofx/openfx_include/ofxCore.h",
-          "papercraft_pro/release/PaperCraft_Studio_Pro.drfx",
+          "papercraft_pro/release/MTTN_PaperCraft_Studio.drfx",
           "papercraft_pro/release/PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
       )
       for member in expected_repo_entries:
@@ -278,8 +296,10 @@ class PapercraftProTest(absltest.TestCase):
 
       for exe_member in (
           "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
+          "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/ofx/install_linux_ofx.sh",
           "papercraft_pro/release/Install_PaperCraft_OpenFX_macOS.command",
+          "papercraft_pro/release/Uninstall_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/release/install_linux_ofx.sh",
           "papercraft_pro/release/PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
       ):

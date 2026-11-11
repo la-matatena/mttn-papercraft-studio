@@ -128,7 +128,7 @@ def _resolve_package_defaults(
 
 
 def build_drfx_entries() -> dict[str, bytes]:
-  """Creates the file tree contained inside PaperCraft_Studio_Pro.drfx."""
+  """Creates the file tree contained inside MTTN_PaperCraft_Studio.drfx."""
   fx_dir = "Edit/Effects/MTTN PaperCraft Studio"
   tr_dir = "Edit/Transitions/MTTN PaperCraft Studio"
 
@@ -235,7 +235,7 @@ def build_and_write_release(
     linux_ofx_path: str | None = None,
     ofx_source_dir: str | None = None,
 ) -> dict[str, str]:
-  """Builds, validates, and writes the full PaperCraft Studio Pro release.
+  """Builds, validates, and writes the full MTTN PaperCraft Studio release.
 
   Args:
     output_dir: Target output directory path.
@@ -265,7 +265,7 @@ def build_and_write_release(
   ofx_entries = build_ofx_package_entries(resolved_ofx_dir, resolved_linux_ofx)
   doc_entries = build_doc_entries(pkg_dir)
 
-  drfx_path = os.path.join(output_dir, "PaperCraft_Studio_Pro.drfx")
+  drfx_path = os.path.join(output_dir, "MTTN_PaperCraft_Studio.drfx")
   with open(drfx_path, "wb") as f:
     f.write(drfx_bytes)
 
@@ -323,7 +323,7 @@ def build_and_write_release(
       f.write(license_bytes)
 
   full_zip_map: dict[str, bytes] = {
-      "PaperCraft_Studio_Pro.drfx": drfx_bytes,
+      "MTTN_PaperCraft_Studio.drfx": drfx_bytes,
   }
   if license_bytes is not None:
     full_zip_map["LICENSE"] = license_bytes
@@ -340,7 +340,7 @@ def build_and_write_release(
 
   full_zip_bytes = _write_deterministic_zip(full_zip_map)
   full_zip_path = os.path.join(
-      output_dir, "PaperCraft_Studio_Pro_Full_Bundle.zip"
+      output_dir, "MTTN_PaperCraft_Studio_Full_Bundle.zip"
   )
   with open(full_zip_path, "wb") as f:
     f.write(full_zip_bytes)
@@ -358,7 +358,7 @@ def build_and_write_release(
 
   repo_zip_bytes = _write_deterministic_zip(repo_zip_map)
   repo_zip_path = os.path.join(
-      output_dir, "PaperCraft_Studio_Pro_Complete_Repo.zip"
+      output_dir, "MTTN_PaperCraft_Studio_Complete_Repo.zip"
   )
   with open(repo_zip_path, "wb") as f:
     f.write(repo_zip_bytes)

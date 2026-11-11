@@ -121,12 +121,26 @@ a.card h3 { color: var(--purple-tint); }
 .steps p { color: var(--muted); font-size: 0.95rem; }
 .steps pre { margin-top: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.95rem; }
 th, td { text-align: left; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-th { color: var(--purple-tint); font-family: var(--font-heading); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+thead { position: sticky; inset-block-start: 0; z-index: 1; }
+thead th { color: var(--purple-tint); background: var(--inset); font-family: var(--font-heading); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+tbody th { color: var(--text); background: var(--card); font-weight: 600; position: sticky; inset-inline-start: 0; }
+tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
 td { color: var(--muted); }
 td strong { color: var(--text); }
-.table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+.table-group-title { margin: 2rem 0 0.8rem; font-size: 1.15rem; color: var(--text); }
+.table-group-title:first-of-type { margin-top: 0; }
+.table-scroll { overflow: auto; max-inline-size: 100%; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); container-type: inline-size; }
+@container (width < 600px) {
+  .table-scroll table, .table-scroll thead, .table-scroll tbody, .table-scroll tr, .table-scroll th, .table-scroll td { display: block; }
+  .table-scroll thead { display: none; }
+  .table-scroll tr { border-bottom: 1px solid var(--border); }
+  .table-scroll tr:last-child { border-bottom: 0; }
+  .table-scroll tbody th { position: sticky; inset-block-start: 0; z-index: 2; background: var(--inset); color: var(--purple-tint); border-bottom: 0; padding-bottom: 0.3rem; }
+  .table-scroll td { padding-top: 0.3rem; border-bottom: 0; }
+  .table-scroll td:nth-child(2)::before { content: var(--label-2) ": "; color: var(--text); font-weight: 600; }
+}
 
 .cta { text-align: center; }
 .cta .actions { justify-content: center; }

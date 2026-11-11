@@ -1,4 +1,4 @@
-"""CLI binary to generate and validate the PaperCraft Studio Pro bundle."""
+"""CLI binary to generate and validate the MTTN PaperCraft Studio bundle."""
 
 import argparse
 from collections.abc import Sequence
@@ -70,7 +70,7 @@ def _run_build(
 
 
 def main(argv: Sequence[str]) -> None:
-  """Builds and writes the PaperCraft Studio Pro deliverables."""
+  """Builds and writes the MTTN PaperCraft Studio deliverables."""
   if len(argv) > 1:
     raise app.UsageError("Unexpected positional command-line arguments.")
   output_dir = _OUTPUT_DIR.value
@@ -84,7 +84,7 @@ def main(argv: Sequence[str]) -> None:
       linux_ofx_path=_LINUX_OFX_PATH.value,
       ofx_source_dir=_OFX_SOURCE_DIR.value,
   )
-  logging.info("Generated PaperCraft Studio Pro bundle: %s", results)
+  logging.info("Generated MTTN PaperCraft Studio bundle: %s", results)
 
 
 def _standalone_main() -> None:
@@ -107,7 +107,7 @@ def _standalone_main() -> None:
       linux_ofx_path=args.linux_ofx_path,
       ofx_source_dir=args.ofx_source_dir,
   )
-  std_logging.info("Generated PaperCraft Studio Pro bundle: %s", results)
+  std_logging.info("Generated MTTN PaperCraft Studio bundle: %s", results)
 
 
 if __name__ == "__main__":

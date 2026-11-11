@@ -229,7 +229,7 @@ def validate_drfx_bytes(drfx_bytes: bytes) -> None:
   """Validates a .drfx archive layout, .setting graphs, thumbnails, and paths.
 
   Args:
-    drfx_bytes: Complete bytes of a PaperCraft_Studio_Pro.drfx ZIP file.
+    drfx_bytes: Complete bytes of an MTTN_PaperCraft_Studio.drfx ZIP file.
 
   Raises:
     ValueError: If any archive path, thumbnail, or .setting validation fails.

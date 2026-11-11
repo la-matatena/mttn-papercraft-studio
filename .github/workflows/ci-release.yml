@@ -57,8 +57,6 @@ jobs:
             --output_dir=dist \
             --readme_path=README.md \
             --linux_ofx_path=PaperCraftStudioPro.ofx
-          cp dist/PaperCraft_Studio_Pro_Full_Bundle.zip dist/MTTN_PaperCraft_Studio_Full_Bundle.zip
-          cp dist/PaperCraft_Studio_Pro.drfx dist/MTTN_PaperCraft_Studio.drfx
 
       - name: Upload workflow build artifacts
         uses: actions/upload-artifact@v4

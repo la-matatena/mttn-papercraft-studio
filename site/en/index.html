@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>MTTN PaperCraft Studio · Stop-motion paper cutouts for DaVinci Resolve</title>
-  <meta name="description" content="Native OpenFX plugin for DaVinci Resolve 20 and 21: stop-motion paper cutouts, torn cardstock borders, paper animations, and 4 real paper Foley sounds. Free and watermark-free.">
+  <meta name="description" content="Native OpenFX plugin for DaVinci Resolve 20 and 21: stop-motion paper cutouts (Paper Cutout FX), the Paper Fold &amp; Unfold transition, torn cardstock borders, and 4 real paper Foley sounds. Free and watermark-free.">
   <meta name="theme-color" content="#15121e">
   <link rel="icon" href="../icon.svg" type="image/svg+xml">
   <link rel="alternate" hreflang="es" href="https://la-matatena.github.io/mttn-papercraft-studio/">
   <link rel="alternate" hreflang="en" href="https://la-matatena.github.io/mttn-papercraft-studio/en/">
   <meta property="og:title" content="MTTN PaperCraft Studio">
-  <meta property="og:description" content="Stop-motion paper cutouts, paper animations, and paper Foley on the DaVinci Resolve Edit page.">
+  <meta property="og:description" content="Stop-motion paper cutouts, the Paper Fold &amp; Unfold transition, and paper Foley on the DaVinci Resolve Edit page.">
   <meta property="og:type" content="website">
   <link rel="stylesheet" href="../styles.css">
 </head>
@@ -106,19 +106,31 @@
       <div class="wrap">
         <div class="section-head">
           <h2>Everything lives in the Inspector</h2>
-          <p>Seven sections group every parameter, from matte extraction to frame-by-frame wobble.</p>
+          <p>Grouped Inspector sections for both the <strong>Paper Cutout FX</strong> effect and the <strong>Paper Fold &amp; Unfold</strong> transition.</p>
         </div>
-        <div class="table-scroll">
-          <table>
+        <h3 id="cutout-controls-heading" class="table-group-title">Paper Cutout FX (effect)</h3>
+        <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cutout-controls-heading">
+          <table style="--label-1: 'Section'; --label-2: 'What it does';">
             <thead><tr><th scope="col">Section</th><th scope="col">What it does</th></tr></thead>
             <tbody>
-              <tr><td><strong>1. Media Source and Placement</strong></td><td>Switches between the timeline clip and the built-in sticker, and frames artwork inside the cutout.</td></tr>
-              <tr><td><strong>2. Green Screen and Matte Cleanup</strong></td><td>Extracts the subject from solid green or blue backdrops with spill suppression.</td></tr>
-              <tr><td><strong>3. Torn Paper Cutout Border</strong></td><td>Expands a procedural ragged cardstock collar around any alpha shape.</td></tr>
-              <tr><td><strong>4. Paper Grain and Fold Creases</strong></td><td>Adds multi-octave fiber grain and ridged fold creases.</td></tr>
-              <tr><td><strong>5. Intro and Outro Paper Animations</strong></td><td>Paper Unfold (3D), Crumple Ball, Paper Airplane Glide, or Flat Cutout Pop entrances and exits.</td></tr>
-              <tr><td><strong>6. 3D Drop Shadow</strong></td><td>Soft directional depth shadows behind the cutout.</td></tr>
-              <tr><td><strong>7. Stop-Motion and Master Transform</strong></td><td>Quantizes motion into stepped holds and adds subtle tactile wobble.</td></tr>
+              <tr><th scope="row">1. Media Source and Placement</th><td>Switches between the timeline clip and the built-in sticker, and frames artwork inside the cutout.</td></tr>
+              <tr><th scope="row">2. Green Screen and Matte Cleanup</th><td>Extracts the subject from solid green or blue backdrops with spill suppression.</td></tr>
+              <tr><th scope="row">3. Torn Paper Cutout Border</th><td>Expands a procedural ragged cardstock collar around any alpha shape.</td></tr>
+              <tr><th scope="row">4. Paper Grain and Fold Creases</th><td>Adds multi-octave fiber grain and ridged fold creases.</td></tr>
+              <tr><th scope="row">5. Intro and Outro Paper Animations</th><td>Paper Unfold (3D) real folds, Crumple Ball, Paper Airplane Glide, or Flat Cutout Pop entrances and exits.</td></tr>
+              <tr><th scope="row">6. 3D Drop Shadow</th><td>Soft directional depth shadows behind the cutout.</td></tr>
+              <tr><th scope="row">7. Stop-Motion and Master Transform</th><td>Quantizes motion into stepped holds and adds subtle tactile wobble.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3 id="fold-controls-heading" class="table-group-title">Paper Fold &amp; Unfold (transition)</h3>
+        <div class="table-scroll" tabindex="0" role="region" aria-labelledby="fold-controls-heading">
+          <table style="--label-1: 'Section'; --label-2: 'What it does';">
+            <thead><tr><th scope="col">Section</th><th scope="col">What it does</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">1. Fold &amp; Unfold</th><td>Picks Auto or manual fold/unfold action, crease layout (Craft Flaps, Map Grid, Accordion, Origami Corners), stage count (2 to 5), direction, 3D depth, and packet slide distance.</td></tr>
+              <tr><th scope="row">2. Paper Look</th><td>Optional torn cardstock collar while folded, paper back color and grain, and fold-line creases that settle away on the final frame.</td></tr>
+              <tr><th scope="row">3. Stop-Motion &amp; Shadow</th><td>Held poses with hand jitter, a drop shadow under the packet, and directional flap lighting and shadows.</td></tr>
             </tbody>
           </table>
         </div>
@@ -132,7 +144,7 @@
           <p>Real-world stereo 48 kHz 24-bit WAV recordings in the public domain (<code>CC0</code> / <code>Public Domain</code>). Import them into a Power Bin to reuse them across projects.</p>
         </div>
         <div class="sfx">
-          <article class="card"><h3>01_Paper_Unfold.wav</h3><p>Crisp folded sheet spread for Paper Unfold (3D) intros and outros.</p></article>
+          <article class="card"><h3>01_Paper_Unfold.wav</h3><p>Crisp folded sheet spread for the Paper Fold &amp; Unfold transition and Paper Unfold (3D) intros and outros.</p></article>
           <article class="card"><h3>02_Paper_Crumple.wav</h3><p>Organic stereo paper-ball crumple for Crumple Ball animations.</p></article>
           <article class="card"><h3>03_Paper_Glide_Flip.wav</h3><p>Fast page flip and air swoosh for Paper Airplane Glide and quick cuts.</p></article>
           <article class="card"><h3>04_Paper_Rip_Tear.wav</h3><p>Clean dry fiber tear for torn cardstock borders and Flat Cutout Pop.</p></article>
@@ -153,9 +165,9 @@
           </li>
           <li>
             <h3>Install on macOS or Linux</h3>
-            <p>On macOS, double-click the installer or run it from Terminal (add <code>--user</code> to install without admin rights):</p>
-            <pre><code>./ofx/<wbr>Install_PaperCraft_<wbr>OpenFX_macOS.command</code></pre>
-            <p>On Linux:</p>
+            <p>On macOS, double-click the installer or run it from Terminal inside the extracted folder (add <code>--user</code> without admin rights; prefix <code>./ofx/</code> if you cloned the repo):</p>
+            <pre><code>./Install_PaperCraft_<wbr>OpenFX_macOS.command</code></pre>
+            <p>On Linux (or to remove on macOS with <code>Uninstall_PaperCraft_OpenFX_macOS.command</code>):</p>
             <pre><code>./install_linux_ofx.sh</code></pre>
           </li>
           <li>

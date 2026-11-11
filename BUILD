@@ -89,6 +89,7 @@ filegroup(
     srcs = [
         "ofx/Info.plist",
         "ofx/Install_PaperCraft_OpenFX_macOS.command",
+        "ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
         "ofx/install_linux_ofx.sh",
         "ofx/openfx_include/LICENSE",
         "ofx/openfx_include/ofxCore.h",
@@ -139,7 +140,6 @@ filegroup(
         "bundle_builder_lib.py",
         "drfx_validator.py",
         "fusion_templates.py",
-        "ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
         "ofx/papercraft_ofx_test.cc",
         "papercraft_pro_test.py",
         "png_renderer.py",
@@ -211,9 +211,9 @@ genrule(
         ":repo_source_files",
     ],
     outs = [
-        "PaperCraft_Studio_Pro.drfx",
-        "PaperCraft_Studio_Pro_Full_Bundle.zip",
-        "PaperCraft_Studio_Pro_Complete_Repo.zip",
+        "MTTN_PaperCraft_Studio.drfx",
+        "MTTN_PaperCraft_Studio_Full_Bundle.zip",
+        "MTTN_PaperCraft_Studio_Complete_Repo.zip",
     ],
     cmd = (
         "TMP_OUT=$$(mktemp -d) && " +
@@ -221,12 +221,12 @@ genrule(
         "--output_dir=$$TMP_OUT " +
         "--readme_path=$(location README.md) " +
         "--linux_ofx_path=$(location :linux_ofx_bundle_binary) && " +
-        "cp $$TMP_OUT/PaperCraft_Studio_Pro.drfx " +
-        "$(location PaperCraft_Studio_Pro.drfx) && " +
-        "cp $$TMP_OUT/PaperCraft_Studio_Pro_Full_Bundle.zip " +
-        "$(location PaperCraft_Studio_Pro_Full_Bundle.zip) && " +
-        "cp $$TMP_OUT/PaperCraft_Studio_Pro_Complete_Repo.zip " +
-        "$(location PaperCraft_Studio_Pro_Complete_Repo.zip) && " +
+        "cp $$TMP_OUT/MTTN_PaperCraft_Studio.drfx " +
+        "$(location MTTN_PaperCraft_Studio.drfx) && " +
+        "cp $$TMP_OUT/MTTN_PaperCraft_Studio_Full_Bundle.zip " +
+        "$(location MTTN_PaperCraft_Studio_Full_Bundle.zip) && " +
+        "cp $$TMP_OUT/MTTN_PaperCraft_Studio_Complete_Repo.zip " +
+        "$(location MTTN_PaperCraft_Studio_Complete_Repo.zip) && " +
         "rm -rf $$TMP_OUT"
     ),
     tools = [":build_papercraft_bundle"],
