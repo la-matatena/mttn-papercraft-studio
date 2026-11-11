@@ -223,7 +223,10 @@ The plugin advertises `kOfxImageEffectRenderFullySafe` and sets
 `parallel_for` lambda (`ParallelRowsFn`) delegates scanline ranges
 `[y_start, y_end)` to the host `OfxMultiThreadSuiteV1` pool (`multiThread`),
 falling back to sequential execution if the host omits the threading suite or
-runs with a single worker.
+runs with a single worker. Workers pull small chunks of rows from a shared
+atomic counter instead of taking one fixed slice each. Rows that cross the
+paper cost far more than empty background rows, so dynamic chunks keep every
+core busy, including the efficiency cores on Apple silicon.
 
 The `HandleDescribe` action explicitly sets `kOfxImageEffectPropSupportsTiles`
 to `0` on both plugins and disables tiling on every clip descriptor. Because
@@ -231,11 +234,6 @@ torn paper collars can expand up to 15% of frame width around off-edge subjects
 and folds and intro and outro animations move geometry across the whole canvas,
 requiring full-frame buffers eliminates visible rectangular tile seam artifacts
 while still honoring host `renderWindow` bounds during rendering.
-
-Fold renders cost far more on rows that cross the paper than on empty rows, so
-they visit rows through `RunScanlinesInterleaved`, a stride permutation that
-gives every worker's slice of row indices a sample of the whole frame. Four
-static threads render a 1080p transition frame about 3.9 times faster than one.
 
 ## Procedural paper rendering pipeline
 
@@ -272,10 +270,14 @@ To generate an organic torn cardstock collar around arbitrary keyed shapes,
 `BuildSubjectSignedDistanceField` constructs a signed Euclidean distance field
 on a dynamically scaled coarse grid bounded by `kMaxSdfDim = 960` columns (and a
 minimum `540`-row target stride before clamping). After evaluating the subject
-matte in parallel across coarse rows, `DistanceTransform2D` executes the
-Felzenszwalb-Huttenlocher parabolic lower-envelope distance transform across
-columns and rows in parallel (`O(W * H)` linear time with zero heap allocations
-inside worker loops thanks to stack-allocated `std::array` scratch arrays):
+matte in parallel across coarse rows, `DistanceTransform2D` computes an exact
+squared Euclidean distance transform in `O(W * H)` linear time. Because the
+input mask is binary, the column pass reduces to the distance to the nearest
+feature cell in each column and runs as two cache-friendly linear sweeps over
+blocks of columns. The row pass runs the Felzenszwalb-Huttenlocher parabolic
+lower-envelope transform with exact 64-bit integer intersections instead of a
+float division per step. Both passes produce bit-identical values to the
+classic float implementation:
 
 $$D(p) = \min_{q} \left( (p - q)^2 + f(q) \right)$$
 

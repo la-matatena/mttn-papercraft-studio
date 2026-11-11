@@ -505,9 +505,10 @@ For smooth 4K timeline playback on CPU OpenFX tracks:
     locking in cutout or transition parameters.
 -   Lower **Playback** > **Timeline Proxy Resolution** to **Half** or
     **Quarter** while timing animation beats.
--   **Paper Fold & Unfold** renders a 1080p frame in about 28 ms on average on
-    four threads of an Apple M4 Pro Mac. Slower machines, such as a 2017 iMac,
-    may need the render cache to play it back in real time.
+-   **Paper Fold & Unfold** renders a 1080p frame in about 11 ms on average on
+    an Apple M4 Pro Mac with 14 cores, or about 27 ms on four threads. Slower
+    machines, such as a 2017 iMac, may need the render cache to play it back in
+    real time.
 
 ## Troubleshoot common issues
 

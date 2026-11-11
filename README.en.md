@@ -148,9 +148,22 @@ The validated `MTTN_PaperCraft_Studio.drfx` archive remains included for Fusion-
 
 ## Improve timeline playback and renders
 
+Version 3.1 renders **Paper Cutout FX** about 30% faster than 3.0.0 and produces exactly the same image, pixel for pixel. Per-frame times measured on an Apple M4 Pro Mac (14 cores):
+
+| Scenario | 3.0.0 | 3.1 |
+| :--- | ---: | ---: |
+| 1080p, cutout at rest | 9.8 ms | 7.0 ms |
+| 1080p, **Crumple Ball** intro | 21.5 ms | 15.1 ms |
+| 1080p, green screen without border | 9.0 ms | 6.8 ms |
+| 2160p (UHD), cutout at rest | 27.1 ms | 19.1 ms |
+
+**Paper Fold & Unfold** takes about 11 ms per 1080p frame on average on the same Mac (15 ms on its heaviest frame) and about 27 ms on only 4 threads.
+
+To keep playback smooth in heavy projects:
+
 - Set **Playback** > **Render Cache** to **Smart** or **User** after finalizing your cutout or transition parameters.
 - Lower **Playback** > **Timeline Proxy Resolution** to **Half** or **Quarter** when timing stop-motion animations.
-- **Paper Fold & Unfold** takes about 28 ms per 1080p frame on average on 4 threads of an Apple M4 Pro Mac (about 14 ms on 14 threads). On modest machines such as a 2017 iMac, use **Render Cache** to play the transition back in real time.
+- On modest machines such as a 2017 iMac, use **Render Cache** to play the transition back in real time.
 
 ## Build & verify from source
 

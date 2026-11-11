@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -141,25 +142,33 @@ struct PluginInstance {
   OfxParamHandle jitter_amount = nullptr;
 };
 
+// Shared state for one multiThread dispatch. Workers pull small chunks of rows
+// from `next_row` so fast threads (and performance cores) keep working while
+// rows covering the paper, which cost much more than empty background rows,
+// are spread across all threads.
 struct ParallelDispatchContext {
-  int y_start = 0;
+  std::atomic<int> next_row{0};
   int y_end = 0;
+  int chunk = 1;
   const std::function<void(int y)>* row_fn = nullptr;
 };
 
-void ParallelThreadWorker(unsigned int thread_index, unsigned int thread_max,
-                          void* custom_arg) {
+void ParallelThreadWorker(unsigned int /*thread_index*/,
+                          unsigned int thread_max, void* custom_arg) {
   auto* ctx = static_cast<ParallelDispatchContext*>(custom_arg);
   if (ctx == nullptr || ctx->row_fn == nullptr || thread_max == 0) {
     return;
   }
-  const int total = ctx->y_end - ctx->y_start;
-  const int begin = ctx->y_start + (total * static_cast<int>(thread_index)) /
-                                       static_cast<int>(thread_max);
-  const int end = ctx->y_start + (total * static_cast<int>(thread_index + 1)) /
-                                     static_cast<int>(thread_max);
-  for (int y = begin; y < end; ++y) {
-    (*ctx->row_fn)(y);
+  while (true) {
+    const int begin =
+        ctx->next_row.fetch_add(ctx->chunk, std::memory_order_relaxed);
+    if (begin >= ctx->y_end) {
+      return;
+    }
+    const int end = std::min(ctx->y_end, begin + ctx->chunk);
+    for (int y = begin; y < end; ++y) {
+      (*ctx->row_fn)(y);
+    }
   }
 }
 
@@ -1322,7 +1331,11 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
       }
       return;
     }
-    ParallelDispatchContext ctx{y_start, y_end, &row_fn};
+    ParallelDispatchContext ctx;
+    ctx.next_row.store(y_start, std::memory_order_relaxed);
+    ctx.y_end = y_end;
+    ctx.chunk = std::max(1, total / static_cast<int>(workers * 8));
+    ctx.row_fn = &row_fn;
     if (s.thread->multiThread(ParallelThreadWorker, workers, &ctx) !=
         kOfxStatOK) {
       for (int y = y_start; y < y_end; ++y) {

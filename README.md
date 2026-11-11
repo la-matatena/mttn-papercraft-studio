@@ -148,9 +148,22 @@ El archivo validado `MTTN_PaperCraft_Studio.drfx` se incluye para quienes prefie
 
 ## Optimizar la fluidez de reproducción y renderizado
 
+La versión 3.1 renderiza **Paper Cutout FX** alrededor de un 30 % más rápido que la 3.0.0 y produce exactamente la misma imagen, píxel por píxel. Tiempos por fotograma medidos en un Mac con Apple M4 Pro (14 núcleos):
+
+| Escenario | 3.0.0 | 3.1 |
+| :--- | ---: | ---: |
+| 1080p, recorte en reposo | 9.8 ms | 7.0 ms |
+| 1080p, entrada **Crumple Ball** | 21.5 ms | 15.1 ms |
+| 1080p, pantalla verde sin borde | 9.0 ms | 6.8 ms |
+| 2160p (UHD), recorte en reposo | 27.1 ms | 19.1 ms |
+
+**Paper Fold & Unfold** tarda de media unos 11 ms por fotograma 1080p en ese mismo Mac (15 ms en el fotograma más pesado) y unos 27 ms con solo 4 hilos.
+
+Para mantener la reproducción fluida en proyectos pesados:
+
 - Cambia **Playback** > **Render Cache** a **Smart** o **User** una vez que hayas ajustado los parámetros del recorte o de la transición.
 - Reduce temporalmente **Playback** > **Timeline Proxy Resolution** a **Half** o **Quarter** al ajustar los tiempos de las animaciones stop-motion.
-- **Paper Fold & Unfold** tarda de media unos 28 ms por fotograma 1080p con 4 hilos de un Mac con Apple M4 Pro (unos 14 ms con 14 hilos). En equipos más modestos, como un iMac 2017, usa **Render Cache** para reproducir la transición en tiempo real.
+- En equipos más modestos, como un iMac 2017, usa **Render Cache** para reproducir la transición en tiempo real.
 
 ## Compilación y verificación desde el código fuente
 

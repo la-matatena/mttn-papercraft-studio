@@ -30,6 +30,13 @@ float Smoothstep(float edge0, float edge1, float x) {
   if (std::abs(edge1 - edge0) < 1e-12f) {
     return x >= edge0 ? 1.0f : 0.0f;
   }
+  // Saturated ends (most pixels far from an edge) skip the division.
+  if (edge0 < edge1 ? x <= edge0 : x >= edge0) {
+    return 0.0f;
+  }
+  if (edge0 < edge1 ? x >= edge1 : x <= edge1) {
+    return 1.0f;
+  }
   const float t = Clamp01((x - edge0) / (edge1 - edge0));
   return t * t * (3.0f - 2.0f * t);
 }
@@ -177,19 +184,38 @@ float Hash2D(int ix, int iy, std::uint32_t seed) {
   return static_cast<float>(h & 0x00FFFFFFu) * (1.0f / 16777215.0f);
 }
 
+// Hashed corner values of one integer value-noise lattice cell.
+struct NoiseCell {
+  int ix = 0;
+  int iy = 0;
+  float n00 = 0.0f;
+  float n10 = 0.0f;
+  float n01 = 0.0f;
+  float n11 = 0.0f;
+};
+
+NoiseCell HashNoiseCell(int ix, int iy, std::uint32_t seed) {
+  return {ix,
+          iy,
+          Hash2D(ix, iy, seed),
+          Hash2D(ix + 1, iy, seed),
+          Hash2D(ix, iy + 1, seed),
+          Hash2D(ix + 1, iy + 1, seed)};
+}
+
+// Quintic-faded bilinear interpolation of `cell` at lattice point (x, y).
+float InterpolateNoiseCell(const NoiseCell& cell, float x, float y) {
+  const float fx = x - static_cast<float>(cell.ix);
+  const float fy = y - static_cast<float>(cell.iy);
+  const float ux = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
+  const float uy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
+  return Lerp(Lerp(cell.n00, cell.n10, ux), Lerp(cell.n01, cell.n11, ux), uy);
+}
+
 float ValueNoise2D(float x, float y, std::uint32_t seed) {
   const int ix = static_cast<int>(std::floor(x));
   const int iy = static_cast<int>(std::floor(y));
-  const float fx = x - static_cast<float>(ix);
-  const float fy = y - static_cast<float>(iy);
-  const float ux = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
-  const float uy = fy * fy * fy * (fy * (fy * 6.0f - 15.0f) + 10.0f);
-
-  const float n00 = Hash2D(ix, iy, seed);
-  const float n10 = Hash2D(ix + 1, iy, seed);
-  const float n01 = Hash2D(ix, iy + 1, seed);
-  const float n11 = Hash2D(ix + 1, iy + 1, seed);
-  return Lerp(Lerp(n00, n10, ux), Lerp(n01, n11, ux), uy);
+  return InterpolateNoiseCell(HashNoiseCell(ix, iy, seed), x, y);
 }
 
 // Signed [-1, 1] fractional Brownian motion for ragged torn paper edges.
@@ -223,19 +249,33 @@ float PaperFiberGrain(float nx, float ny, float scale, std::uint32_t seed) {
 
 // Sharp ridged crease/crumple field returning [0, 1] where 1.0 = sharp fold
 // valley.
+constexpr int kCreaseOctaves = 3;
+
+// Sheared lattice coordinates of crease octave `i` at normalized (nx, ny).
+void CreaseOctaveCoords(float nx, float ny, float freq, int i, float* rx,
+                        float* ry) {
+  *rx = nx * freq + (i == 1 ? 0.37f * ny * freq : 0.0f);
+  *ry = ny * freq + (i == 2 ? -0.41f * nx * freq : 0.0f);
+}
+
+float RidgeOf(float n) {
+  const float ridge = 1.0f - std::abs(2.0f * n - 1.0f);
+  return ridge * ridge * ridge;
+}
+
 float PaperCreaseField(float nx, float ny, float scale, std::uint32_t seed) {
   const float s = std::max(0.25f, scale) * 1.6f;
   float ridge_sum = 0.0f;
   float weight = 0.55f;
   float total_w = 0.0f;
   float freq = s;
-  for (int i = 0; i < 3; ++i) {
-    const float rx = nx * freq + (i == 1 ? 0.37f * ny * freq : 0.0f);
-    const float ry = ny * freq + (i == 2 ? -0.41f * nx * freq : 0.0f);
+  for (int i = 0; i < kCreaseOctaves; ++i) {
+    float rx = 0.0f;
+    float ry = 0.0f;
+    CreaseOctaveCoords(nx, ny, freq, i, &rx, &ry);
     const float n =
         ValueNoise2D(rx, ry, seed + static_cast<std::uint32_t>(i) * 211u);
-    const float ridge = 1.0f - std::abs(2.0f * n - 1.0f);
-    ridge_sum += (ridge * ridge * ridge) * weight;
+    ridge_sum += RidgeOf(n) * weight;
     total_w += weight;
     freq *= 1.95f;
     weight *= 0.55f;
@@ -244,15 +284,48 @@ float PaperCreaseField(float nx, float ny, float scale, std::uint32_t seed) {
 }
 
 // Procedural gradient/displacement vector for 3D crumple ball warp.
+//
+// Evaluates the crease field at (nx, ny), (nx + eps, ny), and (nx, ny + eps)
+// in one pass. The three samples usually fall in the same lattice cell per
+// octave, so cell hashes are reused; results are bit-identical to calling
+// PaperCreaseField three times.
 void CrumpleDisplacement(float nx, float ny, float scale, std::uint32_t seed,
                          float* dx, float* dy, float* crease_shade) {
-  const float eps = 0.008f;
-  const float c0 = PaperCreaseField(nx, ny, scale, seed);
-  const float cx = PaperCreaseField(nx + eps, ny, scale, seed);
-  const float cy = PaperCreaseField(nx, ny + eps, scale, seed);
-  *dx = (cx - c0) / eps;
-  *dy = (cy - c0) / eps;
-  *crease_shade = c0;
+  constexpr float kEps = 0.008f;
+  const float sx[3] = {nx, nx + kEps, nx};
+  const float sy[3] = {ny, ny, ny + kEps};
+  const float s = std::max(0.25f, scale) * 1.6f;
+  float ridge_sum[3] = {0.0f, 0.0f, 0.0f};
+  float weight = 0.55f;
+  float total_w = 0.0f;
+  float freq = s;
+  for (int i = 0; i < kCreaseOctaves; ++i) {
+    const std::uint32_t oct_seed = seed + static_cast<std::uint32_t>(i) * 211u;
+    NoiseCell cell;
+    bool have_cell = false;
+    for (int k = 0; k < 3; ++k) {
+      float rx = 0.0f;
+      float ry = 0.0f;
+      CreaseOctaveCoords(sx[k], sy[k], freq, i, &rx, &ry);
+      const int ix = static_cast<int>(std::floor(rx));
+      const int iy = static_cast<int>(std::floor(ry));
+      if (!have_cell || cell.ix != ix || cell.iy != iy) {
+        cell = HashNoiseCell(ix, iy, oct_seed);
+        have_cell = true;
+      }
+      ridge_sum[k] += RidgeOf(InterpolateNoiseCell(cell, rx, ry)) * weight;
+    }
+    total_w += weight;
+    freq *= 1.95f;
+    weight *= 0.55f;
+  }
+  float c[3];
+  for (int k = 0; k < 3; ++k) {
+    c[k] = total_w > 0.0f ? Clamp01(ridge_sum[k] / total_w) : 0.0f;
+  }
+  *dx = (c[1] - c[0]) / kEps;
+  *dy = (c[2] - c[0]) / kEps;
+  *crease_shade = c[0];
 }
 
 // Vibrant built-in multi-layer paper craft badge/sticker for Generator / empty
@@ -439,41 +512,48 @@ void RunScanlines(int y_begin, int y_end, const ParallelRowsFn& parallel_for,
 constexpr int kMaxSdfDim = 960;
 
 // Felzenszwalb-Huttenlocher linear-time 1D squared Euclidean distance
-// transform.
-void DistanceTransform1D(const float* input, int n, int* v, float* z,
+// transform over integer-valued input.
+//
+// `input[q]` is either an exact squared integer distance (< 2^24, so exactly
+// representable in float) or >= 1e18 for "no feature". Parabola intersections
+// are kept as exact rationals num/den (den > 0) and compared with 64-bit
+// cross-multiplication, which avoids a float division per step. Output values
+// are (q - v)^2 + input[v], exact integers in float, or 1e20 if the line has no
+// feature.
+void DistanceTransform1D(const float* input, int n, int* v,
+                         std::int64_t* z_num, std::int64_t* z_den,
                          float* output) {
   int k = -1;
   for (int q = 0; q < n; ++q) {
     if (input[q] >= 1e18f) {
       continue;
     }
+    const std::int64_t fq =
+        static_cast<std::int64_t>(input[q]) + static_cast<std::int64_t>(q) * q;
     if (k < 0) {
       k = 0;
       v[0] = q;
-      z[0] = -1e30f;
-      z[1] = 1e30f;
       continue;
     }
-    float s = 0.0f;
+    std::int64_t s_num = 0;
+    std::int64_t s_den = 1;
     while (true) {
       const int r = v[k];
-      const float num = (input[q] + static_cast<float>(q) * q) -
-                        (input[r] + static_cast<float>(r) * r);
-      const float den = static_cast<float>(2 * (q - r));
-      s = num / den;
-      if (s <= z[k]) {
+      const std::int64_t fr = static_cast<std::int64_t>(input[r]) +
+                              static_cast<std::int64_t>(r) * r;
+      s_num = fq - fr;
+      s_den = 2 * static_cast<std::int64_t>(q - r);
+      // Pop while s <= z[k]; z[0] is -infinity.
+      if (k > 0 && s_num * z_den[k] <= z_num[k] * s_den) {
         --k;
-        if (k < 0) {
-          break;
-        }
       } else {
         break;
       }
     }
     ++k;
     v[k] = q;
-    z[k] = s;
-    z[k + 1] = 1e30f;
+    z_num[k] = s_num;
+    z_den[k] = s_den;
   }
   if (k < 0) {
     for (int q = 0; q < n; ++q) {
@@ -483,7 +563,9 @@ void DistanceTransform1D(const float* input, int n, int* v, float* z,
   }
   int env = 0;
   for (int q = 0; q < n; ++q) {
-    while (z[env + 1] < static_cast<float>(q)) {
+    // Advance while z[env + 1] < q; z[k + 1] is +infinity.
+    while (env < k && z_num[env + 1] < static_cast<std::int64_t>(q) *
+                                           z_den[env + 1]) {
       ++env;
     }
     const float diff = static_cast<float>(q - v[env]);
@@ -491,33 +573,68 @@ void DistanceTransform1D(const float* input, int n, int* v, float* z,
   }
 }
 
+// Exact 2D squared Euclidean distance transform of a binary grid whose cells
+// are either 0 (feature) or >= 1e18 (background).
+//
+// For binary input the column pass reduces to the squared distance to the
+// nearest feature cell in the same column, so it is computed with two linear
+// sweeps instead of the general lower-envelope algorithm. The values are
+// identical to Felzenszwalb-Huttenlocher's (small squared integers are exact in
+// float, and columns without features stay at 1e20). The row pass then runs
+// the general 1D transform over those squared distances.
 void DistanceTransform2D(int width, int height,
                          const ParallelRowsFn& parallel_for,
                          std::vector<float>* grid) {
   if (width <= 0 || height <= 0 || width > kMaxSdfDim || height > kMaxSdfDim) {
     return;
   }
-  RunScanlines(0, width, parallel_for, [&](int x) {
-    std::array<float, kMaxSdfDim> line_in;
-    std::array<float, kMaxSdfDim> line_out;
-    std::array<int, kMaxSdfDim> v;
-    std::array<float, kMaxSdfDim + 1> z;
+  constexpr int kColBlock = 64;
+  const int num_blocks = (width + kColBlock - 1) / kColBlock;
+  RunScanlines(0, num_blocks, parallel_for, [&](int block) {
+    const int x0 = block * kColBlock;
+    const int bw = std::min(kColBlock, width - x0);
+    // Distance to the nearest feature above (inclusive), or -1 if none yet.
+    std::array<int, kColBlock> last;
+    last.fill(-1);
+    std::vector<int> down(static_cast<std::size_t>(bw) * height);
     for (int y = 0; y < height; ++y) {
-      line_in[y] = (*grid)[static_cast<std::size_t>(y) * width + x];
+      const float* row =
+          grid->data() + static_cast<std::size_t>(y) * width + x0;
+      int* d = down.data() + static_cast<std::size_t>(y) * bw;
+      for (int c = 0; c < bw; ++c) {
+        if (row[c] < 1e18f) {
+          last[c] = y;
+        }
+        d[c] = last[c] < 0 ? -1 : y - last[c];
+      }
     }
-    DistanceTransform1D(line_in.data(), height, v.data(), z.data(),
-                        line_out.data());
-    for (int y = 0; y < height; ++y) {
-      (*grid)[static_cast<std::size_t>(y) * width + x] = line_out[y];
+    std::array<int, kColBlock> next;
+    next.fill(-1);
+    for (int y = height - 1; y >= 0; --y) {
+      float* row = grid->data() + static_cast<std::size_t>(y) * width + x0;
+      const int* d = down.data() + static_cast<std::size_t>(y) * bw;
+      for (int c = 0; c < bw; ++c) {
+        if (d[c] == 0) {
+          next[c] = y;
+        }
+        int best = d[c];
+        if (next[c] >= 0 && (best < 0 || next[c] - y < best)) {
+          best = next[c] - y;
+        }
+        row[c] = best < 0 ? 1e20f
+                          : static_cast<float>(best) * static_cast<float>(best);
+      }
     }
   });
 
   RunScanlines(0, height, parallel_for, [&](int y) {
     std::array<float, kMaxSdfDim> line_out;
     std::array<int, kMaxSdfDim> v;
-    std::array<float, kMaxSdfDim + 1> z;
+    std::array<std::int64_t, kMaxSdfDim + 1> z_num;
+    std::array<std::int64_t, kMaxSdfDim + 1> z_den;
     float* row = grid->data() + static_cast<std::size_t>(y) * width;
-    DistanceTransform1D(row, width, v.data(), z.data(), line_out.data());
+    DistanceTransform1D(row, width, v.data(), z_num.data(), z_den.data(),
+                        line_out.data());
     std::memcpy(row, line_out.data(),
                 static_cast<std::size_t>(width) * sizeof(float));
   });
@@ -531,14 +648,23 @@ struct CoarseSignedDistanceField {
   float origin_y = 0.0f;
   std::vector<float> signed_dist_px;
 
+  // Grid coordinate of pixel offset `d`. Power-of-two steps (the common 1080p
+  // and UHD cases) use an exact reciprocal multiply instead of a division.
+  float ToGrid(float d) const {
+    if ((step & (step - 1)) == 0) {
+      return d * (1.0f / static_cast<float>(step));
+    }
+    return d / static_cast<float>(step);
+  }
+
   float SamplePx(float px, float py) const {
     if (width <= 0 || height <= 0) {
       return 1e6f;
     }
-    const float gx = Clamp((px - origin_x) / static_cast<float>(step) - 0.5f,
-                           0.0f, static_cast<float>(width - 1));
-    const float gy = Clamp((py - origin_y) / static_cast<float>(step) - 0.5f,
-                           0.0f, static_cast<float>(height - 1));
+    const float gx = Clamp(ToGrid(px - origin_x) - 0.5f, 0.0f,
+                           static_cast<float>(width - 1));
+    const float gy = Clamp(ToGrid(py - origin_y) - 0.5f, 0.0f,
+                           static_cast<float>(height - 1));
     const int x0 = static_cast<int>(std::floor(gx));
     const int y0 = static_cast<int>(std::floor(gy));
     const int x1 = std::min(width - 1, x0 + 1);
@@ -787,10 +913,17 @@ void MapOutputToPaperCanonical(const CutoutParams& params,
   const float ay = (rx * anim.a_sin + ry * anim.a_cos) * inv_pop;
 
   // Apply inverse 3D perspective hinge tilt across horizontal/vertical axes.
-  const float w_persp = std::max(0.15f, 1.0f + anim.perspective_k * (ax / cw) +
-                                            anim.perspective_ky * (ay / ch));
-  float px = ax / (anim.tilt_y_cos * w_persp);
-  float py = ay / w_persp;
+  // Without tilt or perspective this divides by exactly 1, so skip it.
+  float px = ax;
+  float py = ay;
+  if (anim.perspective_k != 0.0f || anim.perspective_ky != 0.0f ||
+      anim.tilt_y_cos != 1.0f) {
+    const float w_persp =
+        std::max(0.15f, 1.0f + anim.perspective_k * (ax / cw) +
+                            anim.perspective_ky * (ay / ch));
+    px = ax / (anim.tilt_y_cos * w_persp);
+    py = ay / w_persp;
+  }
 
   // Apply radial crumple displacement during crumple/unfold intro/outro.
   float crease_val = 0.0f;
@@ -824,24 +957,6 @@ void MapOutputToPaperCanonical(const CutoutParams& params,
 // ---------------------------------------------------------------------------
 
 float Square(float v) { return v * v; }
-
-// Runs rows in a strided order so each worker's contiguous slice of indices
-// samples the whole frame: fold renders cost far more on rows that cross the
-// paper, which static per-thread slices would leave on a few threads.
-void RunScanlinesInterleaved(int y_begin, int y_end,
-                             const ParallelRowsFn& parallel_for,
-                             const std::function<void(int y)>& row_fn) {
-  const int rows = y_end - y_begin;
-  constexpr int kStride = 7919;  // Prime, coprime with any rows < kStride.
-  if (rows <= 1 || rows % kStride == 0) {
-    RunScanlines(y_begin, y_end, parallel_for, row_fn);
-    return;
-  }
-  RunScanlines(0, rows, parallel_for, [&](int i) {
-    row_fn(y_begin + static_cast<int>(
-                         (static_cast<std::int64_t>(i) * kStride) % rows));
-  });
-}
 
 RgbaColor ScalePremult(const RgbaColor& c, float s) {
   return {c.r * s, c.g * s, c.b * s, c.a * s};
@@ -1943,7 +2058,7 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
     };
 
     const float lift_k = 1.0f + 2.5f * layout.lift;
-    RunScanlinesInterleaved(y_begin, y_end, parallel_for, [&](int y) {
+    RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
       const float py_out = static_cast<float>(y) + 0.5f;
       for (int x = x_begin; x < x_end; ++x) {
         const float px_out = static_cast<float>(x) + 0.5f;
@@ -2000,24 +2115,27 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
       const float edge_sdf = base_edge_dist - tear_amp_px * tear_n;
       const float sheet_alpha = Smoothstep(1.2f, -1.2f, edge_sdf);
 
-      // Evaluate soft 3D drop shadow behind paper cutout without re-evaluating
-      // multi-octave crumple displacement.
-      float shadow_alpha = 0.0f;
-      if (params.shadow_opacity > 1e-4f) {
-        float sux = 0.0f;
-        float suy = 0.0f;
-        float unused_crease = 0.0f;
-        MapOutputToPaperCanonical(params, anim, cw, ch, origin_x, origin_y,
-                                  px_out - sh_dx_px, py_out - sh_dy_px, false,
-                                  &sux, &suy, &unused_crease);
-        const float s_dist_px = sdf.SamplePx(sux, suy) - border_px;
-        shadow_alpha =
-            params.shadow_opacity * Smoothstep(sh_soft_px, -2.0f, s_dist_px);
-      }
+      // Soft 3D drop shadow behind the paper cutout, evaluated without the
+      // multi-octave crumple displacement. Only needed where the cutout is not
+      // fully opaque.
+      auto shadow_at_pixel = [&]() -> RgbaColor {
+        float shadow_alpha = 0.0f;
+        if (params.shadow_opacity > 1e-4f) {
+          float sux = 0.0f;
+          float suy = 0.0f;
+          float unused_crease = 0.0f;
+          MapOutputToPaperCanonical(params, anim, cw, ch, origin_x, origin_y,
+                                    px_out - sh_dx_px, py_out - sh_dy_px,
+                                    false, &sux, &suy, &unused_crease);
+          const float s_dist_px = sdf.SamplePx(sux, suy) - border_px;
+          shadow_alpha =
+              params.shadow_opacity * Smoothstep(sh_soft_px, -2.0f, s_dist_px);
+        }
+        return {0.0f, 0.0f, 0.0f, shadow_alpha};
+      };
 
-      const RgbaColor shadow_rgba = {0.0f, 0.0f, 0.0f, shadow_alpha};
       if (sheet_alpha <= 1e-4f) {
-        WritePixel(output, x, y, shadow_rgba);
+        WritePixel(output, x, y, shadow_at_pixel());
         continue;
       }
 
@@ -2069,6 +2187,9 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
               : RgbaColor{subject.r * sheet_alpha, subject.g * sheet_alpha,
                           subject.b * sheet_alpha, subject.a * sheet_alpha};
 
+      // Over() ignores the background once fg.a >= 1, so skip the shadow.
+      const RgbaColor shadow_rgba =
+          cutout_fg.a >= 1.0f ? RgbaColor{} : shadow_at_pixel();
       WritePixel(output, x, y, CompositeOver(cutout_fg, shadow_rgba));
     }
   });
@@ -2330,7 +2451,7 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   const BoundsBox paper_box = BoundsOfPieces(paper_cover, 3.0f, to_canvas);
   const BoundsBox shadow_box = BoundsOfPieces(coverage_cover, 3.0f, to_shadow);
 
-  RunScanlinesInterleaved(y_begin, y_end, parallel_for, [&](int y) {
+  RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
     const float py_out = static_cast<float>(y) + 0.5f;
     const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
     const bool row_shadow = sh_opacity > 1e-4f && py_out >= shadow_box.y1 &&
