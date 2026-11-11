@@ -2,7 +2,7 @@
 
 This guide helps video editors install PaperCraft Studio Pro 3.0.0, apply the
 **Paper Cutout FX** torn paper filter on the DaVinci Resolve 20 and 21 Edit
-pages, tune Inspector controls, and mix the 24 included Paper SFX audio clips.
+pages, tune Inspector controls, and mix the four included Paper SFX audio clips.
 
 > [!IMPORTANT] Version 3.0 removes the **Paper Cutout FX** generator and the
 > **Paper Unfold Transition**, **Paper Crumple Transition**, and **Paper Rip
@@ -377,45 +377,18 @@ Inspector for **Paper Cutout FX**.
 
 ## Mix Foley audio with the Paper SFX library
 
-All 24 WAV files in `Paper_SFX/` are 48 kHz, 24-bit stereo clips trimmed with
-zero-crossing fades for click-free timeline layering. Drag the `Paper_SFX/`
-folder into a DaVinci Resolve **Power Bin** to keep every clip accessible across
-projects.
+All four WAV files in `Paper_SFX/` are real microphone recordings standardized to
+48 kHz, 24-bit stereo clips with smooth zero-crossing fades and public-domain
+licensing (`CC0 1.0` and `Public Domain`; see
+[audio credits](../Paper_SFX/CREDITS.md)). Drag the `Paper_SFX/` folder into a
+DaVinci Resolve **Power Bin** to keep every clip accessible across projects.
 
-| Subfolder                  | Included WAV files                       | Matching     |
-:                            :                                          : visual       :
-:                            :                                          : preset       :
-| :------------------------- | :--------------------------------------- | :----------- |
-| `01_Page_Turns/`           | `Page_Turn_Crisp_Book_01.wav`,           | **Paper      |
-:                            : `Page_Turn_Heavy_Cardstock_02.wav`,      : Unfold       :
-:                            : `Page_Turn_Newspaper_Broadsheet_03.wav`, : (3D)**       :
-:                            : `Page_Turn_Quick_Notebook_Flip_04.wav`   : intro and    :
-:                            :                                          : outro        :
-| `02_Paper_Hits_Impacts/`   | `Paper_Hit_Table_Slap_01.wav`,           | **Flat       |
-:                            : `Paper_Hit_Cardboard_Drop_02.wav`,       : Cutout Pop** :
-:                            : `Paper_Hit_Sticker_Snap_03.wav`,         : landing      :
-:                            : `Paper_Hit_Stack_Thud_04.wav`            : frames       :
-| `03_Crumples_Uncrumples/`  | `Paper_Crumple_Tight_Ball_01.wav`,       | **Crumple    |
-:                            : `Paper_Crumple_Newspaper_02.wav`,        : Ball**       :
-:                            : `Paper_Uncrumple_Smooth_Reveal_03.wav`,  : intro and    :
-:                            : `Paper_Uncrumple_Quick_Open_04.wav`      : outro        :
-| `04_Rips_Tears/`           | `Paper_Rip_Fast_Tear_01.wav`,            | Hard cuts    |
-:                            : `Paper_Rip_Slow_Fiber_02.wav`,           : and torn     :
-:                            : `Paper_Rip_Thick_Kraft_03.wav`,          : border       :
-:                            : `Paper_Rip_Short_Snip_04.wav`            : reveals      :
-| `05_Little_Bits_Rustles/`  | `Paper_Bits_Confetti_Scatter_01.wav`,    | Continuous   |
-:                            : `Paper_Rustle_StopMotion_Jiggle_02.wav`, : **Paper      :
-:                            : `Paper_Slide_Desk_Scrape_03.wav`,        : Cutout FX**  :
-:                            : `Paper_Crease_Finger_Fold_04.wav`        : jitter and   :
-:                            :                                          : **Paper      :
-:                            :                                          : Airplane     :
-:                            :                                          : Glide**      :
-| `06_Designed_Transitions/` | `Paper_Designed_Whoosh_Unfold_01.wav`,   | Whoosh and   |
-:                            : `Paper_Designed_Airplane_Swoosh_02.wav`, : slam         :
-:                            : `Paper_Designed_Crumple_Slam_03.wav`,    : accents on   :
-:                            : `Paper_Designed_StopMotion_Pop_04.wav`   : intros,      :
-:                            :                                          : outros, and  :
-:                            :                                          : hard cuts    :
+| WAV file in `Paper_SFX/`  | Tactile paper gesture                    | Matching visual preset                      |
+| :------------------------ | :--------------------------------------- | :------------------------------------------ |
+| `01_Paper_Unfold.wav`     | Crisp folded sheet spread and settle     | **Paper Unfold (3D)** intro and outro       |
+| `02_Paper_Crumple.wav`    | Organic stereo paper-ball crumple        | **Crumple Ball** intro and outro            |
+| `03_Paper_Glide_Flip.wav` | Fast page flip and air swoosh            | **Paper Airplane Glide** and quick cuts     |
+| `04_Paper_Rip_Tear.wav`   | Clean dry fiber tear                     | Torn cardstock border and **Flat Cutout Pop** |
 
 ## Improve timeline playback performance
 
@@ -457,6 +430,6 @@ For smooth 4K timeline playback on CPU OpenFX tracks:
 ## What's next
 
 -   Read the [design document](design_doc.md) to explore the signed distance
-    field, perspective warping, and Foley synthesis algorithms.
+    field, perspective warping, and curated Foley audio pipeline.
 -   Read the [developer and build guide](developer_guide.md) to compile from
     source or extend the codebase.

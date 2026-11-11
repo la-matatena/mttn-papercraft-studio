@@ -10,12 +10,10 @@ try:
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import drfx_validator
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import fusion_templates
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import png_renderer
-  from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import sfx_synthesizer
 except ImportError:
   import drfx_validator  # type: ignore[no-redef]
   import fusion_templates  # type: ignore[no-redef]
   import png_renderer  # type: ignore[no-redef]
-  import sfx_synthesizer  # type: ignore[no-redef]
 
 _ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
 
@@ -49,6 +47,14 @@ _DOC_RELPATHS = (
     "docs/user_guide.md",
 )
 
+_PAPER_SFX_RELPATHS = (
+    "Paper_SFX/01_Paper_Unfold.wav",
+    "Paper_SFX/02_Paper_Crumple.wav",
+    "Paper_SFX/03_Paper_Glide_Flip.wav",
+    "Paper_SFX/04_Paper_Rip_Tear.wav",
+    "Paper_SFX/CREDITS.md",
+)
+
 _REPO_ROOT_FILES = (
     "BUILD",
     "LICENSE",
@@ -60,7 +66,6 @@ _REPO_ROOT_FILES = (
     "fusion_templates.py",
     "papercraft_pro_test.py",
     "png_renderer.py",
-    "sfx_synthesizer.py",
 )
 
 _REPO_EXTRA_OFX_FILES = (
@@ -177,6 +182,17 @@ def build_doc_entries(pkg_dir: str) -> dict[str, bytes]:
   return entries
 
 
+def build_sfx_entries(pkg_dir: str) -> dict[str, bytes]:
+  """Reads the 4 real Foley WAV clips and credits file under `Paper_SFX/`."""
+  entries: dict[str, bytes] = {}
+  for rel in _PAPER_SFX_RELPATHS:
+    src_path = os.path.join(pkg_dir, rel)
+    if not os.path.isfile(src_path):
+      raise FileNotFoundError(f"Paper SFX file not found at {src_path}")
+    entries[rel] = _read_bytes(src_path)
+  return entries
+
+
 def build_repo_source_entries(
     pkg_dir: str,
     ofx_source_dir: str,
@@ -194,6 +210,7 @@ def build_repo_source_entries(
     entries[rel] = _read_bytes(src_path)
 
   entries.update(build_doc_entries(pkg_dir))
+  entries.update(build_sfx_entries(pkg_dir))
 
   for rel in _OFX_SOURCE_RELPATHS + _REPO_EXTRA_OFX_FILES:
     src_path = os.path.join(ofx_source_dir, rel)
@@ -232,9 +249,10 @@ def build_and_write_release(
   drfx_bytes = _write_deterministic_zip(drfx_entries)
   drfx_validator.validate_drfx_bytes(drfx_bytes)
 
-  sfx_entries = sfx_synthesizer.synthesize_all_paper_sfx()
-  for wav_bytes in sfx_entries.values():
-    drfx_validator.validate_wav_bytes(wav_bytes)
+  sfx_entries = build_sfx_entries(pkg_dir)
+  for rel_path, payload in sfx_entries.items():
+    if rel_path.endswith(".wav"):
+      drfx_validator.validate_wav_bytes(payload)
 
   ofx_entries = build_ofx_package_entries(resolved_ofx_dir, resolved_linux_ofx)
   doc_entries = build_doc_entries(pkg_dir)

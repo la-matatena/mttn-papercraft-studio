@@ -33,13 +33,11 @@ try:
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import drfx_validator
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import fusion_templates
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import png_renderer
-  from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import sfx_synthesizer
 except ImportError:
   import bundle_builder_lib  # type: ignore[no-redef]
   import drfx_validator  # type: ignore[no-redef]
   import fusion_templates  # type: ignore[no-redef]
   import png_renderer  # type: ignore[no-redef]
-  import sfx_synthesizer  # type: ignore[no-redef]
 
 
 class PapercraftProTest(absltest.TestCase):
@@ -88,24 +86,23 @@ class PapercraftProTest(absltest.TestCase):
     with self.assertRaisesRegex(ValueError, "Illegal C-style"):
       drfx_validator.validate_setting_syntax_and_graph(bad_op, "effect")
 
-  def test_synthesize_all_24_paper_sfx_wavs(self):
-    sfx_map = sfx_synthesizer.synthesize_all_paper_sfx()
-    self.assertLen(sfx_map, 24)
-    categories = {path.split("/")[1] for path in sfx_map}
+  def test_bundled_paper_sfx_wavs(self):
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    sfx_map = bundle_builder_lib.build_sfx_entries(pkg_dir)
+    wav_paths = {p for p in sfx_map if p.endswith(".wav")}
     self.assertEqual(
-        categories,
+        wav_paths,
         {
-            "01_Page_Turns",
-            "02_Paper_Hits_Impacts",
-            "03_Crumples_Uncrumples",
-            "04_Rips_Tears",
-            "05_Little_Bits_Rustles",
-            "06_Designed_Transitions",
+            "Paper_SFX/01_Paper_Unfold.wav",
+            "Paper_SFX/02_Paper_Crumple.wav",
+            "Paper_SFX/03_Paper_Glide_Flip.wav",
+            "Paper_SFX/04_Paper_Rip_Tear.wav",
         },
     )
-    for rel_path, wav_bytes in sfx_map.items():
+    self.assertIn("Paper_SFX/CREDITS.md", sfx_map)
+    for rel_path in sorted(wav_paths):
       with self.subTest(wav=rel_path):
-        drfx_validator.validate_wav_bytes(wav_bytes)
+        drfx_validator.validate_wav_bytes(sfx_map[rel_path])
 
   def test_installers_syntax_and_dry_run(self):
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
@@ -167,8 +164,11 @@ class PapercraftProTest(absltest.TestCase):
       )
       self.assertIn("OpenFX_Source/papercraft_ofx_plugin.cc", names)
       self.assertIn("OpenFX_Source/openfx_include/ofxImageEffect.h", names)
-      wav_members = [n for n in names if n.startswith("Paper_SFX/")]
-      self.assertLen(wav_members, 24)
+      wav_members = [
+          n for n in names if n.startswith("Paper_SFX/") and n.endswith(".wav")
+      ]
+      self.assertLen(wav_members, 4)
+      self.assertIn("Paper_SFX/CREDITS.md", names)
 
       for exe_member in (
           "Install_PaperCraft_OpenFX_macOS.command",
@@ -193,7 +193,7 @@ class PapercraftProTest(absltest.TestCase):
           "papercraft_pro/fusion_templates.py",
           "papercraft_pro/papercraft_pro_test.py",
           "papercraft_pro/png_renderer.py",
-          "papercraft_pro/sfx_synthesizer.py",
+          "papercraft_pro/Paper_SFX/CREDITS.md",
           "papercraft_pro/ofx/Info.plist",
           "papercraft_pro/ofx/openfx_sym.lds",
           "papercraft_pro/ofx/papercraft_kernel.h",
@@ -211,9 +211,13 @@ class PapercraftProTest(absltest.TestCase):
         self.assertNotEmpty(rzf.read(member), msg=f"Empty entry {member}")
 
       release_wavs = [
-          n for n in rnames if n.startswith("papercraft_pro/release/Paper_SFX/")
+          n
+          for n in rnames
+          if n.startswith("papercraft_pro/release/Paper_SFX/")
+          and n.endswith(".wav")
       ]
-      self.assertLen(release_wavs, 24)
+      self.assertLen(release_wavs, 4)
+      self.assertIn("papercraft_pro/release/Paper_SFX/CREDITS.md", rnames)
 
       for exe_member in (
           "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
@@ -228,6 +232,7 @@ class PapercraftProTest(absltest.TestCase):
       for md_entry in (
           "papercraft_pro/README.md",
           "papercraft_pro/README.en.md",
+          "papercraft_pro/Paper_SFX/CREDITS.md",
           "papercraft_pro/docs/design_doc.md",
           "papercraft_pro/docs/user_guide.md",
           "papercraft_pro/docs/developer_guide.md",

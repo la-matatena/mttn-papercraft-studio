@@ -21,7 +21,7 @@
 | Desinstalador OpenFX para macOS | `Uninstall_PaperCraft_OpenFX_macOS.command` | Quita el plugin OpenFX (sistema o `--user`) y las plantillas `.drfx` de DaVinci Resolve |
 | Instalador OpenFX para Linux | `install_linux_ofx.sh` | Instala `PaperCraftStudioPro.ofx.bundle` en la carpeta OpenFX de Linux |
 | Código fuente OpenFX portátil | `OpenFX_Source/` | Código C++17 independiente y cabeceras de OpenFX 1.4 para compilación en macOS y Linux |
-| Librería de sonidos Paper SFX | `Paper_SFX/` (24 archivos WAV estéreo) | Sonidos Foley a 48 kHz y 24 bits estéreo organizados en 6 categorías táctiles de papel |
+| Librería de sonidos Paper SFX | `Paper_SFX/` (4 archivos WAV estéreo) | Grabaciones reales de papel Foley a 48 kHz y 24 bits estéreo bajo dominio público (`CC0` / `Public Domain`) |
 | Documentación y arquitectura | `docs/` (`user_guide.md`, `design_doc.md`, `developer_guide.md`) | Guía de usuario, guía de compilación para desarrolladores y arquitectura técnica detallada |
 | Plantillas `.drfx` clásicas | `MTTN_PaperCraft_Studio.drfx` / `Templates_Unpacked/` | Plantilla Fusion `MacroOperator` validada de **Paper Cutout FX** con miniatura de identidad púrpura La Matatena |
 
@@ -30,7 +30,7 @@
 Consulta las guías completas para la instalación, flujos de trabajo en la página Edit y diseño de ingeniería:
 
 - [Guía de usuario](docs/user_guide.md): Pasos de instalación, flujo de trabajo de Paper Cutout FX en la página Edit, explicación de parámetros del Inspector, tabla de mezcla para Paper SFX y resolución de problemas.
-- [Documento de diseño de ingeniería](docs/design_doc.md): Visión general de la arquitectura, integración del host OpenFX 1.4, campo de distancia con signo (SDF) en tiempo lineal, síntesis de audio Foley y decisiones de ingeniería.
+- [Documento de diseño de ingeniería](docs/design_doc.md): Visión general de la arquitectura, integración del host OpenFX 1.4, campo de distancia con signo (SDF) en tiempo lineal, librería de audio Foley real y decisiones de ingeniería.
 - [Guía para desarrolladores y compilación](docs/developer_guide.md): Estructura del repositorio, compilación independiente en Linux y macOS y suites de verificación.
 
 ## Instalación del plugin nativo OpenFX para la página Edit
@@ -107,14 +107,12 @@ El paquete OpenFX registra un solo efecto, **Paper Cutout FX**, dentro de la cat
 
 ## Librería de sonidos Paper SFX
 
-Importa la carpeta `Paper_SFX/` dentro de un Power Bin de DaVinci Resolve para tener disponibles los 24 archivos WAV a 48 kHz y 24 bits estéreo en todos tus proyectos:
+Importa la carpeta `Paper_SFX/` dentro de un Power Bin de DaVinci Resolve para reutilizar en todos tus proyectos las 4 grabaciones reales de papel Foley a 48 kHz y 24 bits estéreo (consulta autores y licencias en [`Paper_SFX/CREDITS.md`](Paper_SFX/CREDITS.md)):
 
-- `01_Page_Turns/`: Cuatro giros nítidos de hojas de libro, cartulina, periódico y cambio rápido.
-- `02_Paper_Hits_Impacts/`: Cuatro golpes secos sobre mesa, caídas de cartón, pegado de stickers y apoyos de pilas de papel.
-- `03_Crumples_Uncrumples/`: Cuatro arrugados apretados, crujidos de periódico y desarrugados suaves o rápidos.
-- `04_Rips_Tears/`: Cuatro rasgados rápidos, desgarros lentos de fibra, roturas de kraft grueso y cortes con tijeras.
-- `05_Little_Bits_Rustles/`: Cuatro dispersiones de confeti, balanceos de stop-motion, roces de mesa y pliegues manuales.
-- `06_Designed_Transitions/`: Cuatro barridos de papel en capas, planeos de avión, impactos de arrugado y apariciones pop stop-motion.
+- `01_Paper_Unfold.wav`: Despliegue de pliego de papel doblado para entradas y salidas **Paper Unfold (3D)**.
+- `02_Paper_Crumple.wav`: Arrugado orgánico de hoja en bola para **Crumple Ball**.
+- `03_Paper_Glide_Flip.wav`: Barrido y giro rápido de hoja para **Paper Airplane Glide** y cambios de página.
+- `04_Paper_Rip_Tear.wav`: Rasgado seco de fibra para bordes de cartulina rasgada y **Flat Cutout Pop**.
 
 ## Plantillas clásicas `.drfx` opcionales
 
@@ -139,7 +137,7 @@ Compila el paquete OpenFX Universal para macOS en un directorio temporal sin mod
 ./ofx/Install_PaperCraft_OpenFX_macOS.command --build-only ./dist
 ```
 
-Construye el paquete completo de lanzamiento (`.drfx`, 24 WAVs de Foley, instaladores, documentación y código fuente):
+Construye el paquete completo de lanzamiento (`.drfx`, 4 WAVs de Foley real, instaladores, documentación y código fuente):
 
 ```bash
 python3 -B build_papercraft_bundle.py \
@@ -150,4 +148,4 @@ python3 -B build_papercraft_bundle.py \
 
 ## Licencia
 
-Publicado bajo la [Licencia MIT](LICENSE) — Copyright (c) 2026 [La Matatena](https://la-matatena.com). Las cabeceras C de OpenFX 1.4 incluidas mantienen su licencia permisiva en [`ofx/openfx_include/LICENSE`](ofx/openfx_include/LICENSE).
+Publicado bajo la [Licencia MIT](LICENSE) — Copyright (c) 2026 [La Matatena](https://la-matatena.com). Las cabeceras C de OpenFX 1.4 incluidas mantienen su licencia permisiva en [`ofx/openfx_include/LICENSE`](ofx/openfx_include/LICENSE), y las grabaciones Foley de `Paper_SFX/` están en dominio público (`CC0 1.0` / `Public Domain`) según se detalla en [`Paper_SFX/CREDITS.md`](Paper_SFX/CREDITS.md).

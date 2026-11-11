@@ -21,7 +21,7 @@
 | macOS OpenFX uninstaller | `Uninstall_PaperCraft_OpenFX_macOS.command` | Removes the OpenFX plugin (system or `--user`) and the `.drfx` templates from DaVinci Resolve |
 | Linux OpenFX installer | `install_linux_ofx.sh` | Installs `PaperCraftStudioPro.ofx.bundle` into the Linux OpenFX directory |
 | Portable OpenFX source | `OpenFX_Source/` | Standalone C++17 source files and OpenFX 1.4 headers for macOS and Linux builds |
-| Paper SFX library | `Paper_SFX/` (24 stereo WAV files) | 48 kHz, 24-bit stereo Foley sounds organized across six tactile paper categories |
+| Paper SFX library | `Paper_SFX/` (4 stereo WAV files) | Real recorded 48 kHz, 24-bit stereo paper Foley clips released into the public domain (`CC0` / `Public Domain`) |
 | Docs & design | `docs/` (`user_guide.md`, `design_doc.md`, `developer_guide.md`) | End-user guide, developer build guide, and technical design architecture |
 | Legacy `.drfx` templates | `MTTN_PaperCraft_Studio.drfx` / `Templates_Unpacked/` | Validated Fusion `MacroOperator` template for **Paper Cutout FX** with a La Matatena purple thumbnail |
 
@@ -30,7 +30,7 @@
 Read the full documentation set for installation steps, Edit-page workflows, and engineering architecture:
 
 - [User guide](docs/user_guide.md): Installation steps, the Edit-page Paper Cutout FX workflow, all Inspector parameters, Paper SFX mixing table, and troubleshooting.
-- [Design document](docs/design_doc.md): Architecture overview, OpenFX 1.4 host integration, linear-time signed distance field pipeline, Foley audio synthesis, and engineering trade-offs.
+- [Design document](docs/design_doc.md): Architecture overview, OpenFX 1.4 host integration, linear-time signed distance field pipeline, curated real Foley audio assets, and engineering trade-offs.
 - [Developer and build guide](docs/developer_guide.md): Repository layout, standalone Linux and macOS compilation, and verification suites.
 
 ## Install the native Edit-page OpenFX plugin
@@ -107,14 +107,12 @@ The OpenFX bundle registers a single effect, **Paper Cutout FX**, in the **MTTN 
 
 ## Paper SFX starter library
 
-Import the `Paper_SFX/` directory into a DaVinci Resolve Power Bin to reuse all 24 stereo 48 kHz 24-bit WAV files across projects:
+Import the `Paper_SFX/` directory into a DaVinci Resolve Power Bin to reuse the four real recorded 48 kHz, 24-bit stereo WAV files across projects (see authors and public-domain licenses in [`Paper_SFX/CREDITS.md`](Paper_SFX/CREDITS.md)):
 
-- `01_Page_Turns/`: Four crisp book, cardstock, broadsheet, and quick flip turns.
-- `02_Paper_Hits_Impacts/`: Four table slaps, cardboard drops, sticker snaps, and stack thuds.
-- `03_Crumples_Uncrumples/`: Four tight crumple balls, newspaper crinkles, and smooth or quick uncrumples.
-- `04_Rips_Tears/`: Four fast tears, slow fiber rips, thick kraft rips, and short snips.
-- `05_Little_Bits_Rustles/`: Four confetti scatters, stop-motion jiggles, desk scrapes, and finger folds.
-- `06_Designed_Transitions/`: Four layered paper whooshes, airplane swooshes, crumple slams, and stop-motion pops.
+- `01_Paper_Unfold.wav`: Crisp folded sheet unfold for **Paper Unfold (3D)** entrances and exits.
+- `02_Paper_Crumple.wav`: Organic stereo paper-ball crumple for **Crumple Ball** animations.
+- `03_Paper_Glide_Flip.wav`: Fast page flip and air swoosh for **Paper Airplane Glide** moves.
+- `04_Paper_Rip_Tear.wav`: Clean dry fiber tear for torn cardstock borders and **Flat Cutout Pop** accents.
 
 ## Optional legacy `.drfx` templates
 
@@ -139,7 +137,7 @@ Build the macOS Universal OpenFX bundle into a staging directory without touchin
 ./ofx/Install_PaperCraft_OpenFX_macOS.command --build-only ./dist
 ```
 
-Assemble the full release bundle (`.drfx`, 24 Foley WAVs, installers, docs, and source archive):
+Assemble the full release bundle (`.drfx`, four real Foley WAVs, installers, docs, and source archive):
 
 ```bash
 python3 -B build_papercraft_bundle.py \
@@ -150,4 +148,4 @@ python3 -B build_papercraft_bundle.py \
 
 ## License
 
-Released under the [MIT License](LICENSE) — Copyright (c) 2026 [La Matatena](https://la-matatena.com). Bundled OpenFX 1.4 C headers retain their permissive license in [`ofx/openfx_include/LICENSE`](ofx/openfx_include/LICENSE).
+Released under the [MIT License](LICENSE) — Copyright (c) 2026 [La Matatena](https://la-matatena.com). Bundled OpenFX 1.4 C headers retain their permissive license in [`ofx/openfx_include/LICENSE`](ofx/openfx_include/LICENSE), and the real Foley recordings in `Paper_SFX/` are dedicated to the public domain (`CC0 1.0` / `Public Domain`) as credited in [`Paper_SFX/CREDITS.md`](Paper_SFX/CREDITS.md).

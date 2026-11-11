@@ -119,19 +119,32 @@ filegroup(
 )
 
 filegroup(
+    name = "paper_sfx_files",
+    srcs = [
+        "Paper_SFX/01_Paper_Unfold.wav",
+        "Paper_SFX/02_Paper_Crumple.wav",
+        "Paper_SFX/03_Paper_Glide_Flip.wav",
+        "Paper_SFX/04_Paper_Rip_Tear.wav",
+        "Paper_SFX/CREDITS.md",
+    ],
+)
+
+filegroup(
     name = "repo_source_files",
     srcs = [
         "BUILD",
+        "LICENSE",
         "build_papercraft_bundle.py",
         "bundle_builder_lib.py",
         "drfx_validator.py",
         "fusion_templates.py",
+        "ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
         "ofx/papercraft_ofx_test.cc",
         "papercraft_pro_test.py",
         "png_renderer.py",
-        "sfx_synthesizer.py",
         ":docs_files",
         ":ofx_package_sources",
+        ":paper_sfx_files",
     ],
 )
 
@@ -143,11 +156,6 @@ pytype_strict_library(
 pytype_strict_library(
     name = "fusion_templates",
     srcs = ["fusion_templates.py"],
-)
-
-pytype_strict_library(
-    name = "sfx_synthesizer",
-    srcs = ["sfx_synthesizer.py"],
 )
 
 pytype_strict_library(
@@ -167,7 +175,6 @@ pytype_strict_library(
         ":drfx_validator",
         ":fusion_templates",
         ":png_renderer",
-        ":sfx_synthesizer",
     ],
 )
 
@@ -185,12 +192,12 @@ pytype_strict_binary(
 pytype_strict_contrib_test(
     name = "papercraft_pro_test",
     srcs = ["papercraft_pro_test.py"],
+    data = [":paper_sfx_files"],
     deps = [
         ":bundle_builder_lib",
         ":drfx_validator",
         ":fusion_templates",
         ":png_renderer",
-        ":sfx_synthesizer",
         "//third_party/py/absl/testing:absltest",
     ],
 )

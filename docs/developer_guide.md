@@ -14,7 +14,7 @@ Prepare one of the following toolchains based on your build environment:
     workspace root.
 -   **Standalone Linux or macOS build**: A C++17 compiler (`g++` on Linux x86-64
     or Xcode Command Line Tools `clang++` on macOS), Bash, and Python 3.10 or
-    later for asset synthesis scripts.
+    later for packaging and validation scripts.
 
 ## Repository layout
 
@@ -50,8 +50,8 @@ document, and prebuilt release deliverable:
 :                                               : export version script                     :
 | `ofx/Install_PaperCraft_OpenFX_macOS.command` | OS-specific installers for macOS and      |
 : and `ofx/install_linux_ofx.sh`                : Linux x86-64                              :
-| `sfx_synthesizer.py`                          | Procedural synthesizer creating the 24    |
-:                                               : stereo 48 kHz, 24-bit Paper SFX WAV files :
+| `Paper_SFX/`                                  | Four real-world 48 kHz, 24-bit stereo     |
+:                                               : Foley WAV recordings and `CREDITS.md`     :
 | `png_renderer.py`                             | Pure-Python PNG generator for the effect  |
 :                                               : thumbnail                                 :
 | `fusion_templates.py` and `drfx_validator.py` | Legacy **Paper Cutout FX** `.setting`     |
@@ -169,13 +169,14 @@ each layer so host suites, validators, and packs stay synchronized.
 
 ### Add a Paper SFX Foley sound
 
-1.  Add a synthesis preset to `synthesize_all_paper_sfx` in
-    `sfx_synthesizer.py`, keeping sample format at 48 kHz, 24-bit stereo with
-    peaks below `0.995`.
-2.  Update expected counts or category checks in `papercraft_pro_test.py`.
-3.  Run `papercraft_pro_test` with `blaze-for-agents` to verify RMS loudness,
-    stereo channel separation, and click-free zero-crossing edge fades through
-    `drfx_validator.validate_wav_bytes`.
+1.  Place a MIT-compatible (`CC0` or `Public Domain`) 48 kHz, 24-bit stereo WAV
+    clip with peaks below `0.995` and smooth zero-crossing edge fades into
+    `Paper_SFX/`, and document its source in `Paper_SFX/CREDITS.md`.
+2.  Register the relative path in `_PAPER_SFX_RELPATHS` inside
+    `bundle_builder_lib.py`, `paper_sfx_files` in `BUILD`, and expected paths in
+    `papercraft_pro_test.py`.
+3.  Run `papercraft_pro_test` to verify RMS loudness, stereo channel separation,
+    and click-free edge fades through `drfx_validator.validate_wav_bytes`.
 
 ## What's next
 

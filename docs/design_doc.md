@@ -1,7 +1,7 @@
 # PaperCraft Studio Pro design document
 
 This design document explains the architecture, OpenFX 1.4 C++17 rendering
-pipeline, procedural Foley audio synthesis, legacy Fusion packaging, and
+pipeline, curated real-world Foley audio packaging, legacy Fusion packaging, and
 engineering trade-offs if you maintain, audit, or extend PaperCraft Studio Pro.
 
 ## Context and goals
@@ -17,8 +17,8 @@ updates change node defaults.
 PaperCraft Studio Pro 3.0.0 solves this bottleneck by compiling the **Paper
 Cutout FX** filter as a self-contained C++17 OpenFX 1.4 bundle
 (`PaperCraftStudioPro.ofx.bundle`) that runs directly inside the Edit page
-OpenFX host while shipping deterministic Python builders for 48 kHz, 24-bit
-stereo Paper SFX WAV files and a validated legacy `.drfx` template.
+OpenFX host while bundling four real-world 48 kHz, 24-bit stereo Paper SFX WAV
+recordings and a validated legacy `.drfx` template.
 
 ### Goals
 
@@ -31,10 +31,9 @@ stereo Paper SFX WAV files and a validated legacy `.drfx` template.
 -   **Upper-track alpha fidelity**: Preserve straight, premultiplied, and opaque
     input alpha channels so upper-track (`V2` and higher) overlays keep lower
     tracks visible.
--   **Hermetic, deterministic packaging**: Synthesize all stereo Foley WAV
-    files, thumbnails, validated `.drfx` bundles, and source
-    archives from Python and C++ source without network access or checked-in
-    binary blobs.
+-   **Hermetic, deterministic packaging**: Validate and package the four stereo
+    Foley WAV recordings, thumbnails, `.drfx` bundles, and source archives
+    deterministically without network access at build time.
 
 ### Non-goals
 
@@ -57,7 +56,7 @@ at the repository root.
 ```mermaid
 flowchart TD
   S["C++17 OpenFX Source (ofx/*.cc, ofx/*.h)"] --> B["Native OpenFX Bundle (PaperCraftStudioPro.ofx.bundle)"]
-  P["Python Asset Generators (sfx_synthesizer.py, png_renderer.py, fusion_templates.py)"] --> V["Validators (drfx_validator.py)"]
+  P["Real Foley WAVs & Python Builders (Paper_SFX/*.wav, png_renderer.py, fusion_templates.py)"] --> V["Validators (drfx_validator.py)"]
   B --> R["Release Assembler (bundle_builder_lib.py)"]
   V --> R
   D["Documentation (README.md, docs/*.md)"] --> R
@@ -114,11 +113,12 @@ flowchart TD
 :                                               :          : x86-64 bundle to     :
 :                                               :          : system or user       :
 :                                               :          : OpenFX folders       :
-| `sfx_synthesizer.py`                          | Python   | Synthesizes 24       |
-:                                               :          : stereo 48 kHz 24-bit :
-:                                               :          : PCM Paper SFX WAV    :
-:                                               :          : files using biquad   :
-:                                               :          : modal filters        :
+| `Paper_SFX/`                                  | WAV /    | Stores four real     |
+:                                               : Markdown : 48 kHz, 24-bit       :
+:                                               :          : stereo Foley WAV     :
+:                                               :          : recordings and       :
+:                                               :          : public-domain        :
+:                                               :          : credits              :
 | `png_renderer.py`                             | Python   | Generates the        |
 :                                               :          : `104x58` Effect      :
 :                                               :          : Library thumbnail    :
@@ -306,26 +306,17 @@ midpoint. Enabling stop-motion stepping quantizes timeline progress to
 `holdFrames` buckets and derives deterministic pseudo-random per-step XY jitter,
 rotational wobble, and border tear boiling.
 
-## Physical-modeling Foley audio synthesis
+## Curated real-world Foley audio library
 
-The `sfx_synthesizer.py` module generates 24 stereo 48 kHz, 24-bit PCM WAV files
-across six folders without relying on pre-recorded samples:
+The `Paper_SFX/` directory ships four authentic microphone-recorded paper Foley
+clips released into the public domain (`CC0 1.0` and `Public Domain`, documented
+in [`CREDITS.md`](../Paper_SFX/CREDITS.md)), paired directly with the **Paper
+Cutout FX** animation presets (`01_Paper_Unfold.wav`, `02_Paper_Crumple.wav`,
+`03_Paper_Glide_Flip.wav`, and `04_Paper_Rip_Tear.wav`).
 
-1.  **Modal cardstock bodies**: Excitations pass through parallel RBJ
-    direct-form-II transposed bandpass filters (`_modal_paper_body`) tuned to
-    `light_modes`, `heavy_modes`, or `news_modes` spectral peaks (covering 420
-    Hz to 5200 Hz).
-2.  **Paper buckling impulses**: `_generate_buckling_impulses` produces
-    power-law distributed transient snaps characteristic of folding and
-    crumpling sheets.
-3.  **Mechanical gestures**: `_synth_page_turn`, `_synth_paper_hit`,
-    `_synth_crumple`, `_synth_rip`, `_synth_rustle_or_bits`, and
-    `_synth_designed_transition` shape temporal envelopes, table-thud
-    fundamental sine bursts, and air-whoosh bands.
-4.  **Stereo widening and normalization**: `_stereo_decorrelate` adds
-    millisecond Haas inter-channel delays and optional stereo pan sweeps before
-    peak-limiting below full scale (`0.995`) and applying smooth zero-crossing
-    cosine fades in `encode_wav_24bit_stereo`.
+Each clip is mastered to 48 kHz, 24-bit stereo PCM WAV with DC removal, peak
+headroom below `-1.5 dBFS`, natural stereo separation, and smooth zero-crossing
+cosine edge fades verified at build time by `drfx_validator.validate_wav_bytes`.
 
 ## Legacy Fusion template generation and static validation
 
@@ -396,14 +387,14 @@ follows strict structural invariants verified statically by
 :              :                                           :             : `#include`     :
 :              :                                           :             : parity checked :
 :              :                                           :             : in CI          :
-| Paper SFX    | Deterministic Python synthesis in         | Committing  | Guarantees     |
-: library      : `sfx_synthesizer.py` at build time        : 24          : reproducible   :
-: storage      :                                           : multi-      : 48 kHz, 24-bit :
-:              :                                           : megabyte    : WAV output     :
-:              :                                           : `.wav`      : verified by    :
-:              :                                           : binaries    : automated RMS, :
-:              :                                           : into source : clipping, and  :
-:              :                                           : control     : stereo checks  :
+| Paper SFX    | Four real-world `CC0` / `Public Domain`   | Procedural  | Delivers       |
+: library      : Foley WAV recordings in `Paper_SFX/`      : biquad      : authentic      :
+: storage      :                                           : audio       : acoustic paper :
+:              :                                           : synthesis   : transients in  :
+:              :                                           :             : 1.2 MB total   :
+:              :                                           :             : with zero      :
+:              :                                           :             : licensing      :
+:              :                                           :             : restrictions   :
 
 ## Verification architecture
 
@@ -422,12 +413,12 @@ Blaze:
     `bounds` against `rod`, `kOfxImageOpaque` input, `V2` overlay transparency,
     the `mirrorTransV` toggle, and overlapping short-clip intro/outro timing.
 2.  **Python packager and asset suite (`papercraft_pro_test.py`)**: Validates
-    all 24 synthesized WAVs, checks the `.setting` graph and negative mutation
-    failures in `drfx_validator.py`, tests Bash syntax and `--dry-run` behavior
-    of both OS installers, verifies nested-directory installation with
+    all four bundled Foley WAVs, checks the `.setting` graph and negative
+    mutation failures in `drfx_validator.py`, tests Bash syntax and `--dry-run`
+    behavior of both OS installers, verifies nested-directory installation with
     `install_linux_ofx.sh`, confirms ZIP entry permissions (`0o755` for
     executables and `.ofx`), and audits relative Markdown links across
-    `README.md` and `docs/*.md`.
+    `README.md`, `Paper_SFX/CREDITS.md`, and `docs/*.md`.
 
 ## What's next
 

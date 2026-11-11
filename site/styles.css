@@ -94,7 +94,7 @@ section.alt { background: var(--panel); border-block: 1px solid var(--border); }
 .section-head p { color: var(--muted); }
 
 .grid { display: grid; gap: 1.2rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
-@media (min-width: 900px) { .grid.three, .sfx { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 900px) { .grid.three { grid-template-columns: repeat(3, 1fr); } }
 a.card { text-decoration: none; color: inherit; transition: border-color 0.15s; }
 a.card:hover { border-color: var(--purple-control); }
 a.card h3 { color: var(--purple-tint); }
@@ -151,4 +151,4 @@ footer a { color: var(--muted); }
 
 .sfx { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
 .sfx .card h3 { font-family: var(--font-mono); font-size: 0.9rem; color: var(--purple-tint); }
-@media (min-width: 900px) { .sfx { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 900px) { .sfx { grid-template-columns: repeat(2, 1fr); } }
