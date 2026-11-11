@@ -1,9 +1,10 @@
 # PaperCraft Studio Pro developer and build guide
 
 This guide helps engineers build, test, package, compile standalone OpenFX
-bundles, and extend PaperCraft Studio Pro 3.0.0 inside Blaze or from the
-exported repository archive. Version 3.0.0 ships a single OpenFX filter,
-**Paper Cutout FX** (`com.papercraft.CutoutFX`).
+bundles, and extend PaperCraft Studio Pro 3.1.0 inside Blaze or from the
+exported repository archive. Version 3.1.0 ships two OpenFX plugins in one
+bundle: the **Paper Cutout FX** filter (`com.papercraft.CutoutFX`) and the
+**Paper Fold & Unfold** transition (`com.papercraft.PaperFoldTransition`).
 
 ## Before you begin
 
@@ -33,16 +34,19 @@ document, and prebuilt release deliverable:
 :                                               : details, rendering math, and design       :
 :                                               : trade-offs                                :
 | `docs/user_guide.md`                          | End-user installation, Edit-page          |
-:                                               : workflows, 44 Inspector parameters, SFX   :
+:                                               : workflows, all Inspector parameters, SFX  :
 :                                               : reference, and troubleshooting            :
 | `docs/developer_guide.md`                     | Build, standalone compilation, test       |
 :                                               : execution, and extension guide            :
+| `docs/images/`                                | README preview of the fold transition,    |
+:                                               : rendered by the kernel                    :
 | `ofx/papercraft_kernel.h` and                 | Platform-independent C++17 paper cutout,  |
 : `ofx/papercraft_kernel.cc`                    : SDF border, intro and outro animation,    :
-:                                               : and compositing kernels                   :
-| `ofx/papercraft_ofx_plugin.cc`                | OpenFX 1.4 plugin registration,           |
-:                                               : parameters, suites, and multi-thread      :
-:                                               : dispatch                                  :
+:                                               : fold and unfold renderer, and             :
+:                                               : compositing kernels                       :
+| `ofx/papercraft_ofx_plugin.cc`                | OpenFX 1.4 registration of the filter and |
+:                                               : transition, parameters, suites, and       :
+:                                               : multi-thread dispatch                     :
 | `ofx/papercraft_ofx_test.cc`                  | GUnit OpenFX mock host and `dlopen`       |
 :                                               : dynamic plugin test suite                 :
 | `ofx/openfx_include/`                         | Vendored OpenFX 1.4 C headers and license |
@@ -53,9 +57,10 @@ document, and prebuilt release deliverable:
 | `Paper_SFX/`                                  | Four real-world 48 kHz, 24-bit stereo     |
 :                                               : Foley WAV recordings and `CREDITS.md`     :
 | `png_renderer.py`                             | Pure-Python PNG generator for the effect  |
-:                                               : thumbnail                                 :
-| `fusion_templates.py` and `drfx_validator.py` | Legacy **Paper Cutout FX** `.setting`     |
-:                                               : macro builder and structural validator    :
+:                                               : and transition thumbnails                 :
+| `fusion_templates.py` and `drfx_validator.py` | Legacy **Paper Cutout FX** and **Paper    |
+:                                               : Fold & Unfold** `.setting` macro builders :
+:                                               : and structural validator                  :
 | `bundle_builder_lib.py` and                   | Deterministic bundle assembler writing    |
 : `build_papercraft_bundle.py`                  : `.drfx`,                                  :
 :                                               : `PaperCraft_Studio_Pro_Full_Bundle.zip`,  :
@@ -152,20 +157,68 @@ each layer so host suites, validators, and packs stay synchronized.
 
 ### Add or update an OpenFX Inspector control
 
-1.  Add the parameter field and default value to `CutoutParams` in
-    `ofx/papercraft_kernel.h`.
-2.  Read and apply the field in `RenderCutoutFrame` in
-    `ofx/papercraft_kernel.cc`.
-3.  Define the Inspector control inside `DefineCutoutParameters`, add its
-    `OfxParamHandle` slot in `PluginInstance`, bind it in
-    `HandleCreateInstance`, and populate it in `ReadCutoutParams` inside
-    `ofx/papercraft_ofx_plugin.cc`.
+1.  Add the parameter field and default value to `CutoutParams` (filter) or
+    `PaperFoldTransitionParams` (transition) in `ofx/papercraft_kernel.h`.
+2.  Read and apply the field in `RenderCutoutFrame` or
+    `RenderPaperFoldTransition` in `ofx/papercraft_kernel.cc`.
+3.  Define the Inspector control inside `DefineCutoutParameters` or
+    `DefineFoldTransitionParameters`, add its `OfxParamHandle` slot in
+    `PluginInstance`, bind it in `HandleCreateInstance` for the matching
+    `PluginRole`, and populate it in `ReadCutoutParams` or
+    `ReadFoldTransitionParams` inside `ofx/papercraft_ofx_plugin.cc`. Both
+    plugins share identifiers such as `paperColor` and `shadowOpacity`, so a
+    shared control binds once.
 4.  Add a targeted GUnit regression test in `ofx/papercraft_ofx_test.cc`.
 
 > [!NOTE] Keep existing parameter identifiers stable, even when their names no
 > longer match their purpose. For example, the intro and outro group is still
 > named `TransitionGroup` and the **Glide Angle** control is still
 > `transitionAngle`, so projects saved with earlier versions keep their values.
+
+### Add a fold pattern
+
+1.  Add an enumerator to `FoldPattern` in `ofx/papercraft_kernel.h`.
+2.  Add its hinge templates to `BuildFoldLayout` in `ofx/papercraft_kernel.cc`.
+    List hinges in folding order (the last ones open first), keep every `frac`
+    above `0` so the shared core stays on each hinge's stationary side, and set
+    `valley = false` for mountain folds.
+3.  Add the label to `kPatterns` in `DefineFoldTransitionParameters` and raise
+    the `fold_pattern` clamp in `RenderPaperFoldTransition`.
+4.  Extend the pattern loop in `FoldTransitionPatternsActionsAndByteDepthRender`
+    and update the **Fold Pattern** rows in `docs/user_guide.md` and both
+    READMEs.
+
+New patterns need no extra work for bounds pruning: `FoldSheetBounds` folds
+any hinge layout. If you change how `UnfoldFlapPoint` lifts or stretches a flap,
+or how `EvalPaperLeaf` and `EvalFoldCoverage` grow the paper edge, update
+`FoldedFlapBounds` and the grow margins in `RenderPaperFoldTransition` and
+`RenderCutoutFrame` to match. Bounds that are too tight clip paper silently.
+
+### Run the C++ suite on macOS without Blaze
+
+The CI workflow runs `ofx/papercraft_ofx_test.cc` on Linux with `libgtest-dev`.
+On macOS, compile GoogleTest from a source checkout in a scratch folder and
+point the test at a locally built bundle binary:
+
+```bash
+clang++ -std=c++17 -O2 -fPIC -shared -fvisibility=hidden \
+  -DPAPERCRAFT_STANDALONE_OFX -Iofx -Iofx/openfx_include \
+  -Wl,-exported_symbol,_OfxGetNumberOfPlugins \
+  -Wl,-exported_symbol,_OfxGetPlugin \
+  ofx/papercraft_kernel.cc ofx/papercraft_ofx_plugin.cc \
+  -o BUILD_DIR/PaperCraftStudioPro.ofx
+clang++ -std=c++17 -O2 -DPAPERCRAFT_STANDALONE_OFX \
+  -isystem GTEST_DIR/include -IGTEST_DIR -Iofx -Iofx/openfx_include \
+  ofx/papercraft_ofx_test.cc GTEST_DIR/src/gtest-all.cc \
+  GTEST_DIR/src/gtest_main.cc -lpthread -o BUILD_DIR/papercraft_ofx_test
+PAPERCRAFT_OFX_PATH=BUILD_DIR/PaperCraftStudioPro.ofx \
+  BUILD_DIR/papercraft_ofx_test
+```
+
+Replace the following:
+
+-   `BUILD_DIR`: a scratch output directory.
+-   `GTEST_DIR`: the `googletest` folder of a GoogleTest source release.
 
 ### Add a Paper SFX Foley sound
 

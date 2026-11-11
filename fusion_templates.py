@@ -1346,3 +1346,591 @@ def build_effect_setting() -> str:
 }}
 """
 
+
+
+def _node(
+    name: str,
+    tool: str,
+    inputs: Sequence[str],
+    pos: tuple[float, float],
+    preamble: str = "",
+) -> str:
+  """Renders one internal tool of a macro's Tools block."""
+  lines = [f"\t\t\t\t{name} = {tool} {{"]
+  if preamble:
+    lines.append(f"\t\t\t\t\t{preamble}")
+  lines.append("\t\t\t\t\tInputs = {")
+  lines.extend(f"\t\t\t\t\t\t{entry}" for entry in inputs)
+  lines.append("\t\t\t\t\t},")
+  lines.append(
+      f"\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ {pos[0]:g}, {pos[1]:g} }}"
+      " },"
+  )
+  lines.append("\t\t\t\t},")
+  return "\n".join(lines)
+
+
+def _expr(name: str, value: str, expression: str) -> str:
+  return f'{name} = Input {{ Value = {value}, Expression = "{expression}", }},'
+
+
+def _link(name: str, source_op: str, source: str = "Output") -> str:
+  return f'{name} = Input {{ SourceOp = "{source_op}", Source = "{source}", }},'
+
+
+def _value(name: str, value: str) -> str:
+  return f"{name} = Input {{ Value = {value}, }},"
+
+
+_DISSOLVE = 'Transitions = { [0] = "DFTDissolve" },'
+
+
+def _fold_transition_control_groups() -> list[
+    tuple[str, str, list[ControlSpec]]
+]:
+  """Inspector controls of the Paper Fold & Unfold Fusion transition."""
+  checkbox = dict(
+      input_control="CheckboxControl",
+      min_allowed=0,
+      max_allowed=1,
+      integer=True,
+  )
+  return [
+      (
+          "FoldGroup",
+          "1. Fold and Unfold",
+          [
+              ControlSpec(
+                  "FoldAction",
+                  "Fold Action",
+                  input_control="ComboControl",
+                  default=0,
+                  min_scale=0,
+                  max_scale=2,
+                  min_allowed=0,
+                  max_allowed=2,
+                  integer=True,
+                  combo_options=(
+                      "Unfold Incoming Clip",
+                      "Fold Outgoing Clip",
+                      "Fold Out, Then Unfold In",
+                  ),
+              ),
+              ControlSpec(
+                  "SlideDistance",
+                  "Packet Slide Distance",
+                  default=0.6,
+                  min_scale=0.0,
+                  max_scale=1.5,
+                  min_allowed=0.0,
+                  max_allowed=3.0,
+              ),
+              ControlSpec(
+                  "SlideAngle",
+                  "Slide Angle",
+                  default=-120.0,
+                  min_scale=-180.0,
+                  max_scale=180.0,
+                  center=0.0,
+              ),
+              ControlSpec("MirrorH", "Mirror Horizontal", **checkbox),
+          ],
+      ),
+      (
+          "PaperGroup",
+          "2. Paper Look",
+          [
+              ControlSpec(
+                  "PaperRed",
+                  "Paper Color Red",
+                  default=0.965,
+                  min_allowed=0.0,
+                  max_allowed=1.0,
+              ),
+              ControlSpec(
+                  "PaperGreen",
+                  "Paper Color Green",
+                  default=0.945,
+                  min_allowed=0.0,
+                  max_allowed=1.0,
+              ),
+              ControlSpec(
+                  "PaperBlue",
+                  "Paper Color Blue",
+                  default=0.895,
+                  min_allowed=0.0,
+                  max_allowed=1.0,
+              ),
+              ControlSpec(
+                  "CreaseStrength",
+                  "Crease Strength",
+                  default=0.52,
+                  min_allowed=0.0,
+                  max_allowed=1.0,
+              ),
+          ],
+      ),
+      (
+          "MotionGroup",
+          "3. Stop-Motion and Shadow",
+          [
+              ControlSpec(
+                  "EnableStopMotion", "Enable Stop-Motion", default=1, **checkbox
+              ),
+              ControlSpec(
+                  "StopMotionHoldFrames",
+                  "Hold Frames (Step)",
+                  default=2,
+                  min_scale=1,
+                  max_scale=8,
+                  min_allowed=1,
+                  max_allowed=24,
+                  integer=True,
+              ),
+              ControlSpec(
+                  "JitterAmount",
+                  "Hand Jitter",
+                  default=0.25,
+                  min_allowed=0.0,
+                  max_allowed=1.0,
+              ),
+              ControlSpec(
+                  "ShadowStrength",
+                  "Shadow Opacity",
+                  default=0.62,
+                  min_allowed=0.0,
+                  max_allowed=1.0,
+              ),
+              ControlSpec(
+                  "ShadowAngle",
+                  "Shadow Angle",
+                  default=-45.0,
+                  min_scale=-180.0,
+                  max_scale=180.0,
+                  center=0.0,
+              ),
+              ControlSpec(
+                  "ShadowDistance",
+                  "Shadow Distance",
+                  default=0.014,
+                  max_scale=0.08,
+                  min_allowed=0.0,
+                  max_allowed=0.2,
+              ),
+              ControlSpec(
+                  "ShadowSoftness",
+                  "Shadow Softness",
+                  default=0.02,
+                  max_scale=0.08,
+                  min_allowed=0.0,
+                  max_allowed=0.2,
+              ),
+          ],
+      ),
+  ]
+
+
+def build_fold_transition_setting() -> str:
+  """Builds the Paper Fold & Unfold Edit-page Fusion transition .setting.
+
+  A lighter companion to the OpenFX transition: a three-panel letter fold whose
+  left panel opens first and right panel second, with paper backs, creases,
+  a sliding folded packet, stop-motion holds, jitter, and a drop shadow. The
+  hinges are vertical, so the layout holds for any frame aspect ratio.
+
+  Returns:
+    Complete .setting file contents.
+  """
+  m = "PaperFoldTransition"
+  groups = _fold_transition_control_groups()
+  default_open = ("FoldGroup", "MotionGroup")
+  group_defaults = _render_group_defaults(groups, default_open)
+  user_controls = _render_user_controls(groups, default_open)
+
+  dur = "max(1, comp.RenderEnd - comp.RenderStart)"
+  hold = f"max(1, {m}.StopMotionHoldFrames)"
+  step_index = f"floor((time - comp.RenderStart) / {hold})"
+  raw_p = f"(time - comp.RenderStart) / {dur}"
+  chosen_p = (
+      f"iif({m}.EnableStopMotion > 0.5, {step_index} * {hold} / {dur}, {raw_p})"
+  )
+  p = (
+      "iif(time <= comp.RenderStart, 0, iif(time >= comp.RenderEnd, 1, "
+      f"min(1, max(0, {chosen_p}))))"
+  )
+  # Openness of the active sheet: 1 = flat, 0 = folded packet.
+  q = (
+      f"iif({m}.FoldAction < 0.5, {p}, iif({m}.FoldAction < 1.5, 1 - ({p}), "
+      f"iif(({p}) < 0.5, 1 - 2 * ({p}), 2 * ({p}) - 1)))"
+  )
+  outgoing_active = (
+      f"iif({m}.FoldAction > 0.5 and {m}.FoldAction < 1.5, 1, "
+      f"iif({m}.FoldAction > 1.5 and ({p}) < 0.5, 1, 0))"
+  )
+  # Cosine eases keep each stage's progress inside one reference.
+  angle_left = f"176 * (0.5 + 0.5 * cos(pi * min(1, max(0, (({q}) - 0.1) / 0.54))))"
+  angle_right = (
+      f"174 * (0.5 + 0.5 * cos(pi * min(1, max(0, (({q}) - 0.505) / 0.495))))"
+  )
+  toss = f"pow(0.5 + 0.5 * cos(pi * min(1, max(0, ({q}) / 0.18))), 2)"
+  settle = f"min(1, max(0, (1 - ({q})) / 0.12))"
+  mirror_sign = f"iif({m}.MirrorH > 0.5, -1, 1)"
+  third = 1.0 / 3.0
+  panel_w = f"{third + 0.002:.6f}"
+
+  def panel_mask(name: str, center_x: float, y: float) -> str:
+    return _node(
+        name,
+        "RectangleMask",
+        [
+            _value("UseFrameFormatSettings", "1"),
+            _value("Center", f"{{ {center_x:.6f}, 0.5 }}"),
+            _value("Width", panel_w),
+            _value("Height", "4"),
+        ],
+        (440, y),
+    )
+
+  def masked_panel(name: str, mask: str, y: float) -> str:
+    return _node(
+        name,
+        "Merge",
+        [
+            _link("Background", "TransparentCanvas"),
+            _link("Foreground", "MirrorIn"),
+            _link("EffectMask", mask, "Mask"),
+        ],
+        (550, y),
+    )
+
+  def panel_back(name: str, front: str, y: float) -> str:
+    return _node(
+        name,
+        "Merge",
+        [
+            _value("Operator", 'FuID { "Atop" }'),
+            _link("Background", front),
+            _link("Foreground", "PaperBack"),
+        ],
+        (660, y),
+    )
+
+  def flap_chain(prefix: str, angle: str, shift: float, y: float) -> list[str]:
+    face = f"{prefix}Face"
+    return [
+        _node(
+            face,
+            "Dissolve",
+            [
+                _expr("Mix", "0", f"iif(({angle}) > 90, 1, 0)"),
+                _link("Background", f"{prefix}Front"),
+                _link("Foreground", f"{prefix}Back"),
+            ],
+            (770, y),
+            preamble=_DISSOLVE,
+        ),
+        # Move the hinge to the frame center, swing, and move it back.
+        _node(
+            f"{prefix}HingeIn",
+            "Transform",
+            [
+                _value("Center", f"{{ {0.5 + shift:.6f}, 0.5 }}"),
+                _link("Input", face),
+            ],
+            (880, y),
+        ),
+        _node(
+            f"{prefix}Swing",
+            "DVE",
+            [
+                _expr(
+                    "YRotation",
+                    "0.0",
+                    f"{'-' if shift < 0 else ''}({angle})",
+                ),
+                _link("Input", f"{prefix}HingeIn"),
+            ],
+            (990, y),
+        ),
+        _node(
+            f"{prefix}HingeOut",
+            "Transform",
+            [
+                _value("Center", f"{{ {0.5 - shift:.6f}, 0.5 }}"),
+                _link("Input", f"{prefix}Swing"),
+            ],
+            (1100, y),
+        ),
+    ]
+
+  shadow_reach = f"{m}.ShadowDistance * (1 + 2.5 * ({toss}))"
+  nodes = [
+      _node("OutgoingInput", "BrightnessContrast", [], (0, 49.5)),
+      _node("IncomingInput", "BrightnessContrast", [], (0, 148.5)),
+      _node(
+          "ActiveClip",
+          "Dissolve",
+          [
+              _expr("Mix", "0", outgoing_active),
+              _link("Background", "IncomingInput"),
+              _link("Foreground", "OutgoingInput"),
+          ],
+          (110, 99),
+          preamble=_DISSOLVE,
+      ),
+      _node(
+          "CreaseNoise",
+          "FastNoise",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _value("Detail", "3.0"),
+              _value("Contrast", "2.6"),
+              _value("Discontinuous", "1"),
+              _value("XScale", "3.5"),
+              _value("Color1Red", "0.78"),
+              _value("Color1Green", "0.76"),
+              _value("Color1Blue", "0.72"),
+              _value("Color2Red", "1.0"),
+              _value("Color2Green", "1.0"),
+              _value("Color2Blue", "1.0"),
+          ],
+          (110, 214.5),
+      ),
+      _node(
+          "ActiveCreased",
+          "Merge",
+          [
+              _value("ApplyMode", 'FuID { "Multiply" }'),
+              _value("Operator", 'FuID { "Atop" }'),
+              _expr(
+                  "Blend",
+                  "0.0",
+                  f"{m}.CreaseStrength * 0.45 * ({settle})",
+              ),
+              _link("Background", "ActiveClip"),
+              _link("Foreground", "CreaseNoise"),
+          ],
+          (220, 99),
+      ),
+      # Mirroring flips the layout while the print keeps its orientation.
+      _node(
+          "MirrorIn",
+          "Transform",
+          [
+              _expr("FlipHoriz", "0", f"iif({m}.MirrorH > 0.5, 1, 0)"),
+              _link("Input", "ActiveCreased"),
+          ],
+          (330, 99),
+      ),
+      _node(
+          "TransparentCanvas",
+          "Background",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _value("TopLeftAlpha", "0"),
+          ],
+          (330, 0),
+      ),
+      _node(
+          "PaperBack",
+          "Background",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _expr("TopLeftRed", "0.965", f"{m}.PaperRed * 0.93"),
+              _expr("TopLeftGreen", "0.945", f"{m}.PaperGreen * 0.92"),
+              _expr("TopLeftBlue", "0.895", f"{m}.PaperBlue * 0.88"),
+              _value("TopLeftAlpha", "1"),
+          ],
+          (550, 280),
+      ),
+      panel_mask("LeftPanelMask", third / 2, 16.5),
+      panel_mask("MiddlePanelMask", 0.5, 82.5),
+      panel_mask("RightPanelMask", 1 - third / 2, 148.5),
+      masked_panel("LeftFront", "LeftPanelMask", 16.5),
+      masked_panel("MiddleFront", "MiddlePanelMask", 82.5),
+      masked_panel("RightFront", "RightPanelMask", 148.5),
+      panel_back("LeftBack", "LeftFront", 16.5),
+      panel_back("RightBack", "RightFront", 148.5),
+      *flap_chain("Left", angle_left, third / 2, 16.5),
+      *flap_chain("Right", angle_right, -third / 2, 148.5),
+      # The left panel was folded last, so it stays on top.
+      _node(
+          "SheetRight",
+          "Merge",
+          [
+              _link("Background", "MiddleFront"),
+              _link("Foreground", "RightHingeOut"),
+          ],
+          (1210, 115.5),
+      ),
+      _node(
+          "SheetFolded",
+          "Merge",
+          [
+              _link("Background", "SheetRight"),
+              _link("Foreground", "LeftHingeOut"),
+          ],
+          (1320, 82.5),
+      ),
+      _node(
+          "MirrorOut",
+          "Transform",
+          [
+              _expr("FlipHoriz", "0", f"iif({m}.MirrorH > 0.5, 1, 0)"),
+              _link("Input", "SheetFolded"),
+          ],
+          (1430, 82.5),
+      ),
+      _node(
+          "PacketMotion",
+          "Transform",
+          [
+              _expr(
+                  "Center",
+                  "{ 0.5, 0.5 }",
+                  f"Point(0.5 + ({mirror_sign}) * {m}.SlideDistance * ({toss})"
+                  f" * cos({m}.SlideAngle * pi / 180), 0.5 + {m}.SlideDistance"
+                  f" * ({toss}) * sin({m}.SlideAngle * pi / 180))",
+              ),
+              _expr("Size", "1.0", f"1 + 0.12 * ({toss})"),
+              _expr("Angle", "0.0", f"({mirror_sign}) * 24 * ({toss})"),
+              _link("Input", "MirrorOut"),
+          ],
+          (1540, 82.5),
+      ),
+      _node(
+          "PacketShadow",
+          "Shadow",
+          [
+              _expr(
+                  "ShadowOffset",
+                  "{ 0.5, 0.5 }",
+                  f"Point(0.5 + {shadow_reach} * cos({m}.ShadowAngle * pi /"
+                  f" 180), 0.5 + {shadow_reach} * sin({m}.ShadowAngle * pi /"
+                  " 180))",
+              ),
+              _expr(
+                  "Softness",
+                  "0.02",
+                  f"{m}.ShadowSoftness * (1 + 1.5 * ({toss}))",
+              ),
+              _expr("Alpha", "0.62", f"{m}.ShadowStrength * ({settle})"),
+              _link("Input", "PacketMotion"),
+          ],
+          (1650, 82.5),
+      ),
+      _node(
+          "HandJitter",
+          "Transform",
+          [
+              _expr(
+                  "Center",
+                  "{ 0.5, 0.5 }",
+                  f"Point(0.5 + {m}.JitterAmount * 0.006 * ({settle}) *"
+                  f" sin({step_index} * 12.9898), 0.5 + {m}.JitterAmount *"
+                  f" 0.006 * ({settle}) * cos({step_index} * 78.233))",
+              ),
+              _expr(
+                  "Angle",
+                  "0.0",
+                  f"{m}.JitterAmount * 2.2 * ({settle}) * sin({step_index} *"
+                  " 43.17)",
+              ),
+              _link("Input", "PacketShadow"),
+          ],
+          (1760, 82.5),
+      ),
+      _node(
+          "Underlay",
+          "Dissolve",
+          [
+              _expr(
+                  "Mix",
+                  "0",
+                  f"iif({m}.FoldAction > 0.5 and {m}.FoldAction < 1.5, 1, 0)",
+              ),
+              _link("Background", "OutgoingInput"),
+              _link("Foreground", "IncomingInput"),
+          ],
+          (1650, 214.5),
+          preamble=_DISSOLVE,
+      ),
+      _node(
+          "UnderlayGate",
+          "Dissolve",
+          [
+              _expr("Mix", "0", f"iif({m}.FoldAction > 1.5, 1, 0)"),
+              _link("Background", "Underlay"),
+              _link("Foreground", "TransparentCanvas"),
+          ],
+          (1760, 214.5),
+          preamble=_DISSOLVE,
+      ),
+      _node(
+          "CompositeTransition",
+          "Merge",
+          [
+              _link("Background", "UnderlayGate"),
+              _link("Foreground", "HandJitter"),
+          ],
+          (1870, 148.5),
+      ),
+      _node(
+          "ExactEndSwitch",
+          "Dissolve",
+          [
+              _expr("Mix", "0", "iif(time >= comp.RenderEnd, 1, 0)"),
+              _link("Background", "CompositeTransition"),
+              _link("Foreground", "IncomingInput"),
+          ],
+          (1980, 148.5),
+          preamble=_DISSOLVE,
+      ),
+      _node(
+          "ExactBoundaryClamp",
+          "Dissolve",
+          [
+              _expr("Mix", "0", "iif(time <= comp.RenderStart, 1, 0)"),
+              _link("Background", "ExactEndSwitch"),
+              _link("Foreground", "OutgoingInput"),
+          ],
+          (2090, 148.5),
+          preamble=_DISSOLVE,
+      ),
+  ]
+  tools = "\n".join(nodes)
+
+  return f"""{{
+\tTools = ordered() {{
+\t\t{m} = MacroOperator {{
+\t\t\tCtrlWZoom = false,
+\t\t\tCustomData = {{
+\t\t\t\tHelpPage = "MTTN PaperCraft Studio Paper Fold & Unfold",
+\t\t\t}},
+\t\t\tInputs = ordered() {{
+\t\t\t\tMainInput1 = InstanceInput {{
+\t\t\t\t\tSourceOp = "OutgoingInput",
+\t\t\t\t\tSource = "Input",
+\t\t\t\t}},
+\t\t\t\tMainInput2 = InstanceInput {{
+\t\t\t\t\tSourceOp = "IncomingInput",
+\t\t\t\t\tSource = "Input",
+\t\t\t\t}},
+{group_defaults}
+\t\t\t}},
+\t\t\tOutputs = {{
+\t\t\t\tMainOutput1 = InstanceOutput {{
+\t\t\t\t\tSourceOp = "ExactBoundaryClamp",
+\t\t\t\t\tSource = "Output",
+\t\t\t\t}},
+\t\t\t}},
+\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 0, 0 }} }},
+\t\t\tTools = ordered() {{
+{tools}
+\t\t\t}},
+{user_controls}
+\t\t}},
+\t}},
+\tActiveTool = "{m}",
+}}
+"""

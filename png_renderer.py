@@ -126,6 +126,16 @@ def _draw_variant_motif(
         star_dist = abs(dx) + abs(dy)
         if star_dist < 10.5:
           alpha = min(1.0, (10.5 - star_dist) * 0.6)
+      elif variant == "fold":
+        # Square sheet whose top-right corner folds over the 45-degree line
+        # dx - dy = 10, showing a lighter flap with a crease shadow.
+        if abs(dx) < 10.5 and abs(dy) < 10.5 and dx - dy <= 10.0:
+          alpha = 1.0
+          if dx >= -0.5 and dy <= 0.5:
+            crease = 10.0 - (dx - dy) < 1.4
+            flap_rgb = (88, 66, 150) if crease else (213, 199, 247)
+            _blend_over(canvas, width, height, px, py, flap_rgb, 1.0)
+            continue
 
       if alpha > 0.0:
         _blend_over(canvas, width, height, px, py, accent_rgb, alpha)
@@ -139,7 +149,7 @@ def render_thumbnail_png(
 
   Args:
     accent_rgb: Accent RGB tuple in 0..255 range for the card icon.
-    variant: Motif key (currently only 'effect').
+    variant: Motif key ('effect' or 'fold').
 
   Returns:
     PNG file bytes at 104x58 resolution.

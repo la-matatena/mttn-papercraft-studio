@@ -43,10 +43,16 @@ except ImportError:
 class PapercraftProTest(absltest.TestCase):
 
   def test_png_thumbnail(self):
-    thumb = png_renderer.render_thumbnail_png((232, 93, 56), "effect")
-    self.assertTrue(thumb.startswith(b"\x89PNG\r\n\x1a\n"))
-    w, h = struct.unpack(">II", thumb[16:24])
-    self.assertEqual((w, h), (104, 58))
+    for variant in ("effect", "fold"):
+      with self.subTest(variant=variant):
+        thumb = png_renderer.render_thumbnail_png((232, 93, 56), variant)
+        self.assertTrue(thumb.startswith(b"\x89PNG\r\n\x1a\n"))
+        w, h = struct.unpack(">II", thumb[16:24])
+        self.assertEqual((w, h), (104, 58))
+    self.assertNotEqual(
+        png_renderer.render_thumbnail_png((232, 93, 56), "effect"),
+        png_renderer.render_thumbnail_png((232, 93, 56), "fold"),
+    )
 
   def test_effect_fusion_template_validates_as_macro_operator(self):
     text = fusion_templates.build_effect_setting()
@@ -54,6 +60,50 @@ class PapercraftProTest(absltest.TestCase):
     self.assertNotIn("= GroupOperator", text)
     self.assertNotIn("ViewInfo = GroupInfo", text)
     drfx_validator.validate_setting_syntax_and_graph(text, "effect")
+
+  def test_fold_transition_fusion_template_validates(self):
+    text = fusion_templates.build_fold_transition_setting()
+    self.assertIn("PaperFoldTransition = MacroOperator", text)
+    self.assertIn("MainInput2 = InstanceInput", text)
+    # Each fold panel is masked, given a paper back, and swung on a DVE.
+    for node in ("LeftPanelMask", "LeftBack", "LeftSwing", "RightSwing",
+                 "PacketShadow", "ExactBoundaryClamp"):
+      self.assertIn(f"\t\t\t\t{node} = ", text)
+    self.assertIn('Source = "Mask"', text)
+    drfx_validator.validate_setting_syntax_and_graph(text, "transition")
+
+    # The validator must tell transitions and effects apart.
+    with self.assertRaisesRegex(ValueError, "MainInput1 only"):
+      drfx_validator.validate_setting_syntax_and_graph(text, "effect")
+    one_input = text.replace("MainInput2 = InstanceInput", "Spare = Input")
+    with self.assertRaisesRegex(ValueError, "MainInput1 and 2"):
+      drfx_validator.validate_setting_syntax_and_graph(one_input, "transition")
+    bad_ref = text.replace(
+        "PaperFoldTransition.SlideAngle", "PaperFoldTransition.NoSuchControl"
+    )
+    with self.assertRaisesRegex(ValueError, "undeclared control"):
+      drfx_validator.validate_setting_syntax_and_graph(bad_ref, "transition")
+
+  def test_drfx_ships_effect_and_fold_transition(self):
+    entries = bundle_builder_lib.build_drfx_entries()
+    self.assertEqual(
+        sorted(entries),
+        [
+            "Edit/Effects/MTTN PaperCraft Studio/Paper Cutout FX.png",
+            "Edit/Effects/MTTN PaperCraft Studio/Paper Cutout FX.setting",
+            "Edit/Transitions/MTTN PaperCraft Studio/Paper Fold & Unfold.png",
+            "Edit/Transitions/MTTN PaperCraft Studio/"
+            "Paper Fold & Unfold.setting",
+        ],
+    )
+    drfx_bytes = bundle_builder_lib._write_deterministic_zip(entries)  # pylint: disable=protected-access
+    drfx_validator.validate_drfx_bytes(drfx_bytes)
+
+    effect_only = {k: v for k, v in entries.items() if "/Effects/" in k}
+    with self.assertRaisesRegex(ValueError, "Edit/Transitions"):
+      drfx_validator.validate_drfx_bytes(
+          bundle_builder_lib._write_deterministic_zip(effect_only)  # pylint: disable=protected-access
+      )
 
   def test_validator_rejects_broken_or_group_operator_setting(self):
     valid = fusion_templates.build_effect_setting()
@@ -155,6 +205,12 @@ class PapercraftProTest(absltest.TestCase):
       self.assertIn("docs/design_doc.md", names)
       self.assertIn("docs/user_guide.md", names)
       self.assertIn("docs/developer_guide.md", names)
+      self.assertIn("docs/images/paper_fold_unfold.png", names)
+      self.assertTrue(
+          zf.read("docs/images/paper_fold_unfold.png").startswith(
+              b"\x89PNG\r\n\x1a\n"
+          )
+      )
       self.assertIn("Install_PaperCraft_OpenFX_macOS.command", names)
       self.assertIn("install_linux_ofx.sh", names)
       self.assertIn("PaperCraftStudioPro.ofx.bundle/Contents/Info.plist", names)
@@ -187,6 +243,7 @@ class PapercraftProTest(absltest.TestCase):
           "papercraft_pro/docs/design_doc.md",
           "papercraft_pro/docs/user_guide.md",
           "papercraft_pro/docs/developer_guide.md",
+          "papercraft_pro/docs/images/paper_fold_unfold.png",
           "papercraft_pro/build_papercraft_bundle.py",
           "papercraft_pro/bundle_builder_lib.py",
           "papercraft_pro/drfx_validator.py",

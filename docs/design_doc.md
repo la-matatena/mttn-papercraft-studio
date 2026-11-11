@@ -14,16 +14,18 @@ background Fusion render passes that increase timeline caching latency, risk
 opaque matte clipping on `V2` or higher overlay tracks, and break when host
 updates change node defaults.
 
-PaperCraft Studio Pro 3.0.0 solves this bottleneck by compiling the **Paper
-Cutout FX** filter as a self-contained C++17 OpenFX 1.4 bundle
-(`PaperCraftStudioPro.ofx.bundle`) that runs directly inside the Edit page
-OpenFX host while bundling four real-world 48 kHz, 24-bit stereo Paper SFX WAV
-recordings and a validated legacy `.drfx` template.
+PaperCraft Studio Pro 3.1.0 solves this bottleneck by compiling the **Paper
+Cutout FX** filter and the **Paper Fold & Unfold** transition into a
+self-contained C++17 OpenFX 1.4 bundle (`PaperCraftStudioPro.ofx.bundle`) that
+runs directly inside the Edit page OpenFX host while bundling four real-world
+48 kHz, 24-bit stereo Paper SFX WAV recordings and validated legacy `.drfx`
+templates.
 
 ### Goals
 
--   **Direct Edit-page execution**: Register a single filter plugin directly
-    under **Open FX** > **MTTN PaperCraft Studio** in the Edit page **Effects**
+-   **Direct Edit-page execution**: Register a filter under **Open FX** >
+    **MTTN PaperCraft Studio** and a transition under **Open FX** >
+    **Transitions** > **MTTN PaperCraft Studio** in the Edit page **Effects**
     panel without opening Fusion.
 -   **Compatibility across Free and Studio editions**: Use standard CPU OpenFX
     1.4 APIs so DaVinci Resolve Free and DaVinci Resolve Studio run the effect
@@ -65,7 +67,7 @@ flowchart TD
 
   H["DaVinci Resolve Host (OpenFX 1.4)"] --> E["OfxGetPlugin Entry Table (papercraft_ofx_plugin.cc)"]
   E --> T["Multi-Thread Row Slicer (OfxMultiThreadSuiteV1)"]
-  T --> K["CPU Pixel Kernel (RenderCutoutFrame)"]
+  T --> K["CPU Pixel Kernels (RenderCutoutFrame, RenderPaperFoldTransition)"]
 ```
 
 ### Module responsibilities
@@ -163,20 +165,29 @@ symbols cannot collide with DaVinci Resolve libraries. On macOS, the installer
 script passes the `-Wl,-exported_symbol` linker flag for both symbols alongside
 `-fvisibility=hidden`.
 
-### Registered plugin
+### Registered plugins
 
-The bundle registers one OpenFX descriptor inside the **MTTN PaperCraft Studio**
-group. A single `SetHost` and `MainEntry` pair routes every host callback
-through `DispatchAction`:
+The bundle registers two OpenFX descriptors inside the **MTTN PaperCraft
+Studio** group. Each has its own `SetHost` and `MainEntry` pair and its own
+copy of the host suites, and both route every host callback through
+`DispatchAction` with a `PluginRole`:
 
-| OpenFX identifier         | Supported contexts | Display label        |
-| :------------------------ | :----------------- | :------------------- |
-| `com.papercraft.CutoutFX` | Filter             | **Paper Cutout FX**  |
+| OpenFX identifier                    | Supported contexts | Display label           |
+| :----------------------------------- | :----------------- | :---------------------- |
+| `com.papercraft.CutoutFX`            | Filter             | **Paper Cutout FX**     |
+| `com.papercraft.PaperFoldTransition` | Transition         | **Paper Fold & Unfold** |
 
-The descriptor reports version `3.0` (version label `3.0.0`). The
+Both descriptors report version `3.1` (version label `3.1.0`). The
 `HandleDescribeInContext` action returns `kOfxStatErrMissingHostFeature` for
-every context other than Filter, so the host never instantiates the plugin as
-a generator or transition.
+every other context, so the host never instantiates the filter as a generator
+or transition, or the transition as a filter. The transition defines the
+mandatory `SourceFrom` and `SourceTo` clips and the host-animated `Transition`
+progress parameter. Its identifier differs from the transitions removed in 3.0,
+so older projects don't load it with mismatched parameters.
+
+`HandleIsIdentity` reports `SourceFrom` when the stepped transition progress is
+`0` and `SourceTo` when it is `1`, so the host can skip rendering the first and
+last frames; when it does render them, the kernel copies the clip 1:1.
 
 ### Pixel depths, alpha modes, and region mapping
 
@@ -184,7 +195,8 @@ The plugin accepts `OfxBitDepthFloat` (32-bit float), `OfxBitDepthShort` (16-bit
 unsigned integer), and `OfxBitDepthByte` (8-bit unsigned integer) RGBA buffers.
 The `HandleGetClipPreferences` action reads unmapped source bit depth from the
 host and propagates it so 8-bit timelines do not force unnecessary format
-conversions.
+conversions. The transition keeps the depth both inputs share and falls back to
+float when `SourceFrom` and `SourceTo` disagree.
 
 During image extraction, the `ExtractImageView` function reads both
 `kOfxImagePropBounds` (physical allocated buffer extent) and
@@ -214,11 +226,16 @@ falling back to sequential execution if the host omits the threading suite or
 runs with a single worker.
 
 The `HandleDescribe` action explicitly sets `kOfxImageEffectPropSupportsTiles`
-to `0` on `CutoutFX` and disables tiling on both clip descriptors. Because torn
-paper collars can expand up to 15% of frame width around off-edge subjects and
-intro and outro animations shift geometry across the whole canvas,
+to `0` on both plugins and disables tiling on every clip descriptor. Because
+torn paper collars can expand up to 15% of frame width around off-edge subjects
+and folds and intro and outro animations move geometry across the whole canvas,
 requiring full-frame buffers eliminates visible rectangular tile seam artifacts
 while still honoring host `renderWindow` bounds during rendering.
+
+Fold renders cost far more on rows that cross the paper than on empty rows, so
+they visit rows through `RunScanlinesInterleaved`, a stride permutation that
+gives every worker's slice of row indices a sample of the whole frame. Four
+static threads render a 1080p transition frame about 3.9 times faster than one.
 
 ## Procedural paper rendering pipeline
 
@@ -306,6 +323,108 @@ midpoint. Enabling stop-motion stepping quantizes timeline progress to
 `holdFrames` buckets and derives deterministic pseudo-random per-step XY jitter,
 rotational wobble, and border tear boiling.
 
+## Paper fold and unfold renderer
+
+The **Paper Fold & Unfold** transition and the **Paper Unfold (3D)** intro and
+outro of **Paper Cutout FX** share one fold renderer. It folds the sheet along
+up to five straight hinges and draws the result by inverse mapping, so no
+geometry is ever rasterized.
+
+```mermaid
+flowchart TD
+  A["Stepped progress (ComputeSteppedTransitionProgress)"] --> B{"Progress 0 or 1?"}
+  B -- Yes --> C["Copy SourceFrom or SourceTo 1:1"]
+  B -- No --> D["InspectClipContent + ResolveFoldAction (Auto)"]
+  D --> E["Sheet: analytic frame box or matte SDF + outline"]
+  E --> F["BuildFoldLayout (hinges, stage timing, packet slide)"]
+  F --> P["FoldSheetBounds (conservative bounds per fold)"]
+  P --> G["CenterFoldedPacket (coverage centroid)"]
+  G --> H["Per pixel: EvalFoldStack over hinges, then EvalPaperLeaf"]
+  H --> I["Drop shadow via EvalFoldCoverage, composite over underlay"]
+```
+
+### Sheet, hinges, and stage timing
+
+The sheet is either an analytic rectangle (full-frame opaque clips, with 1.5 px
+of overscan so frame edges stay opaque) or the clip's matte, read through the
+same coarse signed distance field as the cutout collar. For mattes,
+`SheetFromSdf` also keeps a thinned outline so `SheetGeometry::Support` measures
+how far the paper really reaches in each direction; hinges then cut into round
+or irregular logos instead of their empty bounding-box corners.
+
+`BuildFoldLayout` turns a pattern template into hinges. Each hinge has a foot
+point, a unit normal into its flap, a valley or mountain direction, and a fold
+angle. All hinges keep one shared core point on their stationary side. That
+part of the paper never moves, so hinge `k`, applied to the packet left by
+hinges `0..k-1`, reads the same in flat and folded coordinates. Templates list
+hinges in folding order; the last ones open first, so lowering **Fold Stages**
+drops the small corner flaps and keeps the big half folds. **Paper Seed** adds a
+few degrees of hand-folded irregularity.
+
+Openness `q` runs from `0` (folded packet) to `1` (flat sheet). The packet
+slides in (or out) over `q` in `[0, 0.18]`, and the stages open over `q` in
+`[0.10, 1]` with 22% overlap and smoothstep easing. `CenterFoldedPacket`
+samples the folded coverage on a 40 x 40 grid and shifts the packet so its
+centroid stays at the sheet center while it is small, easing back to the
+resting place over `q` in `[0.55, 1]`.
+
+### Inverse folding, layering, and shading
+
+`EvalFoldStack` walks the hinges from the outermost one down. A flap opened
+less than 90 degrees covers its own side of the hinge, so the pixel maps into
+the flap with `s = d / cos(phi)` and a tangential perspective gain from the lift
+height. A flap folded past 90 degrees lies over the stationary side, so the
+pixel can see two layers: the flap, seen from its back, and the paper beneath.
+The evaluator recurses into both and composites them front to back. A
+`back_side` parity flag tracks which face of the paper is visible after each
+flip, and it decides whether a valley or mountain flap lands in front of or
+behind the stationary layer. The recursion stops as soon as an opaque front
+layer covers the pixel.
+
+Visible faces get Lambert shading from a light opposite the **Shadow Angle**,
+plus ambient occlusion along each crease. Folded flaps cast a soft shadow onto
+the layer beneath, offset further while the flap is still high
+(`EvalFoldCoverage` supplies the flap's coverage). `EvalPaperLeaf` finally
+shades one flat point: the print over its torn cardstock collar on the front,
+or toned paper with faint bleed-through of the print on the back, both with
+fiber grain, crumple creases, and wobbly crease lines along every hinge.
+
+### Bounds pruning
+
+Without help, every folded-over hinge doubles the layers a pixel may see, and
+pixels far from a small packet still walk the whole hinge stack. Before the
+pixel loop, `FoldSheetBounds` folds the sheet's bounding rectangle forward
+through the hinges as convex polygons: each fold clips the pieces at the hinge
+and replaces the flap part with a box around its folded image, widened for the
+perspective stretch of either face. The bounds after each fold let
+`EvalFoldStack` and `EvalFoldCoverage` return early wherever no paper can be,
+and the final pieces, mapped to the canvas, give boxes outside of which the
+transition only copies the underlay. The bounds are conservative (grown by the
+collar, the torn edge, shadow softness, and the coarse matte's slack), so the
+output is bit-identical to the unpruned renderer. Pruning saves about 25% of a
+1080p transition frame on average and halves **Paper Unfold (3D)** frames.
+
+### Seamless transition endpoints
+
+The first and last transition frames must match the clips exactly, so the
+renderer copies them 1:1 and lets every temporary detail settle away over the
+last 12% of an unfold (`settle`): collar width, tear amplitude, crease lines,
+crumple overlay, jitter, and drop shadow. While the collar is narrower than
+`2 px + SDF step`, torn edges don't clip the print, so soft matte edges survive.
+For see-through incoming clips, the outgoing clip fades out over the last 25%
+of an unfold (and the incoming clip fades in over the first 25% of a fold), so
+transparency also lands exactly.
+
+### Auto action
+
+`InspectClipContent` scans each clip on a strided grid of about 360 rows, dense
+enough to catch small logos, and records whether it has visible alpha,
+non-black color, and full-frame opacity. Hosts pass the empty side of a clip
+edge as transparent or opaque black, so `ResolveFoldAction` folds the outgoing
+clip when only the incoming side is empty, unfolds the incoming clip when the
+outgoing side is empty or the incoming clip is full-frame opaque, and otherwise
+folds the outgoing clip away before unfolding the incoming one.
+
 ## Curated real-world Foley audio library
 
 The `Paper_SFX/` directory ships four authentic microphone-recorded paper Foley
@@ -320,14 +439,20 @@ cosine edge fades verified at build time by `drfx_validator.validate_wav_bytes`.
 
 ## Legacy Fusion template generation and static validation
 
-For existing `.drfx` workflows, `fusion_templates.py` builds a single **Paper
-Cutout FX** `.setting` script, which `bundle_builder_lib.py` packages under
-`Edit/Effects/MTTN PaperCraft Studio/` with a `png_renderer.py` thumbnail
-(`104x58` pixels). The `validate_drfx_bytes` function rejects any `.drfx` that
-doesn't contain exactly one `.setting` template under `Edit/Effects/`. To avoid
-Edit-page black frames observed in third-party Fusion macros, the template
-follows strict structural invariants verified statically by
-`drfx_validator.py`:
+For existing `.drfx` workflows, `fusion_templates.py` builds two `.setting`
+scripts, which `bundle_builder_lib.py` packages with `png_renderer.py`
+thumbnails (`104x58` pixels): the **Paper Cutout FX** effect under
+`Edit/Effects/MTTN PaperCraft Studio/`, and the **Paper Fold & Unfold**
+transition under `Edit/Transitions/MTTN PaperCraft Studio/`. The Fusion
+transition is a three-panel letter fold: rectangle masks split the print into
+panels, `Merge` nodes with the `Atop` operator give each flap a paper back,
+and each flap swings on a `DVE` after a `Transform` moves its hinge to the
+frame center. Its hinges are vertical because Fusion mask heights depend on the
+frame aspect ratio. The `validate_drfx_bytes` function rejects any `.drfx` that
+doesn't contain exactly one `.setting` template under `Edit/Effects/` and one
+under `Edit/Transitions/`. To avoid Edit-page black frames observed in
+third-party Fusion macros, the templates follow strict structural invariants
+verified statically by `drfx_validator.py`:
 
 -   Top-level nodes declare `MacroOperator` paired with
     `ViewInfo = OperatorInfo` instead of `GroupOperator` or `GroupInfo`.
@@ -404,17 +529,24 @@ Blaze:
 1.  **C++ OpenFX 1.4 host compliance and kernel suite
     (`ofx/papercraft_ofx_test.cc`)**: Dynamically loads (`dlopen`) the compiled
     `PaperCraftStudioPro.ofx` shared library and emulates full OpenFX 1.4
-    property/parameter/image/multi-thread host suites across six tests. The
+    property/parameter/image/multi-thread host suites across twelve tests. The
     tests verify that the library exports only `OfxGetNumberOfPlugins` and
-    `OfxGetPlugin` and registers only the Filter-context
-    `com.papercraft.CutoutFX` plugin, that Generator and Transition contexts
-    return `kOfxStatErrMissingHostFeature`, and that rendering stays correct
-    across float and byte depths, negative `row_bytes` scanlines, cropped
-    `bounds` against `rod`, `kOfxImageOpaque` input, `V2` overlay transparency,
-    the `mirrorTransV` toggle, and overlapping short-clip intro/outro timing.
+    `OfxGetPlugin` and registers the Filter-context `com.papercraft.CutoutFX`
+    and Transition-context `com.papercraft.PaperFoldTransition` plugins, that
+    each rejects every other context with `kOfxStatErrMissingHostFeature`, and
+    that rendering stays correct across float and byte depths, negative
+    `row_bytes` scanlines, cropped `bounds` against `rod`, `kOfxImageOpaque`
+    input, `V2` overlay transparency, the `mirrorTransV` toggle, and
+    overlapping short-clip intro/outro timing. For the transition they check
+    that the first and last frames equal the clips and are reported by
+    `IsIdentity`, that Auto unfolds at a clip start and folds at a clip end
+    (including a missing incoming image), that folded flaps show the paper
+    back, that stop-motion steps hold identical poses, and that every pattern,
+    stage count, and action renders.
 2.  **Python packager and asset suite (`papercraft_pro_test.py`)**: Validates
-    all four bundled Foley WAVs, checks the `.setting` graph and negative
-    mutation failures in `drfx_validator.py`, tests Bash syntax and `--dry-run`
+    all four bundled Foley WAVs, checks both `.setting` graphs and negative
+    mutation failures in `drfx_validator.py`, checks that the `.drfx` ships the
+    effect and the transition, tests Bash syntax and `--dry-run`
     behavior of both OS installers, verifies nested-directory installation with
     `install_linux_ofx.sh`, confirms ZIP entry permissions (`0o755` for
     executables and `.ofx`), and audits relative Markdown links across

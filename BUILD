@@ -114,6 +114,7 @@ filegroup(
         "README.md",
         "docs/design_doc.md",
         "docs/developer_guide.md",
+        "docs/images/paper_fold_unfold.png",
         "docs/user_guide.md",
     ],
 )

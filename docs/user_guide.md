@@ -1,13 +1,16 @@
 # PaperCraft Studio Pro user guide
 
-This guide helps video editors install PaperCraft Studio Pro 3.0.0, apply the
-**Paper Cutout FX** torn paper filter on the DaVinci Resolve 20 and 21 Edit
-pages, tune Inspector controls, and mix the four included Paper SFX audio clips.
+This guide helps video editors install PaperCraft Studio Pro 3.1.0, apply the
+**Paper Cutout FX** torn paper filter and the **Paper Fold & Unfold** transition
+on the DaVinci Resolve 20 and 21 Edit pages, tune Inspector controls, and mix
+the four included Paper SFX audio clips.
 
 > [!IMPORTANT] Version 3.0 removes the **Paper Cutout FX** generator and the
 > **Paper Unfold Transition**, **Paper Crumple Transition**, and **Paper Rip
 > Wipe Transition** effects. DaVinci Resolve shows these items as unavailable in
 > projects created with earlier versions, so remove them from your timelines.
+> Version 3.1 adds a new transition, **Paper Fold & Unfold**, with its own
+> identifier.
 
 ## Before you begin
 
@@ -101,9 +104,15 @@ after installation so it scans the OpenFX directory.
 
 To load the optional Fusion `MacroOperator` templates instead of (or alongside)
 the native OpenFX bundle, double-click `PaperCraft_Studio_Pro.drfx` and approve
-the DaVinci Resolve prompt. The `.drfx` file contains a single **Paper Cutout
-FX** effect template, which appears in the **Effects** library under the **MTTN
-PaperCraft Studio** category.
+the DaVinci Resolve prompt. The `.drfx` file contains two templates:
+
+-   The **Paper Cutout FX** effect, in the **Effects** library under the **MTTN
+    PaperCraft Studio** category.
+-   The **Paper Fold & Unfold** transition, under **Effects** > **Toolbox** >
+    **Video Transitions** > **MTTN PaperCraft Studio**. It is a lighter
+    three-panel letter fold with paper backs, creases, a sliding packet,
+    stop-motion holds, and a drop shadow. It has no torn border, fold patterns,
+    or **Auto** action, so pick **Fold Action** yourself.
 
 ### Remove the OpenFX bundle
 
@@ -122,8 +131,9 @@ rm -rf "${HOME}/.local/share/OFX/Plugins/PaperCraftStudioPro.ofx.bundle"
 
 ## Create animated paper cutouts on the Edit page
 
-The OpenFX bundle registers a single filter, **Paper Cutout FX**, which you
-apply to clips on the Edit page.
+The OpenFX bundle registers a filter, **Paper Cutout FX**, which you apply to
+clips on the Edit page, and a transition, **Paper Fold & Unfold**, which you
+place on edit points.
 
 ### Apply Paper Cutout FX to a timeline clip
 
@@ -159,10 +169,72 @@ sticker inside the filter:
 3.  Customize paper texture, animation style, and cutout position in the
     remaining groups.
 
+### Fold the cutout with Paper Unfold (3D)
+
+The **Paper Unfold (3D)** intro and outro style folds the finished cutout along
+real creases: the cutout arrives as a small folded packet, its halves and
+corners flip open with the paper back showing, and it settles flat. Round or
+irregular cutouts fold across their own outline, so corner flaps stay visible.
+**Glide Angle** also rotates the fold direction (its default, `-22°`, keeps the
+folds upright), and **Mirror Animation H** and **Mirror Animation V** mirror the
+fold layout.
+
+## Fold and unfold clips with Paper Fold & Unfold
+
+**Paper Fold & Unfold** is an Edit-page transition that makes a clip unfold from
+a folded paper packet, or fold up and leave the frame. It works on full-frame
+video and on clips with transparency, such as PNG logos and titles on upper
+tracks.
+
+### Apply the transition
+
+1.  On the **Edit** page, open **Effects** > **Open FX** > **Transitions** >
+    **MTTN PaperCraft Studio**.
+2.  Drag **Paper Fold & Unfold** onto an edit point: the start of a clip, the
+    end of a clip, or the cut between two clips.
+3.  Drag the transition edges on the timeline to set its length. Longer
+    transitions unfold more slowly.
+4.  Select the transition and open **Inspector** > **Transition** to adjust the
+    fold pattern, paper look, stop-motion steps, and shadow.
+
+The first and last frames of the transition always match the outgoing and
+incoming clips exactly, so cuts around it don't jump.
+
+### Choose what folds and what unfolds
+
+With **Fold Action** set to **Auto (Unfold In / Fold Out)**, the transition
+reads both clips and decides:
+
+| Where you place it                                | What Auto does                                       |
+| :------------------------------------------------ | :--------------------------------------------------- |
+| At the start of a clip, with nothing before it    | The clip unfolds into view                           |
+| At the end of a clip, with nothing after it       | The clip folds up and slides out of the frame        |
+| Between two full-frame clips                      | The incoming clip unfolds over the outgoing clip     |
+| Between clips with transparency (PNGs, titles)    | The outgoing clip folds away, then the incoming clip unfolds |
+
+To force a behavior, set **Fold Action** to **Unfold Incoming Clip**, **Fold
+Outgoing Clip**, or **Fold Out, Then Unfold In**.
+
+### Unfold a logo over video
+
+1.  Place a transparent PNG or title on Video Track 2 (`V2`) above your video.
+2.  Drag **Paper Fold & Unfold** onto the start of the PNG clip. The logo
+    unfolds over the video on `V1`, and the paper back, collar, and shadow keep
+    their transparency.
+3.  To unfold the logo in place instead of sliding it in, set **Packet Slide
+    Distance** to `0`.
+4.  Drag a second **Paper Fold & Unfold** onto the end of the PNG clip to fold
+    the logo away.
+
+> [!TIP] Pair the transition with `01_Paper_Unfold.wav` from the Paper SFX
+> library, and use **Stop-Motion Steps** to match the number of poses to your
+> project frame rate (about one pose every two or three frames looks like
+> classic stop-motion).
+
 ## Complete Inspector controls reference
 
-The table that follows lists all controls exposed in the DaVinci Resolve
-Inspector for **Paper Cutout FX**.
+The tables that follow list all controls exposed in the DaVinci Resolve
+Inspector for **Paper Cutout FX** and **Paper Fold & Unfold**.
 
 ### Paper Cutout FX controls
 
@@ -375,6 +447,41 @@ Inspector for **Paper Cutout FX**.
 : & Master     :                 :             :              : cutout top to  :
 : Transform**  :                 :             :              : bottom         :
 
+### Paper Fold & Unfold controls
+
+DaVinci Resolve drives the transition's **Progress** parameter from the
+timeline, so you don't need to keyframe it.
+
+| Group | Control | Type and range | Default | Purpose |
+| :---- | :------ | :------------- | :------ | :------ |
+| **1. Fold & Unfold** | **Fold Action** | Choice (`Auto (Unfold In / Fold Out)`, `Unfold Incoming Clip`, `Fold Outgoing Clip`, `Fold Out, Then Unfold In`) | `Auto` | Chooses which clip unfolds or folds |
+| **1. Fold & Unfold** | **Fold Pattern** | Choice (`Craft Flaps`, `Map Grid`, `Accordion`, `Origami Corners`) | `Craft Flaps` | Sets how the paper folds into a packet: quarter folds with dog-eared corners, map panels, zigzag pleats, or envelope corners |
+| **1. Fold & Unfold** | **Fold Stages** | Integer (`2` to `5`) | `4` | Sets how many folds open one after another |
+| **1. Fold & Unfold** | **Fold Direction** | Angle (`-360°` to `360°`) | `0°` | Rotates every fold line |
+| **1. Fold & Unfold** | **3D Depth** | Float (`0.0` to `2.0`) | `0.55` | Sets the perspective of lifted flaps; `0` keeps them flat |
+| **1. Fold & Unfold** | **Packet Slide Distance** | Float (`0.0` to `2.0`) | `0.6` | Sets how far the folded packet slides in or out, in frame diagonals; `0` unfolds in place |
+| **1. Fold & Unfold** | **Mirror Horizontal**, **Mirror Vertical** | Boolean | `False` | Mirror the fold layout |
+| **2. Paper Look** | **Torn Paper Border** | Boolean | `True` | Adds a torn cardstock collar while the sheet is folded |
+| **2. Paper Look** | **Border Width** | Float (`0.0` to `0.15`) | `0.018` | Sets the collar width relative to the frame height |
+| **2. Paper Look** | **Torn Edge Roughness** | Float (`0.0` to `0.20`) | `0.012` | Sets the amplitude of the torn edge teeth |
+| **2. Paper Look** | **Tear Frequency** | Float (`1.0` to `120.0`) | `24.0` | Sets the density of the paper tears |
+| **2. Paper Look** | **Paper Color** | RGB color picker | `0.965, 0.945, 0.895` | Colors the paper back and collar |
+| **2. Paper Look** | **Paper Grain** | Float (`0.0` to `1.0`) | `0.38` | Sets the cardstock fiber grain depth |
+| **2. Paper Look** | **Crease Strength** | Float (`0.0` to `1.0`) | `0.52` | Sets the crumple texture and the crease lines along each fold |
+| **2. Paper Look** | **Paper Seed** | Integer (`0` to `1000`) | `7` | Varies tears, creases, jitter, and fold angles |
+| **2. Paper Look** | **Premultiplied Source Alpha** | Boolean | `True` | Clear it only if your clips have straight alpha |
+| **3. Stop-Motion & Shadow** | **Enable Stop-Motion** | Boolean | `True` | Holds each pose like a stop-motion camera |
+| **3. Stop-Motion & Shadow** | **Stop-Motion Steps** | Integer (`2` to `60`) | `10` | Sets the number of distinct poses across the transition |
+| **3. Stop-Motion & Shadow** | **Hand Jitter** | Float (`0.0` to `1.0`) | `0.25` | Adds a small per-pose position and rotation wobble |
+| **3. Stop-Motion & Shadow** | **Shadow Opacity** | Float (`0.0` to `1.0`) | `0.62` | Sets the drop shadow and flap shadow density |
+| **3. Stop-Motion & Shadow** | **Shadow Angle** | Angle (`-360°` to `360°`) | `-45°` | Sets the shadow direction and lights the flaps from the opposite side |
+| **3. Stop-Motion & Shadow** | **Shadow Distance** | Float (`0.0` to `0.20`) | `0.014` | Sets the drop shadow offset; it grows while the packet is lifted |
+| **3. Stop-Motion & Shadow** | **Shadow Softness** | Float (`0.0` to `0.20`) | `0.020` | Sets the drop shadow feather |
+
+The collar, crease lines, jitter, and drop shadow fade out over the last part of
+an unfold (and fade in at the start of a fold), so the clean clip is never
+covered when the transition ends.
+
 ## Mix Foley audio with the Paper SFX library
 
 All four WAV files in `Paper_SFX/` are real microphone recordings standardized to
@@ -385,7 +492,7 @@ DaVinci Resolve **Power Bin** to keep every clip accessible across projects.
 
 | WAV file in `Paper_SFX/`  | Tactile paper gesture                    | Matching visual preset                      |
 | :------------------------ | :--------------------------------------- | :------------------------------------------ |
-| `01_Paper_Unfold.wav`     | Crisp folded sheet spread and settle     | **Paper Unfold (3D)** intro and outro       |
+| `01_Paper_Unfold.wav`     | Crisp folded sheet spread and settle     | **Paper Fold & Unfold** and **Paper Unfold (3D)** |
 | `02_Paper_Crumple.wav`    | Organic stereo paper-ball crumple        | **Crumple Ball** intro and outro            |
 | `03_Paper_Glide_Flip.wav` | Fast page flip and air swoosh            | **Paper Airplane Glide** and quick cuts     |
 | `04_Paper_Rip_Tear.wav`   | Clean dry fiber tear                     | Torn cardstock border and **Flat Cutout Pop** |
@@ -395,9 +502,12 @@ DaVinci Resolve **Power Bin** to keep every clip accessible across projects.
 For smooth 4K timeline playback on CPU OpenFX tracks:
 
 -   Turn on **Playback** > **Render Cache** > **Smart** or **User** after
-    locking in cutout parameters.
+    locking in cutout or transition parameters.
 -   Lower **Playback** > **Timeline Proxy Resolution** to **Half** or
     **Quarter** while timing animation beats.
+-   **Paper Fold & Unfold** renders a 1080p frame in about 28 ms on average on
+    four threads of an Apple M4 Pro Mac. Slower machines, such as a 2017 iMac,
+    may need the render cache to play it back in real time.
 
 ## Troubleshoot common issues
 
@@ -415,8 +525,17 @@ For smooth 4K timeline playback on CPU OpenFX tracks:
 | Effect shown   | Project uses the  | Delete the unavailable generator or         |
 : as unavailable : generator or a    : transition from the timeline, then use      :
 : after          : transition        : **Paper Cutout FX** intro and outro styles  :
-: upgrading to   : removed in 3.0    : instead                                     :
-: 3.0            :                   :                                             :
+: upgrading to   : removed in 3.0    : or the **Paper Fold & Unfold** transition   :
+: 3.0            :                   : instead                                     :
+| Paper Fold &   | Auto read the     | Set **Fold Action** to the behavior you     |
+: Unfold folds   : clips differently : want instead of **Auto**                    :
+: when you       : than expected     :                                             :
+: expected an    :                   :                                             :
+: unfold         :                   :                                             :
+| Paper Fold &   | OpenFX            | Look under **Effects** > **Open FX** >      |
+: Unfold missing : transitions are   : **Transitions** > **MTTN PaperCraft         :
+: from the       : listed apart from : Studio**, not under **Video Transitions**   :
+: transitions    : the built-in ones :                                             :
 | Green spill or | Unkeyed           | Increase **Key Gain** and shift **Edge      |
 : rough halo on  : background pixels : Choke (px)** slightly negative (`-1.5` to   :
 : keyed subjects : entering the      : `-3.0`)                                     :

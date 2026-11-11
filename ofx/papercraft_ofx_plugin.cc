@@ -25,9 +25,16 @@ namespace papercraft {
 namespace ofx {
 namespace {
 
-constexpr int kPluginCount = 1;
+constexpr int kPluginCount = 2;
 constexpr int kVersionMajor = 3;
-constexpr int kVersionMinor = 0;
+constexpr int kVersionMinor = 1;
+constexpr const char* kVersionLabel = "3.1.0";
+
+// Each registered OpenFX plugin gets its own entry points and host suites.
+enum class PluginRole {
+  kCutout = 0,
+  kFoldTransition = 1,
+};
 
 struct HostSuites {
   OfxHost* host = nullptr;
@@ -37,9 +44,9 @@ struct HostSuites {
   const OfxMultiThreadSuiteV1* thread = nullptr;
 };
 
-HostSuites& MutableSuites() {
-  static HostSuites suites;
-  return suites;
+HostSuites& MutableSuites(PluginRole role) {
+  static std::array<HostSuites, kPluginCount> suites;
+  return suites[static_cast<std::size_t>(role)];
 }
 
 bool StrEq(const char* a, const char* b) {
@@ -70,10 +77,13 @@ class ScopedOfxImage {
 };
 
 struct PluginInstance {
+  PluginRole role = PluginRole::kCutout;
   OfxImageClipHandle output_clip = nullptr;
   OfxImageClipHandle source_clip = nullptr;
+  OfxImageClipHandle source_from_clip = nullptr;
+  OfxImageClipHandle source_to_clip = nullptr;
 
-  // Cutout FX parameters.
+  // Cutout FX parameters (several are shared with the fold transition).
   OfxParamHandle source_mode = nullptr;
   OfxParamHandle source_premult = nullptr;
   OfxParamHandle media_scale = nullptr;
@@ -118,6 +128,17 @@ struct PluginInstance {
   OfxParamHandle master_angle = nullptr;
   OfxParamHandle flip_h = nullptr;
   OfxParamHandle flip_v = nullptr;
+
+  // Paper Fold & Unfold transition parameters.
+  OfxParamHandle transition_progress = nullptr;
+  OfxParamHandle fold_action = nullptr;
+  OfxParamHandle fold_pattern = nullptr;
+  OfxParamHandle fold_stages = nullptr;
+  OfxParamHandle fold_direction = nullptr;
+  OfxParamHandle fold_depth = nullptr;
+  OfxParamHandle slide_distance = nullptr;
+  OfxParamHandle stop_motion_steps = nullptr;
+  OfxParamHandle jitter_amount = nullptr;
 };
 
 struct ParallelDispatchContext {
@@ -441,8 +462,102 @@ void DefineCutoutParameters(const HostSuites& s, OfxParamSetHandle param_set) {
                   false);
 }
 
-OfxStatus HandleLoad() {
-  HostSuites& s = MutableSuites();
+void DefineFoldTransitionParameters(const HostSuites& s,
+                                    OfxParamSetHandle param_set) {
+  // Mandatory OpenFX transition progress, animated 0 -> 1 by the host.
+  DefineDoubleParam(s, param_set, kOfxImageEffectTransitionParamName,
+                    "Progress", nullptr,
+                    "Transition progress driven by the timeline (0 to 1).",
+                    kOfxParamDoubleTypePlain, 0.0, 0.0, 1.0, 0.0, 1.0);
+
+  DefineGroupParam(s, param_set, "FoldGroup", "1. Fold & Unfold", true);
+  constexpr std::array<const char*, 4> kActions = {
+      "Auto (Unfold In / Fold Out)", "Unfold Incoming Clip",
+      "Fold Outgoing Clip", "Fold Out, Then Unfold In"};
+  DefineChoiceParam(
+      s, param_set, "foldAction", "Fold Action", "FoldGroup",
+      "Auto unfolds at the start of a clip and folds at its end.", 0,
+      kActions);
+  constexpr std::array<const char*, 4> kPatterns = {
+      "Craft Flaps", "Map Grid", "Accordion", "Origami Corners"};
+  DefineChoiceParam(s, param_set, "foldPattern", "Fold Pattern", "FoldGroup",
+                    "How the paper is folded into a small packet.", 0,
+                    kPatterns);
+  DefineIntParam(s, param_set, "foldStages", "Fold Stages", "FoldGroup",
+                 "Folds that open one after another.", 4, 2, 5, 2, 5);
+  DefineDoubleParam(s, param_set, "foldDirection", "Fold Direction",
+                    "FoldGroup", "Rotates every fold line, in degrees.",
+                    kOfxParamDoubleTypeAngle, 0.0, -360.0, 360.0, -180.0,
+                    180.0);
+  DefineDoubleParam(s, param_set, "foldDepth", "3D Depth", "FoldGroup",
+                    "Perspective of the lifted flaps (0 = flat).",
+                    kOfxParamDoubleTypePlain, 0.55, 0.0, 2.0, 0.0, 1.5);
+  DefineDoubleParam(
+      s, param_set, "slideDistance", "Packet Slide Distance", "FoldGroup",
+      "How far the folded packet slides in or out (0 = stays in place).",
+      kOfxParamDoubleTypePlain, 0.6, 0.0, 2.0, 0.0, 1.5);
+  DefineBoolParam(s, param_set, "mirrorTransH", "Mirror Horizontal",
+                  "FoldGroup", "Mirror the fold layout left/right.", false);
+  DefineBoolParam(s, param_set, "mirrorTransV", "Mirror Vertical",
+                  "FoldGroup", "Mirror the fold layout top/bottom.", false);
+
+  DefineGroupParam(s, param_set, "PaperGroup", "2. Paper Look", true);
+  DefineBoolParam(s, param_set, "enableBorder", "Torn Paper Border",
+                  "PaperGroup",
+                  "Torn cardstock collar shown while the sheet is folded.",
+                  true);
+  DefineDoubleParam(s, param_set, "borderWidth", "Border Width", "PaperGroup",
+                    "Cardstock collar width around the clip.",
+                    kOfxParamDoubleTypePlain, 0.018, 0.0, 0.15, 0.0, 0.06);
+  DefineDoubleParam(s, param_set, "tearRoughness", "Torn Edge Roughness",
+                    "PaperGroup", "Amplitude of the ragged paper fibers.",
+                    kOfxParamDoubleTypePlain, 0.012, 0.0, 0.20, 0.0, 0.06);
+  DefineDoubleParam(s, param_set, "tearFrequency", "Tear Frequency",
+                    "PaperGroup", "Spatial density of the paper tears.",
+                    kOfxParamDoubleTypePlain, 24.0, 1.0, 120.0, 2.0, 60.0);
+  DefineRgbParam(s, param_set, "paperColor", "Paper Color", "PaperGroup",
+                 "Color of the paper back and collar.", 0.965, 0.945, 0.895);
+  DefineDoubleParam(s, param_set, "grainStrength", "Paper Grain",
+                    "PaperGroup", "Cardstock fiber grain depth.",
+                    kOfxParamDoubleTypePlain, 0.38, 0.0, 1.0, 0.0, 1.0);
+  DefineDoubleParam(s, param_set, "creaseStrength", "Crease Strength",
+                    "PaperGroup", "Crumple texture and fold-line creases.",
+                    kOfxParamDoubleTypePlain, 0.52, 0.0, 1.0, 0.0, 1.0);
+  DefineIntParam(s, param_set, "randomSeed", "Paper Seed", "PaperGroup",
+                 "Varies tears, creases, jitter, and fold angles.", 7, 0, 1000,
+                 0, 100);
+  DefineBoolParam(s, param_set, "sourcePremult", "Premultiplied Source Alpha",
+                  "PaperGroup",
+                  "Disable only if the clips have straight alpha.", true);
+
+  DefineGroupParam(s, param_set, "MotionGroup", "3. Stop-Motion & Shadow",
+                   true);
+  DefineBoolParam(s, param_set, "enableStopMotion", "Enable Stop-Motion",
+                  "MotionGroup", "Hold each pose like a stop-motion camera.",
+                  true);
+  DefineIntParam(s, param_set, "stopMotionSteps", "Stop-Motion Steps",
+                 "MotionGroup", "Distinct poses across the transition.", 10, 2,
+                 60, 4, 30);
+  DefineDoubleParam(s, param_set, "jitterAmount", "Hand Jitter", "MotionGroup",
+                    "Small per-step position and rotation wobble.",
+                    kOfxParamDoubleTypePlain, 0.25, 0.0, 1.0, 0.0, 1.0);
+  DefineDoubleParam(s, param_set, "shadowOpacity", "Shadow Opacity",
+                    "MotionGroup", "Drop shadow and flap shadow density.",
+                    kOfxParamDoubleTypePlain, 0.62, 0.0, 1.0, 0.0, 1.0);
+  DefineDoubleParam(s, param_set, "shadowAngle", "Shadow Angle", "MotionGroup",
+                    "Shadow direction; also sets the light on the flaps.",
+                    kOfxParamDoubleTypeAngle, -45.0, -360.0, 360.0, -180.0,
+                    180.0);
+  DefineDoubleParam(s, param_set, "shadowDistance", "Shadow Distance",
+                    "MotionGroup", "Drop shadow offset.",
+                    kOfxParamDoubleTypePlain, 0.014, 0.0, 0.20, 0.0, 0.08);
+  DefineDoubleParam(s, param_set, "shadowSoftness", "Shadow Softness",
+                    "MotionGroup", "Feather of the drop shadow.",
+                    kOfxParamDoubleTypePlain, 0.020, 0.0, 0.20, 0.0, 0.08);
+}
+
+OfxStatus HandleLoad(PluginRole role) {
+  HostSuites& s = MutableSuites(role);
   if (s.host == nullptr || s.host->fetchSuite == nullptr) {
     return kOfxStatErrMissingHostFeature;
   }
@@ -460,8 +575,8 @@ OfxStatus HandleLoad() {
   return kOfxStatOK;
 }
 
-OfxStatus HandleUnload() {
-  HostSuites& s = MutableSuites();
+OfxStatus HandleUnload(PluginRole role) {
+  HostSuites& s = MutableSuites(role);
   s.prop = nullptr;
   s.param = nullptr;
   s.effect = nullptr;
@@ -469,20 +584,28 @@ OfxStatus HandleUnload() {
   return kOfxStatOK;
 }
 
-OfxStatus HandleDescribe(OfxImageEffectHandle effect) {
-  const HostSuites& s = MutableSuites();
+OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
+  const HostSuites& s = MutableSuites(role);
   OfxPropertySetHandle props = nullptr;
   if (s.effect->getPropertySet(effect, &props) != kOfxStatOK ||
       props == nullptr) {
     return kOfxStatFailed;
   }
 
-  const char* label = "Paper Cutout FX";
-  const char* short_label = "PaperCutout";
-  const char* long_label = "MTTN PaperCraft Studio: Paper Cutout FX";
+  const bool is_transition = role == PluginRole::kFoldTransition;
+  const char* label = is_transition ? "Paper Fold & Unfold" : "Paper Cutout FX";
+  const char* short_label = is_transition ? "PaperFold" : "PaperCutout";
+  const char* long_label =
+      is_transition ? "MTTN PaperCraft Studio: Paper Fold & Unfold"
+                    : "MTTN PaperCraft Studio: Paper Cutout FX";
   const char* desc =
-      "Real-time torn paper cutout border, fiber texture, fold creases, "
-      "green screen key, intro/outro paper animations, and stop-motion jitter.";
+      is_transition
+          ? "Stop-motion paper transition: clips unfold from a folded packet "
+            "or fold away, with paper backside, creases, torn edges, and "
+            "shadows."
+          : "Real-time torn paper cutout border, fiber texture, fold creases, "
+            "green screen key, intro/outro paper animations, and stop-motion "
+            "jitter.";
   s.prop->propSetString(props, kOfxPropLabel, 0, label);
   s.prop->propSetString(props, kOfxPropShortLabel, 0, short_label);
   s.prop->propSetString(props, kOfxPropLongLabel, 0, long_label);
@@ -492,10 +615,11 @@ OfxStatus HandleDescribe(OfxImageEffectHandle effect) {
 
   const int version[2] = {kVersionMajor, kVersionMinor};
   s.prop->propSetIntN(props, kOfxPropVersion, 2, version);
-  s.prop->propSetString(props, kOfxPropVersionLabel, 0, "3.0.0");
+  s.prop->propSetString(props, kOfxPropVersionLabel, 0, kVersionLabel);
 
   s.prop->propSetString(props, kOfxImageEffectPropSupportedContexts, 0,
-                        kOfxImageEffectContextFilter);
+                        is_transition ? kOfxImageEffectContextTransition
+                                      : kOfxImageEffectContextFilter);
 
   const char* depths[3] = {kOfxBitDepthFloat, kOfxBitDepthShort,
                            kOfxBitDepthByte};
@@ -506,13 +630,31 @@ OfxStatus HandleDescribe(OfxImageEffectHandle effect) {
                         kOfxImageEffectRenderFullySafe);
   s.prop->propSetInt(props, kOfxImageEffectPluginPropHostFrameThreading, 0, 1);
   s.prop->propSetInt(props, kOfxImageEffectPropSupportsMultiResolution, 0, 1);
+  // Folds and torn collars move pixels across the whole frame.
   s.prop->propSetInt(props, kOfxImageEffectPropSupportsTiles, 0, 0);
   return kOfxStatOK;
 }
 
-OfxStatus HandleDescribeInContext(OfxImageEffectHandle effect,
+// Defines an RGBA clip that always arrives as one full-frame buffer.
+bool DefineRgbaClip(const HostSuites& s, OfxImageEffectHandle effect,
+                    const char* name, bool optional) {
+  OfxPropertySetHandle props = nullptr;
+  if (s.effect->clipDefine(effect, name, &props) != kOfxStatOK ||
+      props == nullptr) {
+    return false;
+  }
+  s.prop->propSetString(props, kOfxImageEffectPropSupportedComponents, 0,
+                        kOfxImageComponentRGBA);
+  if (optional) {
+    s.prop->propSetInt(props, kOfxImageClipPropOptional, 0, 1);
+  }
+  s.prop->propSetInt(props, kOfxImageEffectPropSupportsTiles, 0, 0);
+  return true;
+}
+
+OfxStatus HandleDescribeInContext(PluginRole role, OfxImageEffectHandle effect,
                                   OfxPropertySetHandle in_args) {
-  const HostSuites& s = MutableSuites();
+  const HostSuites& s = MutableSuites(role);
   char* context = nullptr;
   if (in_args == nullptr ||
       s.prop->propGetString(in_args, kOfxImageEffectPropContext, 0, &context) !=
@@ -520,42 +662,43 @@ OfxStatus HandleDescribeInContext(OfxImageEffectHandle effect,
     return kOfxStatFailed;
   }
 
-  if (!StrEq(context, kOfxImageEffectContextFilter)) {
+  const bool is_transition = role == PluginRole::kFoldTransition;
+  if (!StrEq(context, is_transition ? kOfxImageEffectContextTransition
+                                    : kOfxImageEffectContextFilter)) {
     return kOfxStatErrMissingHostFeature;
   }
 
-  OfxPropertySetHandle out_clip_props = nullptr;
-  if (s.effect->clipDefine(effect, kOfxImageEffectOutputClipName,
-                           &out_clip_props) != kOfxStatOK ||
-      out_clip_props == nullptr) {
+  if (!DefineRgbaClip(s, effect, kOfxImageEffectOutputClipName, false)) {
     return kOfxStatFailed;
   }
-  s.prop->propSetString(out_clip_props, kOfxImageEffectPropSupportedComponents,
-                        0, kOfxImageComponentRGBA);
-  s.prop->propSetInt(out_clip_props, kOfxImageEffectPropSupportsTiles, 0, 0);
-
-  OfxPropertySetHandle src_props = nullptr;
-  if (s.effect->clipDefine(effect, kOfxImageEffectSimpleSourceClipName,
-                           &src_props) != kOfxStatOK ||
-      src_props == nullptr) {
+  const bool clips_ok =
+      is_transition
+          ? DefineRgbaClip(s, effect,
+                           kOfxImageEffectTransitionSourceFromClipName,
+                           false) &&
+                DefineRgbaClip(s, effect,
+                               kOfxImageEffectTransitionSourceToClipName, false)
+          : DefineRgbaClip(s, effect, kOfxImageEffectSimpleSourceClipName,
+                           true);
+  if (!clips_ok) {
     return kOfxStatFailed;
   }
-  s.prop->propSetString(src_props, kOfxImageEffectPropSupportedComponents, 0,
-                        kOfxImageComponentRGBA);
-  s.prop->propSetInt(src_props, kOfxImageClipPropOptional, 0, 1);
-  s.prop->propSetInt(src_props, kOfxImageEffectPropSupportsTiles, 0, 0);
 
   OfxParamSetHandle param_set = nullptr;
   if (s.effect->getParamSet(effect, &param_set) != kOfxStatOK ||
       param_set == nullptr) {
     return kOfxStatFailed;
   }
-  DefineCutoutParameters(s, param_set);
+  if (is_transition) {
+    DefineFoldTransitionParameters(s, param_set);
+  } else {
+    DefineCutoutParameters(s, param_set);
+  }
   return kOfxStatOK;
 }
 
-OfxStatus HandleCreateInstance(OfxImageEffectHandle effect) {
-  const HostSuites& s = MutableSuites();
+OfxStatus HandleCreateInstance(PluginRole role, OfxImageEffectHandle effect) {
+  const HostSuites& s = MutableSuites(role);
   OfxPropertySetHandle props = nullptr;
   OfxParamSetHandle param_set = nullptr;
   if (s.effect->getPropertySet(effect, &props) != kOfxStatOK ||
@@ -565,43 +708,22 @@ OfxStatus HandleCreateInstance(OfxImageEffectHandle effect) {
   }
 
   auto inst = std::make_unique<PluginInstance>();
-
+  inst->role = role;
   s.effect->clipGetHandle(effect, kOfxImageEffectOutputClipName,
                           &inst->output_clip, nullptr);
-  s.effect->clipGetHandle(effect, kOfxImageEffectSimpleSourceClipName,
-                          &inst->source_clip, nullptr);
   auto bind = [&](const char* name, OfxParamHandle* out) {
     s.param->paramGetHandle(param_set, name, out, nullptr);
   };
-  bind("sourceMode", &inst->source_mode);
+  // Parameters shared by both plugins.
   bind("sourcePremult", &inst->source_premult);
-  bind("mediaScale", &inst->media_scale);
-  bind("mediaOffset", &inst->media_offset);
-  bind("mediaAngle", &inst->media_angle);
-  bind("enableChromaKey", &inst->enable_chroma_key);
-  bind("keyColor", &inst->key_color);
-  bind("keyGain", &inst->key_gain);
-  bind("keyBalance", &inst->key_balance);
-  bind("edgeChokePx", &inst->edge_choke_px);
   bind("enableBorder", &inst->enable_border);
   bind("borderWidth", &inst->border_width);
   bind("tearRoughness", &inst->tear_roughness);
   bind("tearFrequency", &inst->tear_frequency);
-  bind("tearDetail", &inst->tear_detail);
-  bind("edgeBoil", &inst->edge_boil);
   bind("paperColor", &inst->paper_color);
   bind("grainStrength", &inst->grain_strength);
-  bind("grainScale", &inst->grain_scale);
   bind("creaseStrength", &inst->crease_strength);
-  bind("creaseScale", &inst->crease_scale);
-  bind("mediaTextureOverlay", &inst->media_texture_overlay);
   bind("randomSeed", &inst->random_seed);
-  bind("introStyle", &inst->intro_style);
-  bind("introFrames", &inst->intro_frames);
-  bind("outroStyle", &inst->outro_style);
-  bind("outroFrames", &inst->outro_frames);
-  bind("transitionAngle", &inst->transition_angle);
-  bind("glideDistance", &inst->glide_distance);
   bind("mirrorTransH", &inst->mirror_trans_h);
   bind("mirrorTransV", &inst->mirror_trans_v);
   bind("shadowOpacity", &inst->shadow_opacity);
@@ -609,14 +731,53 @@ OfxStatus HandleCreateInstance(OfxImageEffectHandle effect) {
   bind("shadowDistance", &inst->shadow_distance);
   bind("shadowSoftness", &inst->shadow_softness);
   bind("enableStopMotion", &inst->enable_stop_motion);
-  bind("holdFrames", &inst->hold_frames);
-  bind("jitterPos", &inst->jitter_pos);
-  bind("jitterRot", &inst->jitter_rot);
-  bind("masterPos", &inst->master_pos);
-  bind("masterScale", &inst->master_scale);
-  bind("masterAngle", &inst->master_angle);
-  bind("flipH", &inst->flip_h);
-  bind("flipV", &inst->flip_v);
+
+  if (role == PluginRole::kFoldTransition) {
+    s.effect->clipGetHandle(effect, kOfxImageEffectTransitionSourceFromClipName,
+                            &inst->source_from_clip, nullptr);
+    s.effect->clipGetHandle(effect, kOfxImageEffectTransitionSourceToClipName,
+                            &inst->source_to_clip, nullptr);
+    bind(kOfxImageEffectTransitionParamName, &inst->transition_progress);
+    bind("foldAction", &inst->fold_action);
+    bind("foldPattern", &inst->fold_pattern);
+    bind("foldStages", &inst->fold_stages);
+    bind("foldDirection", &inst->fold_direction);
+    bind("foldDepth", &inst->fold_depth);
+    bind("slideDistance", &inst->slide_distance);
+    bind("stopMotionSteps", &inst->stop_motion_steps);
+    bind("jitterAmount", &inst->jitter_amount);
+  } else {
+    s.effect->clipGetHandle(effect, kOfxImageEffectSimpleSourceClipName,
+                            &inst->source_clip, nullptr);
+    bind("sourceMode", &inst->source_mode);
+    bind("mediaScale", &inst->media_scale);
+    bind("mediaOffset", &inst->media_offset);
+    bind("mediaAngle", &inst->media_angle);
+    bind("enableChromaKey", &inst->enable_chroma_key);
+    bind("keyColor", &inst->key_color);
+    bind("keyGain", &inst->key_gain);
+    bind("keyBalance", &inst->key_balance);
+    bind("edgeChokePx", &inst->edge_choke_px);
+    bind("tearDetail", &inst->tear_detail);
+    bind("edgeBoil", &inst->edge_boil);
+    bind("grainScale", &inst->grain_scale);
+    bind("creaseScale", &inst->crease_scale);
+    bind("mediaTextureOverlay", &inst->media_texture_overlay);
+    bind("introStyle", &inst->intro_style);
+    bind("introFrames", &inst->intro_frames);
+    bind("outroStyle", &inst->outro_style);
+    bind("outroFrames", &inst->outro_frames);
+    bind("transitionAngle", &inst->transition_angle);
+    bind("glideDistance", &inst->glide_distance);
+    bind("holdFrames", &inst->hold_frames);
+    bind("jitterPos", &inst->jitter_pos);
+    bind("jitterRot", &inst->jitter_rot);
+    bind("masterPos", &inst->master_pos);
+    bind("masterScale", &inst->master_scale);
+    bind("masterAngle", &inst->master_angle);
+    bind("flipH", &inst->flip_h);
+    bind("flipV", &inst->flip_v);
+  }
 
   if (s.prop->propSetPointer(props, kOfxPropInstanceData, 0, inst.get()) !=
       kOfxStatOK) {
@@ -641,8 +802,8 @@ PluginInstance* GetInstance(const HostSuites& s, OfxImageEffectHandle effect) {
   return static_cast<PluginInstance*>(raw);
 }
 
-OfxStatus HandleDestroyInstance(OfxImageEffectHandle effect) {
-  const HostSuites& s = MutableSuites();
+OfxStatus HandleDestroyInstance(PluginRole role, OfxImageEffectHandle effect) {
+  const HostSuites& s = MutableSuites(role);
   OfxPropertySetHandle props = nullptr;
   if (s.effect->getPropertySet(effect, &props) != kOfxStatOK ||
       props == nullptr) {
@@ -688,26 +849,52 @@ const char* PickPreferredDepth(const HostSuites& s, OfxImageClipHandle clip) {
   return kOfxBitDepthFloat;
 }
 
-OfxStatus HandleGetClipPreferences(OfxImageEffectHandle effect,
+OfxStatus HandleGetClipPreferences(PluginRole role, OfxImageEffectHandle effect,
                                    OfxPropertySetHandle out_args) {
-  const HostSuites& s = MutableSuites();
+  const HostSuites& s = MutableSuites(role);
   PluginInstance* inst = GetInstance(s, effect);
   if (inst == nullptr || out_args == nullptr) {
     return kOfxStatFailed;
   }
 
-  const char* depth = kOfxBitDepthFloat;
-  const char* src_depth = PickPreferredDepth(s, inst->source_clip);
-  if (src_depth != nullptr) {
-    depth = src_depth;
+  // Inputs keep their own depth when they agree; mixed inputs go float.
+  struct InputClip {
+    OfxImageClipHandle handle;
+    const char* components_prop;
+    const char* depth_prop;
+  };
+  std::array<InputClip, 2> inputs = {
+      InputClip{inst->source_clip, "OfxImageClipPropComponents_Source",
+                "OfxImageClipPropDepth_Source"},
+      InputClip{nullptr, nullptr, nullptr}};
+  if (role == PluginRole::kFoldTransition) {
+    inputs = {InputClip{inst->source_from_clip,
+                        "OfxImageClipPropComponents_SourceFrom",
+                        "OfxImageClipPropDepth_SourceFrom"},
+              InputClip{inst->source_to_clip,
+                        "OfxImageClipPropComponents_SourceTo",
+                        "OfxImageClipPropDepth_SourceTo"}};
+  }
+  const char* depth = nullptr;
+  for (const InputClip& in : inputs) {
+    const char* d = PickPreferredDepth(s, in.handle);
+    if (d != nullptr) {
+      depth = (depth == nullptr || StrEq(depth, d)) ? d : kOfxBitDepthFloat;
+    }
+  }
+  const bool any_connected = depth != nullptr;
+  if (!any_connected) {
+    depth = kOfxBitDepthFloat;
   }
   s.prop->propSetString(out_args, "OfxImageClipPropComponents_Output", 0,
                         kOfxImageComponentRGBA);
   s.prop->propSetString(out_args, "OfxImageClipPropDepth_Output", 0, depth);
-  if (src_depth != nullptr) {
-    s.prop->propSetString(out_args, "OfxImageClipPropComponents_Source", 0,
-                          kOfxImageComponentRGBA);
-    s.prop->propSetString(out_args, "OfxImageClipPropDepth_Source", 0, depth);
+  for (const InputClip& in : inputs) {
+    if (any_connected && PickPreferredDepth(s, in.handle) != nullptr) {
+      s.prop->propSetString(out_args, in.components_prop, 0,
+                            kOfxImageComponentRGBA);
+      s.prop->propSetString(out_args, in.depth_prop, 0, depth);
+    }
   }
   s.prop->propSetInt(out_args, kOfxImageEffectFrameVarying, 0, 1);
 
@@ -716,10 +903,11 @@ OfxStatus HandleGetClipPreferences(OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
-OfxStatus HandleGetRegionsOfInterest(OfxImageEffectHandle effect,
+OfxStatus HandleGetRegionsOfInterest(PluginRole role,
+                                     OfxImageEffectHandle effect,
                                      OfxPropertySetHandle in_args,
                                      OfxPropertySetHandle out_args) {
-  const HostSuites& s = MutableSuites();
+  const HostSuites& s = MutableSuites(role);
   PluginInstance* inst = GetInstance(s, effect);
   if (inst == nullptr || in_args == nullptr || out_args == nullptr) {
     return kOfxStatReplyDefault;
@@ -748,7 +936,12 @@ OfxStatus HandleGetRegionsOfInterest(OfxImageEffectHandle effect,
     }
   };
 
-  request_full_clip(inst->source_clip, "OfxImageClipPropRoI_Source");
+  if (role == PluginRole::kFoldTransition) {
+    request_full_clip(inst->source_from_clip, "OfxImageClipPropRoI_SourceFrom");
+    request_full_clip(inst->source_to_clip, "OfxImageClipPropRoI_SourceTo");
+  } else {
+    request_full_clip(inst->source_clip, "OfxImageClipPropRoI_Source");
+  }
   return set_any ? kOfxStatOK : kOfxStatReplyDefault;
 }
 
@@ -917,6 +1110,72 @@ CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
   return cp;
 }
 
+PaperFoldTransitionParams ReadFoldTransitionParams(const HostSuites& s,
+                                                   const PluginInstance& inst,
+                                                   OfxTime time) {
+  PaperFoldTransitionParams tp;
+  tp.progress = ReadFloatParam(s, inst.transition_progress, time, 0.0f);
+  tp.fold_action = ReadIntParam(s, inst.fold_action, time, 0);
+  tp.fold_pattern = ReadIntParam(s, inst.fold_pattern, time, 0);
+  tp.fold_stages = ReadIntParam(s, inst.fold_stages, time, 4);
+  tp.direction_angle_deg = ReadFloatParam(s, inst.fold_direction, time, 0.0f);
+  tp.fold_depth = ReadFloatParam(s, inst.fold_depth, time, 0.55f);
+  tp.slide_distance = ReadFloatParam(s, inst.slide_distance, time, 0.6f);
+  tp.mirror_h = ReadBoolParam(s, inst.mirror_trans_h, time, false);
+  tp.mirror_v = ReadBoolParam(s, inst.mirror_trans_v, time, false);
+
+  tp.enable_border = ReadBoolParam(s, inst.enable_border, time, true);
+  tp.border_width_norm = ReadFloatParam(s, inst.border_width, time, 0.018f);
+  tp.tear_roughness_norm =
+      ReadFloatParam(s, inst.tear_roughness, time, 0.012f);
+  tp.tear_frequency = ReadFloatParam(s, inst.tear_frequency, time, 24.0f);
+  ReadRgbParam(s, inst.paper_color, time, &tp.paper_r, &tp.paper_g,
+               &tp.paper_b, 0.965f, 0.945f, 0.895f);
+  tp.grain_strength = ReadFloatParam(s, inst.grain_strength, time, 0.38f);
+  tp.crease_strength = ReadFloatParam(s, inst.crease_strength, time, 0.52f);
+  tp.random_seed = ReadIntParam(s, inst.random_seed, time, 7);
+  tp.source_is_premultiplied =
+      ReadBoolParam(s, inst.source_premult, time, true);
+
+  tp.enable_stop_motion = ReadBoolParam(s, inst.enable_stop_motion, time, true);
+  tp.stop_motion_steps = ReadIntParam(s, inst.stop_motion_steps, time, 10);
+  tp.jitter_amount = ReadFloatParam(s, inst.jitter_amount, time, 0.25f);
+  tp.shadow_opacity = ReadFloatParam(s, inst.shadow_opacity, time, 0.62f);
+  tp.shadow_angle_deg = ReadFloatParam(s, inst.shadow_angle, time, -45.0f);
+  tp.shadow_distance_norm =
+      ReadFloatParam(s, inst.shadow_distance, time, 0.014f);
+  tp.shadow_softness_norm =
+      ReadFloatParam(s, inst.shadow_softness, time, 0.020f);
+  return tp;
+}
+
+// The first and last transition frames are the outgoing and incoming clips
+// unchanged, so the host can skip rendering them.
+OfxStatus HandleIsIdentity(PluginRole role, OfxImageEffectHandle effect,
+                           OfxPropertySetHandle in_args,
+                           OfxPropertySetHandle out_args) {
+  if (role != PluginRole::kFoldTransition) {
+    return kOfxStatReplyDefault;
+  }
+  const HostSuites& s = MutableSuites(role);
+  PluginInstance* inst = GetInstance(s, effect);
+  if (inst == nullptr || in_args == nullptr || out_args == nullptr) {
+    return kOfxStatReplyDefault;
+  }
+  double time = 0.0;
+  s.prop->propGetDouble(in_args, kOfxPropTime, 0, &time);
+  const float p = ComputeSteppedTransitionProgress(
+      ReadFoldTransitionParams(s, *inst, time));
+  if (p > 0.0f && p < 1.0f) {
+    return kOfxStatReplyDefault;
+  }
+  s.prop->propSetString(out_args, kOfxPropName, 0,
+                        p <= 0.0f ? kOfxImageEffectTransitionSourceFromClipName
+                                  : kOfxImageEffectTransitionSourceToClipName);
+  s.prop->propSetDouble(out_args, kOfxPropTime, 0, time);
+  return kOfxStatOK;
+}
+
 AlphaMode ParseAlphaMode(const HostSuites& s, OfxImageClipHandle clip,
                          OfxPropertySetHandle img_handle) {
   char* premult = nullptr;
@@ -1003,9 +1262,9 @@ bool ExtractImageView(const HostSuites& s, OfxImageClipHandle clip,
   return IsValidRgbaView(*out_view);
 }
 
-OfxStatus HandleRender(OfxImageEffectHandle effect,
+OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
                        OfxPropertySetHandle in_args) {
-  const HostSuites& s = MutableSuites();
+  const HostSuites& s = MutableSuites(role);
   PluginInstance* inst = GetInstance(s, effect);
   if (inst == nullptr || in_args == nullptr || inst->output_clip == nullptr) {
     return kOfxStatFailed;
@@ -1072,6 +1331,43 @@ OfxStatus HandleRender(OfxImageEffectHandle effect,
     }
   };
 
+  if (role == PluginRole::kFoldTransition) {
+    const PaperFoldTransitionParams tp =
+        ReadFoldTransitionParams(s, *inst, time);
+    const float p = ComputeSteppedTransitionProgress(tp);
+    // A missing image is the empty side of a clip edge, not an error.
+    auto fetch = [&](OfxImageClipHandle clip, ScopedOfxImage* guard,
+                     ImageView* view) {
+      if (clip == nullptr || s.effect->clipGetImage(clip, time, nullptr,
+                                                    &guard->handle) !=
+                                 kOfxStatOK) {
+        return true;
+      }
+      bool wrong_fmt = false;
+      if (!ExtractImageView(s, clip, guard->handle, view, &wrong_fmt)) {
+        *view = ImageView{};
+        return !wrong_fmt;
+      }
+      if (!tp.source_is_premultiplied &&
+          view->alpha_mode != AlphaMode::kOpaque) {
+        view->alpha_mode = AlphaMode::kUnPremultiplied;
+      }
+      return true;
+    };
+    ScopedOfxImage from_guard(s.effect);
+    ScopedOfxImage to_guard(s.effect);
+    ImageView from_view;
+    ImageView to_view;
+    if ((p < 1.0f &&
+         !fetch(inst->source_from_clip, &from_guard, &from_view)) ||
+        (p > 0.0f && !fetch(inst->source_to_clip, &to_guard, &to_view))) {
+      return kOfxStatErrImageFormat;
+    }
+    RenderPaperFoldTransition(tp, from_view, to_view, out_view, canvas_bounds,
+                              render_window, parallel_for);
+    return kOfxStatOK;
+  }
+
   CutoutParams cp = ReadCutoutParams(s, *inst, time, render_scale[0]);
   ScopedOfxImage src_guard(s.effect);
   ImageView src_view;
@@ -1095,37 +1391,40 @@ OfxStatus HandleRender(OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
-OfxStatus DispatchAction(const char* action, const void* handle,
-                         OfxPropertySetHandle in_args,
+OfxStatus DispatchAction(PluginRole role, const char* action,
+                         const void* handle, OfxPropertySetHandle in_args,
                          OfxPropertySetHandle out_args) {
   if (StrEq(action, kOfxActionLoad)) {
-    return HandleLoad();
+    return HandleLoad(role);
   }
   if (StrEq(action, kOfxActionUnload)) {
-    return HandleUnload();
+    return HandleUnload(role);
   }
 
   auto effect = static_cast<OfxImageEffectHandle>(const_cast<void*>(handle));
   if (StrEq(action, kOfxActionDescribe)) {
-    return HandleDescribe(effect);
+    return HandleDescribe(role, effect);
   }
   if (StrEq(action, kOfxImageEffectActionDescribeInContext)) {
-    return HandleDescribeInContext(effect, in_args);
+    return HandleDescribeInContext(role, effect, in_args);
   }
   if (StrEq(action, kOfxActionCreateInstance)) {
-    return HandleCreateInstance(effect);
+    return HandleCreateInstance(role, effect);
   }
   if (StrEq(action, kOfxActionDestroyInstance)) {
-    return HandleDestroyInstance(effect);
+    return HandleDestroyInstance(role, effect);
   }
   if (StrEq(action, kOfxImageEffectActionGetClipPreferences)) {
-    return HandleGetClipPreferences(effect, out_args);
+    return HandleGetClipPreferences(role, effect, out_args);
   }
   if (StrEq(action, kOfxImageEffectActionGetRegionsOfInterest)) {
-    return HandleGetRegionsOfInterest(effect, in_args, out_args);
+    return HandleGetRegionsOfInterest(role, effect, in_args, out_args);
+  }
+  if (StrEq(action, kOfxImageEffectActionIsIdentity)) {
+    return HandleIsIdentity(role, effect, in_args, out_args);
   }
   if (StrEq(action, kOfxImageEffectActionRender)) {
-    return HandleRender(effect, in_args);
+    return HandleRender(role, effect, in_args);
   }
   if (StrEq(action, kOfxImageEffectActionBeginSequenceRender) ||
       StrEq(action, kOfxImageEffectActionEndSequenceRender) ||
@@ -1141,12 +1440,26 @@ OfxStatus DispatchAction(const char* action, const void* handle,
   return kOfxStatReplyDefault;
 }
 
-void SetHost(OfxHost* host) { MutableSuites().host = host; }
+void SetHostCutout(OfxHost* host) {
+  MutableSuites(PluginRole::kCutout).host = host;
+}
 
-OfxStatus MainEntry(const char* action, const void* handle,
-                    OfxPropertySetHandle in_args,
-                    OfxPropertySetHandle out_args) {
-  return DispatchAction(action, handle, in_args, out_args);
+void SetHostFoldTransition(OfxHost* host) {
+  MutableSuites(PluginRole::kFoldTransition).host = host;
+}
+
+OfxStatus MainEntryCutout(const char* action, const void* handle,
+                          OfxPropertySetHandle in_args,
+                          OfxPropertySetHandle out_args) {
+  return DispatchAction(PluginRole::kCutout, action, handle, in_args,
+                        out_args);
+}
+
+OfxStatus MainEntryFoldTransition(const char* action, const void* handle,
+                                  OfxPropertySetHandle in_args,
+                                  OfxPropertySetHandle out_args) {
+  return DispatchAction(PluginRole::kFoldTransition, action, handle, in_args,
+                        out_args);
 }
 
 OfxPlugin gPlugins[kPluginCount] = {
@@ -1156,8 +1469,17 @@ OfxPlugin gPlugins[kPluginCount] = {
         "com.papercraft.CutoutFX",
         kVersionMajor,
         kVersionMinor,
-        SetHost,
-        MainEntry,
+        SetHostCutout,
+        MainEntryCutout,
+    },
+    {
+        kOfxImageEffectPluginApi,
+        kOfxImageEffectPluginApiVersion,
+        "com.papercraft.PaperFoldTransition",
+        kVersionMajor,
+        kVersionMinor,
+        SetHostFoldTransition,
+        MainEntryFoldTransition,
     },
 };
 

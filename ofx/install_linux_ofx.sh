@@ -78,6 +78,7 @@ main() {
   fi
   echo "Installed ${BUNDLE_NAME} to ${dest_dir}/${BUNDLE_NAME}"
   echo "Restart DaVinci Resolve and open Effects > Open FX > MTTN PaperCraft Studio on the Edit tab."
+  echo "The Paper Fold & Unfold transition is under Effects > Open FX > Transitions > MTTN PaperCraft Studio."
 }
 
 main "$@"

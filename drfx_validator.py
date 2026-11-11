@@ -237,16 +237,28 @@ def validate_drfx_bytes(drfx_bytes: bytes) -> None:
   with zipfile.ZipFile(io.BytesIO(drfx_bytes), "r") as zf:
     names = set(zf.namelist())
     setting_files = sorted(n for n in names if n.endswith(".setting"))
-    if len(setting_files) != 1:
+    kinds_by_prefix = {
+        "Edit/Effects/": "effect",
+        "Edit/Transitions/": "transition",
+    }
+    found_kinds = sorted(
+        kind
+        for path in setting_files
+        for prefix, kind in kinds_by_prefix.items()
+        if path.startswith(prefix)
+    )
+    if found_kinds != ["effect", "transition"] or len(setting_files) != 2:
       raise ValueError(
-          f"Expected 1 .setting template in .drfx, found {len(setting_files)}."
+          "Expected one Edit/Effects and one Edit/Transitions .setting template"
+          f" in .drfx, found {setting_files}."
       )
 
     for setting_path in setting_files:
-      if setting_path.startswith("Edit/Effects/"):
-        kind = "effect"
-      else:
-        raise ValueError(f"Invalid .drfx template path: {setting_path}")
+      kind = next(
+          kind
+          for prefix, kind in kinds_by_prefix.items()
+          if setting_path.startswith(prefix)
+      )
 
       setting_text = zf.read(setting_path).decode("utf-8")
       validate_setting_syntax_and_graph(setting_text, kind)

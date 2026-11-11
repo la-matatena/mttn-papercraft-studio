@@ -876,7 +876,7 @@ const OfxPlugin* FindPluginById(GetPluginFn get_plugin, int count,
   return nullptr;
 }
 
-TEST(PaperCraftOfxTest, ExportsOnlyCutoutFilterAndHidesInternals) {
+TEST(PaperCraftOfxTest, ExportsCutoutFilterAndFoldTransitionAndHidesInternals) {
   const std::string path = ResolvePluginBinaryPath();
   LoadedOfxBundle bundle(path);
   ASSERT_NE(bundle.raw(), nullptr) << "dlopen failed for " << path << ": "
@@ -887,26 +887,30 @@ TEST(PaperCraftOfxTest, ExportsOnlyCutoutFilterAndHidesInternals) {
   ASSERT_NE(get_count, nullptr);
   ASSERT_NE(get_plugin, nullptr);
 
-  EXPECT_EQ(get_count(), 1);
+  EXPECT_EQ(get_count(), 2);
   EXPECT_EQ(get_plugin(-1), nullptr);
-  EXPECT_EQ(get_plugin(1), nullptr);
+  EXPECT_EQ(get_plugin(2), nullptr);
 
   std::vector<std::string> ids;
-  for (int i = 0; i < 1; ++i) {
+  for (int i = 0; i < 2; ++i) {
     OfxPlugin* p = get_plugin(i);
     ASSERT_NE(p, nullptr);
     EXPECT_STREQ(p->pluginApi, kOfxImageEffectPluginApi);
     EXPECT_EQ(p->apiVersion, 1);
+    EXPECT_EQ(p->pluginVersionMajor, 3u);
     EXPECT_NE(p->setHost, nullptr);
     EXPECT_NE(p->mainEntry, nullptr);
     ids.emplace_back(p->pluginIdentifier);
   }
   EXPECT_EQ(ids, (std::vector<std::string>{
                      "com.papercraft.CutoutFX",
+                     "com.papercraft.PaperFoldTransition",
                  }));
+  EXPECT_NE(get_plugin(0)->mainEntry, get_plugin(1)->mainEntry);
 
   // Internal symbols must stay hidden via version script + -fvisibility=hidden.
   EXPECT_EQ(dlsym(bundle.raw(), "RenderCutoutFrame"), nullptr);
+  EXPECT_EQ(dlsym(bundle.raw(), "RenderPaperFoldTransition"), nullptr);
   EXPECT_EQ(dlsym(bundle.raw(), "CutoutMainEntry"), nullptr);
 }
 
@@ -1467,6 +1471,367 @@ TEST(PaperCraftOfxTest, CroppedInputTileMapsViaRegionOfDefinition) {
       static_cast<std::size_t>((kCanvasH / 2) * kCanvasW + kCanvasW / 2) * 4;
   EXPECT_GT(out_buf[center_idx + 3], 0.95f);
   EXPECT_GT(out_buf[center_idx + 2], 0.5f);
+}
+
+// ---------------------------------------------------------------------------
+// Paper Fold & Unfold transition.
+// ---------------------------------------------------------------------------
+
+constexpr char kFoldTransitionId[] = "com.papercraft.PaperFoldTransition";
+
+void SetIntParam(ScopedPluginInstance* pi, const char* name, int value) {
+  ASSERT_EQ(pi->inst.param_set.params.count(name), 1u) << name;
+  MockParamSetValue(
+      reinterpret_cast<OfxParamHandle>(pi->inst.param_set.params[name].get()),
+      value);
+}
+
+void SetDoubleParam(ScopedPluginInstance* pi, const char* name, double value) {
+  ASSERT_EQ(pi->inst.param_set.params.count(name), 1u) << name;
+  MockParamSetValue(
+      reinterpret_cast<OfxParamHandle>(pi->inst.param_set.params[name].get()),
+      value);
+}
+
+std::vector<float> SolidRgba(int w, int h, float r, float g, float b,
+                             float a) {
+  std::vector<float> buf(static_cast<std::size_t>(w) * h * 4);
+  for (std::size_t i = 0; i < buf.size(); i += 4) {
+    buf[i + 0] = r * a;
+    buf[i + 1] = g * a;
+    buf[i + 2] = b * a;
+    buf[i + 3] = a;
+  }
+  return buf;
+}
+
+double MeanAlpha(const std::vector<float>& buf) {
+  double sum = 0.0;
+  for (std::size_t i = 3; i < buf.size(); i += 4) {
+    sum += buf[i];
+  }
+  return sum / static_cast<double>(buf.size() / 4);
+}
+
+// Renders the transition at `progress` into a fresh float buffer.
+std::vector<float> RenderTransitionAt(MockHost* host, ScopedPluginInstance* pi,
+                                      int w, int h, double progress) {
+  std::vector<float> out(static_cast<std::size_t>(w) * h * 4, -1.0f);
+  const double range[2] = {0.0, 24.0};
+  MockPropertySet out_img;
+  ConfigureClipAndImage(host, pi->inst.clips["Output"].get(), &out_img,
+                        out.data(), w, h, w * 16, kOfxBitDepthFloat, range);
+  SetDoubleParam(pi, kOfxImageEffectTransitionParamName, progress);
+  EXPECT_EQ(RenderFrame(*pi, 10.0), kOfxStatOK);
+  pi->inst.clips["Output"]->bound_image = nullptr;
+  return out;
+}
+
+TEST(PaperCraftOfxTest, FoldTransitionDescribesTransitionContextOnly) {
+  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
+  ASSERT_NE(bundle.raw(), nullptr);
+  auto get_count = bundle.Sym<GetNumPluginsFn>("OfxGetNumberOfPlugins");
+  auto get_plugin = bundle.Sym<GetPluginFn>("OfxGetPlugin");
+  const OfxPlugin* plugin =
+      FindPluginById(get_plugin, get_count(), kFoldTransitionId);
+  ASSERT_NE(plugin, nullptr);
+
+  MockHost host;
+  host.ofx_host.host = ToPropHandle(&host.host_props);
+  host.ofx_host.fetchSuite = &MockHost::FetchSuite;
+  plugin->setHost(&host.ofx_host);
+  ASSERT_EQ(plugin->mainEntry(kOfxActionLoad, nullptr, nullptr, nullptr),
+            kOfxStatOK);
+
+  MockEffectObject desc;
+  desc.host = &host;
+  ASSERT_EQ(plugin->mainEntry(kOfxActionDescribe, &desc, nullptr, nullptr),
+            kOfxStatOK);
+  char* value = nullptr;
+  ASSERT_EQ(MockPropGetString(ToPropHandle(&desc.props),
+                              kOfxImageEffectPluginPropGrouping, 0, &value),
+            kOfxStatOK);
+  EXPECT_STREQ(value, "MTTN PaperCraft Studio");
+  ASSERT_EQ(MockPropGetString(ToPropHandle(&desc.props), kOfxPropLabel, 0,
+                              &value),
+            kOfxStatOK);
+  EXPECT_STREQ(value, "Paper Fold & Unfold");
+  ASSERT_EQ(MockPropGetString(ToPropHandle(&desc.props),
+                              kOfxImageEffectPropSupportedContexts, 0, &value),
+            kOfxStatOK);
+  EXPECT_STREQ(value, kOfxImageEffectContextTransition);
+
+  for (const char* ctx :
+       {kOfxImageEffectContextFilter, kOfxImageEffectContextGenerator}) {
+    MockEffectObject bad_desc;
+    bad_desc.host = &host;
+    MockPropertySet ctx_in;
+    MockPropSetString(ToPropHandle(&ctx_in), kOfxImageEffectPropContext, 0,
+                      ctx);
+    EXPECT_EQ(plugin->mainEntry(kOfxImageEffectActionDescribeInContext,
+                                &bad_desc, ToPropHandle(&ctx_in), nullptr),
+              kOfxStatErrMissingHostFeature)
+        << ctx;
+  }
+
+  MockPropertySet ctx_in;
+  MockPropSetString(ToPropHandle(&ctx_in), kOfxImageEffectPropContext, 0,
+                    kOfxImageEffectContextTransition);
+  ASSERT_EQ(plugin->mainEntry(kOfxImageEffectActionDescribeInContext, &desc,
+                              ToPropHandle(&ctx_in), nullptr),
+            kOfxStatOK);
+  for (const char* clip : {kOfxImageEffectOutputClipName,
+                           kOfxImageEffectTransitionSourceFromClipName,
+                           kOfxImageEffectTransitionSourceToClipName}) {
+    EXPECT_EQ(desc.clips.count(clip), 1u) << clip;
+  }
+  for (const char* param :
+       {kOfxImageEffectTransitionParamName, "foldAction", "foldPattern",
+        "foldStages", "foldDirection", "slideDistance", "enableBorder",
+        "paperColor", "stopMotionSteps", "shadowOpacity"}) {
+    EXPECT_EQ(desc.param_set.params.count(param), 1u) << param;
+  }
+  ASSERT_EQ(plugin->mainEntry(kOfxActionUnload, nullptr, nullptr, nullptr),
+            kOfxStatOK);
+}
+
+TEST(PaperCraftOfxTest, FoldTransitionEndpointsMatchClipsAndReportIdentity) {
+  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
+  ASSERT_NE(bundle.raw(), nullptr);
+  MockHost host;
+  host.ofx_host.host = ToPropHandle(&host.host_props);
+  host.ofx_host.fetchSuite = &MockHost::FetchSuite;
+  ScopedPluginInstance pi;
+  InitPluginInstance(&bundle, kFoldTransitionId,
+                     kOfxImageEffectContextTransition, &host, &pi);
+
+  constexpr int kW = 80;
+  constexpr int kH = 48;
+  const double range[2] = {0.0, 24.0};
+  std::vector<float> from = SolidRgba(kW, kH, 0.1f, 0.2f, 0.9f, 1.0f);
+  std::vector<float> to = SolidRgba(kW, kH, 0.9f, 0.2f, 0.1f, 1.0f);
+  MockPropertySet from_img, to_img;
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &from_img,
+                        from.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &to_img,
+                        to.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
+
+  EXPECT_EQ(RenderTransitionAt(&host, &pi, kW, kH, 0.0), from);
+  EXPECT_EQ(RenderTransitionAt(&host, &pi, kW, kH, 1.0), to);
+  const std::vector<float> mid = RenderTransitionAt(&host, &pi, kW, kH, 0.5);
+  EXPECT_NE(mid, from);
+  EXPECT_NE(mid, to);
+  EXPECT_EQ(host.active_leased_images, 0);
+
+  auto identity_clip = [&](double progress) -> std::string {
+    SetDoubleParam(&pi, kOfxImageEffectTransitionParamName, progress);
+    MockPropertySet in_args, out_args;
+    MockPropSetDouble(ToPropHandle(&in_args), kOfxPropTime, 0, 10.0);
+    const OfxStatus st =
+        pi.plugin->mainEntry(kOfxImageEffectActionIsIdentity, &pi.inst,
+                             ToPropHandle(&in_args), ToPropHandle(&out_args));
+    if (st != kOfxStatOK) {
+      return "";
+    }
+    char* name = nullptr;
+    MockPropGetString(ToPropHandle(&out_args), kOfxPropName, 0, &name);
+    return name != nullptr ? name : "";
+  };
+  EXPECT_EQ(identity_clip(0.0), kOfxImageEffectTransitionSourceFromClipName);
+  EXPECT_EQ(identity_clip(1.0), kOfxImageEffectTransitionSourceToClipName);
+  EXPECT_EQ(identity_clip(0.5), "");
+}
+
+TEST(PaperCraftOfxTest, FoldTransitionAutoUnfoldsAtClipStartAndFoldsAtEnd) {
+  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
+  ASSERT_NE(bundle.raw(), nullptr);
+  MockHost host;
+  host.ofx_host.host = ToPropHandle(&host.host_props);
+  host.ofx_host.fetchSuite = &MockHost::FetchSuite;
+
+  constexpr int kW = 96;
+  constexpr int kH = 64;
+  const double range[2] = {0.0, 24.0};
+  std::vector<float> media = SolidRgba(kW, kH, 0.1f, 0.3f, 0.9f, 1.0f);
+  std::vector<float> empty(static_cast<std::size_t>(kW) * kH * 4, 0.0f);
+
+  // Start of a clip: transparent outgoing side, media incoming.
+  {
+    ScopedPluginInstance pi;
+    InitPluginInstance(&bundle, kFoldTransitionId,
+                       kOfxImageEffectContextTransition, &host, &pi);
+    SetIntParam(&pi, "enableStopMotion", 0);
+    MockPropertySet from_img, to_img;
+    ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &from_img,
+                          empty.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
+                          range);
+    ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &to_img,
+                          media.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
+                          range);
+    double prev = 0.0;
+    for (double p : {0.3, 0.55, 0.8}) {
+      const std::vector<float> out = RenderTransitionAt(&host, &pi, kW, kH, p);
+      EXPECT_GE(*std::min_element(out.begin(), out.end()), 0.0f)
+          << "unwritten pixels at " << p;
+      const double cov = MeanAlpha(out);
+      EXPECT_GT(cov, prev + 0.02) << "unfold coverage must grow at " << p;
+      EXPECT_LT(cov, 0.999) << p;
+      prev = cov;
+    }
+  }
+
+  // End of a clip: the host has no incoming image at all.
+  {
+    ScopedPluginInstance pi;
+    InitPluginInstance(&bundle, kFoldTransitionId,
+                       kOfxImageEffectContextTransition, &host, &pi);
+    SetIntParam(&pi, "enableStopMotion", 0);
+    MockPropertySet from_img;
+    ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &from_img,
+                          media.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
+                          range);
+    double prev = 1.0;
+    for (double p : {0.2, 0.45, 0.7}) {
+      const double cov =
+          MeanAlpha(RenderTransitionAt(&host, &pi, kW, kH, p));
+      EXPECT_LT(cov, prev - 0.02) << "fold coverage must shrink at " << p;
+      EXPECT_GT(cov, 0.0) << p;
+      prev = cov;
+    }
+    EXPECT_EQ(MeanAlpha(RenderTransitionAt(&host, &pi, kW, kH, 1.0)), 0.0);
+  }
+  EXPECT_EQ(host.active_leased_images, 0);
+}
+
+TEST(PaperCraftOfxTest, FoldTransitionShowsPaperBacksideWhileFolded) {
+  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
+  ASSERT_NE(bundle.raw(), nullptr);
+  MockHost host;
+  host.ofx_host.host = ToPropHandle(&host.host_props);
+  host.ofx_host.fetchSuite = &MockHost::FetchSuite;
+  ScopedPluginInstance pi;
+  InitPluginInstance(&bundle, kFoldTransitionId,
+                     kOfxImageEffectContextTransition, &host, &pi);
+
+  constexpr int kW = 96;
+  constexpr int kH = 64;
+  const double range[2] = {0.0, 24.0};
+  // Pure blue media can never produce warm cream pixels by itself.
+  std::vector<float> blue = SolidRgba(kW, kH, 0.0f, 0.0f, 1.0f, 1.0f);
+  std::vector<float> empty(static_cast<std::size_t>(kW) * kH * 4, 0.0f);
+  MockPropertySet from_img, to_img;
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &from_img,
+                        empty.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
+                        range);
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &to_img,
+                        blue.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
+
+  for (int border : {1, 0}) {
+    SetIntParam(&pi, "enableBorder", border);
+    // Early in the unfold the top half is still folded over, back side up.
+    const std::vector<float> out =
+        RenderTransitionAt(&host, &pi, kW, kH, 0.3);
+    int paper_pixels = 0;
+    for (std::size_t i = 0; i < out.size(); i += 4) {
+      if (out[i + 3] > 0.9f && out[i] > 0.45f && out[i + 1] > 0.45f &&
+          out[i] > out[i + 2]) {
+        ++paper_pixels;
+      }
+    }
+    EXPECT_GT(paper_pixels, kW * kH / 20) << "border=" << border;
+  }
+}
+
+TEST(PaperCraftOfxTest, FoldTransitionStopMotionHoldsPosesBetweenSteps) {
+  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
+  ASSERT_NE(bundle.raw(), nullptr);
+  MockHost host;
+  host.ofx_host.host = ToPropHandle(&host.host_props);
+  host.ofx_host.fetchSuite = &MockHost::FetchSuite;
+  ScopedPluginInstance pi;
+  InitPluginInstance(&bundle, kFoldTransitionId,
+                     kOfxImageEffectContextTransition, &host, &pi);
+  SetIntParam(&pi, "stopMotionSteps", 4);
+
+  constexpr int kW = 64;
+  constexpr int kH = 48;
+  const double range[2] = {0.0, 24.0};
+  std::vector<float> from = SolidRgba(kW, kH, 0.1f, 0.2f, 0.9f, 1.0f);
+  std::vector<float> to = SolidRgba(kW, kH, 0.9f, 0.6f, 0.1f, 1.0f);
+  MockPropertySet from_img, to_img;
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &from_img,
+                        from.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &to_img,
+                        to.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
+
+  const std::vector<float> a = RenderTransitionAt(&host, &pi, kW, kH, 0.30);
+  const std::vector<float> b = RenderTransitionAt(&host, &pi, kW, kH, 0.45);
+  const std::vector<float> c = RenderTransitionAt(&host, &pi, kW, kH, 0.55);
+  EXPECT_EQ(a, b) << "progress 0.30 and 0.45 share one stop-motion step";
+  EXPECT_NE(b, c);
+}
+
+TEST(PaperCraftOfxTest, FoldTransitionPatternsActionsAndByteDepthRender) {
+  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
+  ASSERT_NE(bundle.raw(), nullptr);
+  MockHost host;
+  host.ofx_host.host = ToPropHandle(&host.host_props);
+  host.ofx_host.fetchSuite = &MockHost::FetchSuite;
+  ScopedPluginInstance pi;
+  InitPluginInstance(&bundle, kFoldTransitionId,
+                     kOfxImageEffectContextTransition, &host, &pi);
+
+  constexpr int kW = 72;
+  constexpr int kH = 48;
+  const double range[2] = {0.0, 24.0};
+  std::vector<float> from = SolidRgba(kW, kH, 0.1f, 0.2f, 0.9f, 1.0f);
+  std::vector<float> to = SolidRgba(kW, kH, 0.9f, 0.2f, 0.1f, 1.0f);
+  MockPropertySet from_img, to_img;
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &from_img,
+                        from.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &to_img,
+                        to.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
+
+  for (int pattern = 0; pattern < 4; ++pattern) {
+    for (int stages : {2, 5}) {
+      for (int action : {1, 2, 3}) {
+        SetIntParam(&pi, "foldPattern", pattern);
+        SetIntParam(&pi, "foldStages", stages);
+        SetIntParam(&pi, "foldAction", action);
+        const std::vector<float> out =
+            RenderTransitionAt(&host, &pi, kW, kH, 0.6);
+        EXPECT_GE(*std::min_element(out.begin(), out.end()), 0.0f);
+        EXPECT_GT(MeanAlpha(out), 0.05)
+            << "pattern=" << pattern << " stages=" << stages
+            << " action=" << action;
+      }
+    }
+  }
+
+  // 8-bit clips with a negative rowBytes output buffer.
+  SetIntParam(&pi, "foldAction", 1);
+  std::vector<std::uint8_t> from8(static_cast<std::size_t>(kW) * kH * 4, 255);
+  std::vector<std::uint8_t> out8((kH + 2) * kW * 4, 0xA5);
+  for (std::size_t i = 0; i < from8.size(); i += 4) {
+    from8[i] = 20;
+    from8[i + 1] = 40;
+  }
+  MockPropertySet from8_img, to8_img, out8_img;
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceFrom"].get(), &from8_img,
+                        from8.data(), kW, kH, kW * 4, kOfxBitDepthByte, range);
+  ConfigureClipAndImage(&host, pi.inst.clips["SourceTo"].get(), &to8_img,
+                        nullptr, kW, kH, kW * 4, kOfxBitDepthByte, range);
+  pi.inst.clips["SourceTo"]->bound_image = nullptr;  // No incoming image.
+  ConfigureClipAndImage(&host, pi.inst.clips["Output"].get(), &out8_img,
+                        &out8[kH * kW * 4], kW, kH, -kW * 4, kOfxBitDepthByte,
+                        range);
+  SetDoubleParam(&pi, kOfxImageEffectTransitionParamName, 0.5);
+  ASSERT_EQ(RenderFrame(pi, 10.0), kOfxStatOK);
+  for (int x = 0; x < kW * 4; ++x) {
+    EXPECT_EQ(out8[x], 0xA5);
+    EXPECT_EQ(out8[(kH + 1) * kW * 4 + x], 0xA5);
+  }
+  EXPECT_EQ(host.active_leased_images, 0);
 }
 
 }  // namespace

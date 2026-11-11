@@ -10,26 +10,28 @@
 [![Platform: macOS & Linux](https://img.shields.io/badge/platform-macOS%20Universal%20%7C%20Linux%20x86__64-6a4fb3.svg)](docs/developer_guide.md)
 [![Brand: La Matatena](https://img.shields.io/badge/La%20Matatena-MTTN-8367c7.svg)](https://github.com/la-matatena)
 
-**MTTN PaperCraft Studio** (by **[La Matatena](https://la-matatena.com)** · [@la-matatena](https://github.com/la-matatena)) adds organic stop-motion paper cutouts, torn cardstock borders, paper intro and outro animations, and 24-bit stereo paper Foley sound effects directly on the DaVinci Resolve 20 and 21 Edit pages without opening Fusion. Both DaVinci Resolve Free and DaVinci Resolve Studio run the native OpenFX 1.4 C++17 plugin without watermarks.
+**MTTN PaperCraft Studio** (by **[La Matatena](https://la-matatena.com)** · [@la-matatena](https://github.com/la-matatena)) adds organic stop-motion paper cutouts, torn cardstock borders, paper intro and outro animations, a paper fold-and-unfold transition, and 24-bit stereo paper Foley sound effects directly on the DaVinci Resolve 20 and 21 Edit pages without opening Fusion. Both DaVinci Resolve Free and DaVinci Resolve Studio run the native OpenFX 1.4 C++17 plugin without watermarks.
+
+![Paper Fold & Unfold: a clip unfolds from a folded paper packet (top) and a PNG logo unfolds over transparency (bottom)](docs/images/paper_fold_unfold.png)
 
 ## Included deliverables
 
 | Component | Package path | Purpose |
 | :--- | :--- | :--- |
-| Native OpenFX bundle | `PaperCraftStudioPro.ofx.bundle` | Native C++17 **Paper Cutout FX** effect for the Edit page (`MTTN PaperCraft Studio` category) |
+| Native OpenFX bundle | `PaperCraftStudioPro.ofx.bundle` | Native C++17 **Paper Cutout FX** effect and **Paper Fold & Unfold** transition for the Edit page (`MTTN PaperCraft Studio` category) |
 | macOS OpenFX installer | `Install_PaperCraft_OpenFX_macOS.command` | Compiles Universal (`x86_64` + `arm64`) or native macOS OpenFX bundle, ad-hoc signs it, and installs to `/Library/OFX/Plugins` |
 | macOS OpenFX uninstaller | `Uninstall_PaperCraft_OpenFX_macOS.command` | Removes the OpenFX plugin (system or `--user`) and the `.drfx` templates from DaVinci Resolve |
 | Linux OpenFX installer | `install_linux_ofx.sh` | Installs `PaperCraftStudioPro.ofx.bundle` into the Linux OpenFX directory |
 | Portable OpenFX source | `OpenFX_Source/` | Standalone C++17 source files and OpenFX 1.4 headers for macOS and Linux builds |
 | Paper SFX library | `Paper_SFX/` (4 stereo WAV files) | Real recorded 48 kHz, 24-bit stereo paper Foley clips released into the public domain (`CC0` / `Public Domain`) |
 | Docs & design | `docs/` (`user_guide.md`, `design_doc.md`, `developer_guide.md`) | End-user guide, developer build guide, and technical design architecture |
-| Legacy `.drfx` templates | `MTTN_PaperCraft_Studio.drfx` / `Templates_Unpacked/` | Validated Fusion `MacroOperator` template for **Paper Cutout FX** with a La Matatena purple thumbnail |
+| Legacy `.drfx` templates | `MTTN_PaperCraft_Studio.drfx` / `Templates_Unpacked/` | Validated Fusion `MacroOperator` templates: the **Paper Cutout FX** effect and the **Paper Fold & Unfold** transition (a lighter three-panel letter fold), with La Matatena purple thumbnails |
 
 ## Documentation
 
 Read the full documentation set for installation steps, Edit-page workflows, and engineering architecture:
 
-- [User guide](docs/user_guide.md): Installation steps, the Edit-page Paper Cutout FX workflow, all Inspector parameters, Paper SFX mixing table, and troubleshooting.
+- [User guide](docs/user_guide.md): Installation steps, the Edit-page Paper Cutout FX and Paper Fold & Unfold workflows, all Inspector parameters, Paper SFX mixing table, and troubleshooting.
 - [Design document](docs/design_doc.md): Architecture overview, OpenFX 1.4 host integration, linear-time signed distance field pipeline, curated real Foley audio assets, and engineering trade-offs.
 - [Developer and build guide](docs/developer_guide.md): Repository layout, standalone Linux and macOS compilation, and verification suites.
 
@@ -88,12 +90,30 @@ Run DaVinci Resolve installed from the Blackmagic Design website rather than the
 
 ## Use MTTN PaperCraft Studio on the Edit page
 
-The OpenFX bundle registers a single effect, **Paper Cutout FX**, in the **MTTN PaperCraft Studio** category. Open **Effects** > **Open FX** > **MTTN PaperCraft Studio** and drag **Paper Cutout FX** directly onto any timeline clip, title, transparent PNG, or green-screen shot.
+The OpenFX bundle registers two tools in the **MTTN PaperCraft Studio** category:
+
+- **Paper Cutout FX** (effect): open **Effects** > **Open FX** > **MTTN PaperCraft Studio** and drag it directly onto any timeline clip, title, transparent PNG, or green-screen shot.
+- **Paper Fold & Unfold** (transition): open **Effects** > **Open FX** > **Transitions** > **MTTN PaperCraft Studio** and drag it onto an edit point like any transition.
+
+### Unfold and fold with Paper Fold & Unfold
+
+The transition mimics a printed sheet unfolding in stop-motion: the clip arrives as a folded paper packet, opens stage by stage while showing the paper back, creases, and shadow, and lands exactly on the clean clip. With **Fold Action** set to **Auto**, the transition picks what to do from where you place it:
+
+| Where you place it | What Auto does |
+| :--- | :--- |
+| At the start of a clip (nothing before it) | The clip **unfolds** into view |
+| At the end of a clip (nothing after it) | The clip **folds** up and leaves the frame |
+| Between two full-frame clips | The incoming clip unfolds over the outgoing one |
+| Between two clips with transparency (PNGs, titles) | The outgoing clip folds away, then the incoming clip unfolds |
+
+To force a behavior, choose **Unfold Incoming Clip**, **Fold Outgoing Clip**, or **Fold Out, Then Unfold In**. Upper tracks (`V2+`) keep their transparency, so a PNG logo can unfold over the video on the track below. The transition length on the timeline sets the speed, and **Stop-Motion Steps** sets how many distinct poses you see.
 
 > [!NOTE]
-> Version 3.0 removed the Paper Cutout FX generator and the **Paper Unfold**, **Paper Crumple**, and **Paper Rip Wipe** transitions. If an older project used them, DaVinci Resolve shows them as unavailable; remove them from the timeline.
+> Version 3.0 removed the Paper Cutout FX generator and the **Paper Unfold**, **Paper Crumple**, and **Paper Rip Wipe** transitions. If an older project used them, DaVinci Resolve shows them as unavailable; remove them from the timeline. Version 3.1 adds **Paper Fold & Unfold** as a new transition (with a new identifier), and the **Paper Unfold (3D)** style of Paper Cutout FX now folds the cutout along real creases.
 
 ## Inspector controls reference
+
+### Paper Cutout FX
 
 | Section | Key controls | Behavior |
 | :--- | :--- | :--- |
@@ -101,27 +121,36 @@ The OpenFX bundle registers a single effect, **Paper Cutout FX**, in the **MTTN 
 | **2. Green Screen and Matte Cleanup** | **Enable Green Screen Key**, **Screen Color**, **Key Gain**, **Key Balance**, **Edge Choke (px)** | Extracts subject matte from solid green or blue backdrops with spill suppression |
 | **3. Torn Paper Cutout Border** | **Enable Paper Border**, **Border Width**, **Torn Edge Roughness**, **Tear Frequency**, **Tear Fiber Detail**, **Edge Boil Speed**, **Paper Cardstock Color** | Expands a procedural ragged cardstock collar around any extracted alpha shape |
 | **4. Paper Grain and Fold Creases** | **Paper Grain Strength**, **Grain Scale**, **Fold Crease Strength**, **Crease Scale**, **Media Texture Overlay**, **Texture Seed** | Adds multi-octave fiber grain and ridged fold creases |
-| **5. Intro and Outro Paper Animations** | **Intro Style**, **Intro Duration (Frames)**, **Outro Style**, **Outro Duration (Frames)**, **Glide Angle**, **Glide Distance**, **Mirror Animation H**, **Mirror Animation V** | Animates **Paper Unfold (3D)**, **Crumple Ball**, **Paper Airplane Glide**, or **Flat Cutout Pop** entrances and exits |
+| **5. Intro and Outro Paper Animations** | **Intro Style**, **Intro Duration (Frames)**, **Outro Style**, **Outro Duration (Frames)**, **Glide Angle**, **Glide Distance**, **Mirror Animation H**, **Mirror Animation V** | Animates **Paper Unfold (3D)** (real creases with the paper back showing; **Glide Angle** also turns the fold direction), **Crumple Ball**, **Paper Airplane Glide**, or **Flat Cutout Pop** entrances and exits |
 | **6. 3D Drop Shadow** | **Shadow Opacity**, **Shadow Angle**, **Shadow Distance**, **Shadow Softness** | Casts soft directional depth shadows behind the rotating cutout |
 | **7. Stop-Motion and Master Transform** | **Enable Stop-Motion**, **Hold Frames (Step)**, **Position Jitter**, **Rotation Jitter**, **Master Position**, **Master Scale**, **Master Rotation**, **Flip Horizontal**, **Flip Vertical** | Quantizes frame motion into stepped holds and adds subtle frame-by-frame tactile wobble |
+
+### Paper Fold & Unfold
+
+| Section | Key controls | Behavior |
+| :--- | :--- | :--- |
+| **1. Fold & Unfold** | **Fold Action**, **Fold Pattern**, **Fold Stages**, **Fold Direction**, **3D Depth**, **Packet Slide Distance**, **Mirror Horizontal**, **Mirror Vertical** | Chooses whether the clip unfolds, folds, or both; the crease layout (**Craft Flaps**, **Map Grid**, **Accordion**, **Origami Corners**); how many stages open (2 to 5); their orientation; flap perspective; and how far the folded packet slides in or out |
+| **2. Paper Look** | **Torn Paper Border**, **Border Width**, **Torn Edge Roughness**, **Tear Frequency**, **Paper Color**, **Paper Grain**, **Crease Strength**, **Paper Seed**, **Premultiplied Source Alpha** | Optional torn cardstock collar while the sheet is folded, paper back color and texture, crumples, and fold-line creases; the collar and creases settle away so the last frame is the clean clip |
+| **3. Stop-Motion & Shadow** | **Enable Stop-Motion**, **Stop-Motion Steps**, **Hand Jitter**, **Shadow Opacity**, **Shadow Angle**, **Shadow Distance**, **Shadow Softness** | Held poses with hand jitter, a drop shadow under the packet, and flap shadows; the shadow angle also lights the flaps |
 
 ## Paper SFX starter library
 
 Import the `Paper_SFX/` directory into a DaVinci Resolve Power Bin to reuse the four real recorded 48 kHz, 24-bit stereo WAV files across projects (see authors and public-domain licenses in [`Paper_SFX/CREDITS.md`](Paper_SFX/CREDITS.md)):
 
-- `01_Paper_Unfold.wav`: Crisp folded sheet unfold for **Paper Unfold (3D)** entrances and exits.
+- `01_Paper_Unfold.wav`: Crisp folded sheet unfold for the **Paper Fold & Unfold** transition and **Paper Unfold (3D)** entrances and exits.
 - `02_Paper_Crumple.wav`: Organic stereo paper-ball crumple for **Crumple Ball** animations.
 - `03_Paper_Glide_Flip.wav`: Fast page flip and air swoosh for **Paper Airplane Glide** moves.
 - `04_Paper_Rip_Tear.wav`: Clean dry fiber tear for torn cardstock borders and **Flat Cutout Pop** accents.
 
 ## Optional legacy `.drfx` templates
 
-The validated `MTTN_PaperCraft_Studio.drfx` archive remains included for Fusion-template workflows. Double-click `MTTN_PaperCraft_Studio.drfx` to install the Edit-page **Paper Cutout FX** `MacroOperator` copy under **Effects** > **Toolbox** > **MTTN PaperCraft Studio**. For everyday Edit-page timelines, prefer the native OpenFX bundle because it executes in multi-threaded C++17 without Fusion graph overhead.
+The validated `MTTN_PaperCraft_Studio.drfx` archive remains included for Fusion-template workflows. Double-click `MTTN_PaperCraft_Studio.drfx` to install the Edit-page **Paper Cutout FX** `MacroOperator` copy under **Effects** > **Toolbox** > **MTTN PaperCraft Studio** and the **Paper Fold & Unfold** transition under **Effects** > **Toolbox** > **Video Transitions** > **MTTN PaperCraft Studio**. The Fusion transition is a lighter version: a three-panel letter fold with paper backs, creases, a sliding packet, stop-motion, and a shadow, without the torn border or fold patterns. For everyday Edit-page timelines, prefer the native OpenFX bundle because it executes in multi-threaded C++17 without Fusion graph overhead.
 
 ## Improve timeline playback and renders
 
-- Set **Playback** > **Render Cache** to **Smart** or **User** after finalizing your cutout parameters.
+- Set **Playback** > **Render Cache** to **Smart** or **User** after finalizing your cutout or transition parameters.
 - Lower **Playback** > **Timeline Proxy Resolution** to **Half** or **Quarter** when timing stop-motion animations.
+- **Paper Fold & Unfold** takes about 28 ms per 1080p frame on average on 4 threads of an Apple M4 Pro Mac (about 14 ms on 14 threads). On modest machines such as a 2017 iMac, use **Render Cache** to play the transition back in real time.
 
 ## Build & verify from source
 

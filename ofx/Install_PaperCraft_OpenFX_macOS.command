@@ -107,6 +107,7 @@ main() {
   echo "Installed ${BUNDLE_NAME} to ${dest_dir}/${BUNDLE_NAME}"
   echo "Restart DaVinci Resolve (Blackmagic Design website build; Mac App Store sandbox blocks third-party OFX)."
   echo "Find Paper Cutout FX on the Edit tab under Effects > Open FX > MTTN PaperCraft Studio."
+  echo "Find the Paper Fold & Unfold transition under Effects > Open FX > Transitions > MTTN PaperCraft Studio."
 }
 
 main "$@"

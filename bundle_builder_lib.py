@@ -44,6 +44,7 @@ _INSTALLER_NAMES = (
 _DOC_RELPATHS = (
     "docs/design_doc.md",
     "docs/developer_guide.md",
+    "docs/images/paper_fold_unfold.png",
     "docs/user_guide.md",
 )
 
@@ -129,6 +130,7 @@ def _resolve_package_defaults(
 def build_drfx_entries() -> dict[str, bytes]:
   """Creates the file tree contained inside PaperCraft_Studio_Pro.drfx."""
   fx_dir = "Edit/Effects/MTTN PaperCraft Studio"
+  tr_dir = "Edit/Transitions/MTTN PaperCraft Studio"
 
   entries: dict[str, bytes] = {
       f"{fx_dir}/Paper Cutout FX.setting": (
@@ -136,6 +138,12 @@ def build_drfx_entries() -> dict[str, bytes]:
       ),
       f"{fx_dir}/Paper Cutout FX.png": png_renderer.render_thumbnail_png(
           (106, 79, 179), "effect"
+      ),
+      f"{tr_dir}/Paper Fold & Unfold.setting": (
+          fusion_templates.build_fold_transition_setting().encode("utf-8")
+      ),
+      f"{tr_dir}/Paper Fold & Unfold.png": png_renderer.render_thumbnail_png(
+          (131, 103, 199), "fold"
       ),
   }
   return entries
