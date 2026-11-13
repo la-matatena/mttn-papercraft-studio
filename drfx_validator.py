@@ -17,10 +17,13 @@ The checks are lightweight text scans, not a full Lua parser; they rely on
 the four-tab indentation emitted by `fusion_templates`.
 """
 
+import array
 import io
 import math
+import operator
 import re
 import struct
+import sys
 import wave
 import zipfile
 
@@ -136,20 +139,18 @@ def validate_setting_syntax_and_graph(
 ) -> None:
   """Validates a Fusion .setting template's syntax, graph wiring, and UI.
 
-  Expected inputs per kind: effects declare only `MainInput1`, transitions
-  declare `MainInput1` (outgoing) and `MainInput2` (incoming), and generators
-  declare neither and must run for 1,000,000 frames so they never end early
-  on the timeline. The current `.drfx` ships no generator; that branch is
-  kept for older templates.
+  Expected inputs per kind: effects declare only `MainInput1`, and
+  transitions declare `MainInput1` (outgoing) and `MainInput2` (incoming).
+  Generator templates were removed in 3.0, so 'generator' is rejected.
 
   Args:
     setting_text: Full contents of a Fusion .setting template file.
-    template_kind: One of 'generator', 'effect', or 'transition'.
+    template_kind: One of 'effect' or 'transition'.
 
   Raises:
     ValueError: If syntax, node connections, expressions, or UI groups fail.
   """
-  if template_kind not in ("generator", "effect", "transition"):
+  if template_kind not in ("effect", "transition"):
     raise ValueError(f"Unsupported template_kind: {template_kind!r}")
 
   _check_balanced_delimiters(setting_text)
@@ -180,13 +181,6 @@ def validate_setting_syntax_and_graph(
     raise ValueError("Missing MainOutput1 = InstanceOutput declaration.")
   has_main_in_1 = "MainInput1 = InstanceInput" in macro_inputs_body
   has_main_in_2 = "MainInput2 = InstanceInput" in macro_inputs_body
-  if template_kind == "generator":
-    if has_main_in_1 or has_main_in_2:
-      raise ValueError("Generator template must not declare MainInput1/2.")
-    if "GlobalEnd = 1000000" not in setting_text:
-      raise ValueError("Generator Loader must declare GlobalEnd = 1000000.")
-    if "GlobalOut = Input { Value = 1000000" not in setting_text:
-      raise ValueError("Generator MediaIn must declare GlobalOut = 1000000.")
   if template_kind == "effect" and (not has_main_in_1 or has_main_in_2):
     raise ValueError("Effect template must declare MainInput1 only.")
   if template_kind == "transition" and (not has_main_in_1 or not has_main_in_2):
@@ -252,7 +246,13 @@ def validate_setting_syntax_and_graph(
   # Validate SimpleExpressions syntax and control references.
   # SimpleExpressions are not Lua: they use bare math functions and the
   # `and`/`or` keywords, so `math.` or C-style operators break evaluation.
-  for expr in re.findall(r'Expression\s*=\s*"([^"]+)"', setting_text):
+  # The pattern accepts empty strings and backslash escapes so an empty or
+  # escaped-quote expression is inspected instead of silently skipped.
+  for expr in re.findall(
+      r'Expression\s*=\s*"((?:[^"\\]|\\.)*)"', setting_text
+  ):
+    if not expr.strip():
+      raise ValueError("Empty SimpleExpression in .setting file.")
     if "math." in expr:
       raise ValueError(
           f"Illegal Lua 'math.' prefix in SimpleExpression: {expr}"
@@ -356,24 +356,60 @@ def validate_drfx_bytes(drfx_bytes: bytes) -> None:
           )
 
 
+def _decode_pcm24_frames(raw: bytes) -> array.array:
+  """Decodes interleaved little-endian 24-bit PCM into signed int32 samples.
+
+  Each 3-byte sample is copied into the upper three bytes of a 4-byte
+  little-endian slot with slice assignments (C speed, no per-sample Python
+  loop), so every returned value equals `sample << 8`: the sign is kept and
+  dividing by `8388607 * 256` maps it to the usual [-1, 1] range.
+
+  Args:
+    raw: Interleaved PCM bytes; length must be a multiple of 3.
+
+  Returns:
+    `array('i')` of `len(raw) // 3` samples in file (interleaved) order.
+
+  Raises:
+    ValueError: If `raw` is not a whole number of 24-bit samples.
+  """
+  if len(raw) % 3:
+    raise ValueError(f"Truncated 24-bit PCM data: {len(raw)} bytes.")
+  num_samples = len(raw) // 3
+  widened = bytearray(num_samples * 4)
+  widened[1::4] = raw[0::3]
+  widened[2::4] = raw[1::3]
+  widened[3::4] = raw[2::3]
+  samples = array.array("i")
+  if samples.itemsize != 4:
+    raise ValueError("Platform C int is not 32-bit; cannot decode PCM.")
+  samples.frombytes(widened)
+  if sys.byteorder == "big":
+    samples.byteswap()
+  return samples
+
+
 def validate_wav_bytes(wav_bytes: bytes) -> None:
   """Validates 48kHz 24-bit stereo WAV integrity, clipping, and edges.
 
   Thresholds (linear full-scale units, 1.0 = 0 dBFS): duration 0.2-2.0 s,
   RMS above 0.01 (about -40 dBFS, i.e. not silent), peak below 0.995 (no
   clipping), mean |L - R| of at least 1e-4 (real stereo, not duplicated
-  mono), and first/last left-channel samples within 0.005 of zero (faded
-  edges that do not click when the clip starts or ends on the timeline).
+  mono), and the first/last sample of every channel within 0.005 of zero
+  (faded edges that do not click when the clip starts or ends on the
+  timeline).
 
   Args:
     wav_bytes: Complete RIFF WAV bytes.
 
   Raises:
-    ValueError: If format, duration, RMS, clipping, or edge fades fail.
+    ValueError: If format, duration, RMS, clipping, edge fades fail, or the
+      PCM data is shorter than the header declares.
   """
   with wave.open(io.BytesIO(wav_bytes), "rb") as wav_in:
-    if wav_in.getnchannels() != 2:
-      raise ValueError(f"Expected stereo WAV, got {wav_in.getnchannels()} ch.")
+    num_channels = wav_in.getnchannels()
+    if num_channels != 2:
+      raise ValueError(f"Expected stereo WAV, got {num_channels} ch.")
     if wav_in.getsampwidth() != 3:
       raise ValueError(
           f"Expected 24-bit WAV (sampwidth=3), got {wav_in.getsampwidth()}."
@@ -388,38 +424,37 @@ def validate_wav_bytes(wav_bytes: bytes) -> None:
       raise ValueError(f"Unexpected SFX duration: {duration_s:.3f}s")
     raw = wav_in.readframes(num_frames)
 
-  # 24-bit signed PCM max is 2^23 - 1; scale samples to [-1, 1].
-  scale = 1.0 / 8388607.0
-  sq_sum = 0.0
-  peak = 0.0
-  diff_energy = 0.0
-  first_l = 0.0
-  last_l = 0.0
-
   # Frames are interleaved little-endian [L0 L1 L2 R0 R1 R2]: 6 bytes each.
-  for i in range(num_frames):
-    offset = i * 6
-    sl = int.from_bytes(raw[offset : offset + 3], "little", signed=True) * scale
-    sr = (
-        int.from_bytes(raw[offset + 3 : offset + 6], "little", signed=True)
-        * scale
+  samples = _decode_pcm24_frames(raw)
+  if len(samples) != num_frames * num_channels:
+    raise ValueError(
+        f"Truncated WAV data: header declares {num_frames} frames, got "
+        f"{len(samples) // num_channels}."
     )
-    if i == 0:
-      first_l = abs(sl)
-    if i == num_frames - 1:
-      last_l = abs(sl)
-    sq_sum += 0.5 * (sl * sl + sr * sr)
-    peak = max(peak, abs(sl), abs(sr))
-    diff_energy += abs(sl - sr)
+  left = samples[0::num_channels]
+  right = samples[1::num_channels]
 
-  rms = math.sqrt(sq_sum / max(1, num_frames))
+  # Integer sums are exact; scale once at the end. 24-bit signed PCM max is
+  # 2^23 - 1, and decoded samples carry an extra << 8.
+  scale = 1.0 / (8388607.0 * 256.0)
+  sq_sum = sum(map(operator.mul, samples, samples)) * scale * scale
+  peak = max(map(abs, samples)) * scale
+  diff_energy = sum(map(abs, map(operator.sub, left, right))) * scale
+  edge_levels = [
+      abs(s) * scale
+      for s in samples[:num_channels] + samples[-num_channels:]
+  ]
+
+  # Mean over channels and frames, matching the old per-frame 0.5 * (L² + R²).
+  rms = math.sqrt(sq_sum / num_channels / max(1, num_frames))
   if rms <= 0.01:
     raise ValueError(f"Audio is near-silent: rms={rms:.5f}")
   if peak >= 0.995:
     raise ValueError(f"Audio clips near full scale: peak={peak:.5f}")
   if diff_energy / max(1, num_frames) < 1e-4:
     raise ValueError("Left and right channels are effectively identical mono.")
-  if first_l > 0.005 or last_l > 0.005:
+  if max(edge_levels) > 0.005:
     raise ValueError(
-        f"Missing smooth zero-crossing fade at edges: {first_l}, {last_l}"
+        "Missing smooth zero-crossing fade at edges (first frame, then last "
+        f"frame, per channel): {edge_levels}"
     )
