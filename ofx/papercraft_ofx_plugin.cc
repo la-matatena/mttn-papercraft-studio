@@ -810,7 +810,7 @@ OfxStatus HandleCreateInstance(PluginRole role, OfxImageEffectHandle effect) {
 
 PluginInstance* GetInstance(const HostSuites& s, OfxImageEffectHandle effect) {
   OfxPropertySetHandle props = nullptr;
-  if (effect == nullptr || s.effect == nullptr ||
+  if (effect == nullptr || s.effect == nullptr || s.prop == nullptr ||
       s.effect->getPropertySet(effect, &props) != kOfxStatOK ||
       props == nullptr) {
     return nullptr;

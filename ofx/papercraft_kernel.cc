@@ -1074,6 +1074,12 @@ ClipContentSummary InspectClipContent(const ImageView& view) {
   const PixelRect rod = EffectiveRod(view);
   bool opaque = view.bounds.x1 <= rod.x1 && view.bounds.x2 >= rod.x2 &&
                 view.bounds.y1 <= rod.y1 && view.bounds.y2 >= rod.y2;
+  if (view.alpha_mode == AlphaMode::kOpaque && opaque) {
+    out.has_visible_alpha = true;
+    out.has_nonblack_rgb = true;
+    out.is_full_frame_opaque = true;
+    return out;
+  }
   const int w = view.bounds.x2 - view.bounds.x1;
   const int h = view.bounds.y2 - view.bounds.y1;
   const int stride = std::max(1, std::min(w, h) / 360);
@@ -1151,6 +1157,9 @@ std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
   const float sdf_step = static_cast<float>(std::max(1, sdf.step));
   std::vector<float> clean_alpha(
       static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh), 0.0f);
+  const std::ptrdiff_t px_bytes = PixelSizeBytes(view);
+  const PixelDepth view_depth = view.depth;
+  const AlphaMode view_alpha = view.alpha_mode;
 
   RunScanlines(0, bh, parallel_for, [&](int ry) {
     const int iy = view.bounds.y1 + ry;
@@ -1159,9 +1168,10 @@ std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
         (static_cast<float>(iy) + 0.5f - static_cast<float>(rod.y1)) / rod_h *
             ch;
     float* out_row = clean_alpha.data() + static_cast<std::size_t>(ry) * bw;
-    for (int rx = 0; rx < bw; ++rx) {
+    const std::uint8_t* in_px = PixelConstPtr(view, view.bounds.x1, iy);
+    for (int rx = 0; rx < bw; ++rx, in_px += px_bytes) {
       const int ix = view.bounds.x1 + rx;
-      const RgbaColor c = ReadPixel(view, ix, iy);
+      const RgbaColor c = ReadPixelPtr(in_px, view_depth, view_alpha);
       if (c.a <= 1e-4f) {
         out_row[rx] = 0.0f;
         continue;
@@ -1243,6 +1253,34 @@ RgbaColor SampleBilinearCleanAlpha(const ImageView& view,
     return {};
   }
   const int bw = view.bounds.x2 - view.bounds.x1;
+  const float sx = px - 0.5f;
+  const float sy = py - 0.5f;
+  const int x0 = static_cast<int>(std::floor(sx));
+  const int y0 = static_cast<int>(std::floor(sy));
+  const float fx = sx - static_cast<float>(x0);
+  const float fy = sy - static_cast<float>(y0);
+
+  if (x0 >= view.bounds.x1 && x0 + 1 < view.bounds.x2 && y0 >= view.bounds.y1 &&
+      y0 + 1 < view.bounds.y2) {
+    const std::ptrdiff_t px_bytes = PixelSizeBytes(view);
+    const std::uint8_t* p00 = PixelConstPtr(view, x0, y0);
+    const std::uint8_t* p01 = p00 + view.row_bytes;
+    const std::size_t a_idx =
+        static_cast<std::size_t>(y0 - view.bounds.y1) * bw +
+        (x0 - view.bounds.x1);
+    auto read_fast = [&](const std::uint8_t* ptr, std::size_t idx) -> RgbaColor {
+      RgbaColor c = ReadPixelPtr(ptr, view.depth, view.alpha_mode);
+      c.a = clean_alpha[idx];
+      return c;
+    };
+    return LerpColor(
+        LerpColor(read_fast(p00, a_idx), read_fast(p00 + px_bytes, a_idx + 1),
+                  fx),
+        LerpColor(read_fast(p01, a_idx + bw),
+                  read_fast(p01 + px_bytes, a_idx + bw + 1), fx),
+        fy);
+  }
+
   auto read_safe = [&](int ix, int iy) -> RgbaColor {
     if (ix < view.bounds.x1 || ix >= view.bounds.x2 || iy < view.bounds.y1 ||
         iy >= view.bounds.y2) {
@@ -1253,12 +1291,6 @@ RgbaColor SampleBilinearCleanAlpha(const ImageView& view,
                       (ix - view.bounds.x1)];
     return c;
   };
-  const float sx = px - 0.5f;
-  const float sy = py - 0.5f;
-  const int x0 = static_cast<int>(std::floor(sx));
-  const int y0 = static_cast<int>(std::floor(sy));
-  const float fx = sx - static_cast<float>(x0);
-  const float fy = sy - static_cast<float>(y0);
   return LerpColor(
       LerpColor(read_safe(x0, y0), read_safe(x0 + 1, y0), fx),
       LerpColor(read_safe(x0, y0 + 1), read_safe(x0 + 1, y0 + 1), fx), fy);
@@ -2676,8 +2708,20 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     return;
   }
 
-  const ClipContentSummary from_info = InspectClipContent(from_view);
-  const ClipContentSummary to_info = InspectClipContent(to_view);
+  const auto requested = static_cast<FoldTransitionAction>(
+      std::min(3, std::max(0, params.fold_action)));
+  const bool need_from =
+      requested == FoldTransitionAction::kAuto ||
+      requested == FoldTransitionAction::kFoldOut ||
+      (requested == FoldTransitionAction::kFoldAndUnfold && p < 0.5f);
+  const bool need_to =
+      requested == FoldTransitionAction::kAuto ||
+      requested == FoldTransitionAction::kUnfoldIn ||
+      (requested == FoldTransitionAction::kFoldAndUnfold && p >= 0.5f);
+  const ClipContentSummary from_info =
+      need_from ? InspectClipContent(from_view) : ClipContentSummary{};
+  const ClipContentSummary to_info =
+      need_to ? InspectClipContent(to_view) : ClipContentSummary{};
   const FoldTransitionAction action =
       ResolveFoldAction(params.fold_action, from_info, to_info);
 
@@ -2888,6 +2932,17 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   const BoundsBox shadow_box = BoundsOfPieces(coverage_cover, 3.0f, to_shadow);
   const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
   const PixelDepth out_depth = output.depth;
+  bool under_direct_x = false;
+  if (has_under) {
+    const PixelRect under_rod = EffectiveRod(*under);
+    under_direct_x = under_rod.x1 == canvas_bounds.x1 &&
+                     under_rod.x2 == canvas_bounds.x2 &&
+                     under_rod.y1 == canvas_bounds.y1 &&
+                     under_rod.y2 == canvas_bounds.y2 &&
+                     under->bounds.x1 <= x_begin && under->bounds.x2 >= x_end;
+  }
+  const std::ptrdiff_t under_pixel_bytes =
+      has_under ? PixelSizeBytes(*under) : 0;
 
   RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
     const float py_out = static_cast<float>(y) + 0.5f;
@@ -2895,6 +2950,42 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     const bool row_shadow = sh_opacity > 1e-4f && py_out >= shadow_box.y1 &&
                             py_out <= shadow_box.y2;
     std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+    if (!row_paper && !row_shadow &&
+        !(use_clean && rest_shadow_blend > 1e-4f)) {
+      if (!has_under) {
+        for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+          WritePixelPtr(out_px, out_depth, {});
+        }
+      } else if (under_direct_x && y >= under->bounds.y1 &&
+                 y < under->bounds.y2) {
+        const std::uint8_t* under_px = PixelConstPtr(*under, x_begin, y);
+        const PixelDepth under_depth = under->depth;
+        const AlphaMode under_alpha = under->alpha_mode;
+        if (under_weight >= 0.9999f) {
+          for (int x = x_begin; x < x_end;
+               ++x, out_px += out_pixel_bytes, under_px += under_pixel_bytes) {
+            WritePixelPtr(out_px, out_depth,
+                          ReadPixelPtr(under_px, under_depth, under_alpha));
+          }
+        } else {
+          for (int x = x_begin; x < x_end;
+               ++x, out_px += out_pixel_bytes, under_px += under_pixel_bytes) {
+            WritePixelPtr(
+                out_px, out_depth,
+                ScalePremult(ReadPixelPtr(under_px, under_depth, under_alpha),
+                             under_weight));
+          }
+        }
+      } else {
+        for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+          WritePixelPtr(
+              out_px, out_depth,
+              ScalePremult(ClipPixelAt(*under, canvas_bounds, x, y),
+                           under_weight));
+        }
+      }
+      return;
+    }
     for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
       const float px_out = static_cast<float>(x) + 0.5f;
       RgbaColor fg;
