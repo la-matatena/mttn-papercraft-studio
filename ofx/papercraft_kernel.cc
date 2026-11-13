@@ -1074,15 +1074,29 @@ ClipContentSummary InspectClipContent(const ImageView& view) {
   const PixelRect rod = EffectiveRod(view);
   bool opaque = view.bounds.x1 <= rod.x1 && view.bounds.x2 >= rod.x2 &&
                 view.bounds.y1 <= rod.y1 && view.bounds.y2 >= rod.y2;
-  if (view.alpha_mode == AlphaMode::kOpaque && opaque) {
-    out.has_visible_alpha = true;
-    out.has_nonblack_rgb = true;
-    out.is_full_frame_opaque = true;
-    return out;
-  }
   const int w = view.bounds.x2 - view.bounds.x1;
   const int h = view.bounds.y2 - view.bounds.y1;
   const int stride = std::max(1, std::min(w, h) / 360);
+  // Opaque full-frame clips can have neither transparency nor a baked shadow,
+  // so only `has_nonblack_rgb` needs pixels. Stop at the first non-black
+  // sample; an all-black frame (the host's "empty" side of a clip edge, which
+  // ResolveFoldAction relies on) still scans the whole grid and stays black.
+  if (view.alpha_mode == AlphaMode::kOpaque && opaque) {
+    out.has_visible_alpha = true;
+    out.is_full_frame_opaque = true;
+    for (int y = view.bounds.y1 + stride / 2;
+         y < view.bounds.y2 && !out.has_nonblack_rgb; y += stride) {
+      for (int x = view.bounds.x1 + stride / 2; x < view.bounds.x2;
+           x += stride) {
+        const RgbaColor c = ReadPixel(view, x, y);
+        if (c.r + c.g + c.b > 3e-3f) {
+          out.has_nonblack_rgb = true;
+          break;
+        }
+      }
+    }
+    return out;
+  }
   int shadow_samples = 0;
   auto touches_opaque_black = [&](int x, int y) {
     constexpr int kNear[12][2] = {{-1, 0}, {1, 0},   {0, -1}, {0, 1},
