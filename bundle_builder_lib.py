@@ -1,4 +1,26 @@
-"""Bundle assembler for PaperCraft OpenFX, installers, .drfx, and Paper SFX."""
+"""Bundle assembler for PaperCraft OpenFX, installers, .drfx, and Paper SFX.
+
+Called by `build_papercraft_bundle.py` (CLI) and by `papercraft_pro_test.py`.
+The single public entry point that writes files is `build_and_write_release`;
+the `build_*_entries` helpers return in-memory `{archive_path: bytes}` maps.
+
+Release artifacts written to the output directory:
+
+* `MTTN_PaperCraft_Studio.drfx`: ZIP with the Fusion effect and transition
+  `.setting` files plus 104x58 thumbnails (validated before writing).
+* `PaperCraftStudioPro.ofx.bundle/`, installers, `Paper_SFX/`, `docs/`, and
+  optionally `Templates_Unpacked/`, unpacked on disk.
+* `MTTN_PaperCraft_Studio_Full_Bundle.zip`: everything above in one ZIP.
+* `MTTN_PaperCraft_Studio_Complete_Repo.zip`: repository sources under
+  `papercraft_pro/` plus the full release under `papercraft_pro/release/`.
+
+Deterministic ZIP rules (so rebuilding the same inputs yields identical
+bytes and stable checksums): entries are written in sorted path order, every
+entry gets the fixed `_ZIP_TIMESTAMP`, `create_system` is UNIX, and file
+modes are normalized to 0o644, or 0o755 for executables (see
+`_is_executable_entry`). Byte-for-byte output still assumes the same zlib
+version, because DEFLATE output can differ across zlib releases.
+"""
 
 from collections.abc import Mapping
 import io
@@ -7,6 +29,8 @@ import stat
 import zipfile
 
 try:
+  # Internal monorepo import path; falls back to sibling-module imports when
+  # run from a plain checkout of this repository.
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import drfx_validator
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import fusion_templates
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import png_renderer
@@ -15,8 +39,12 @@ except ImportError:
   import fusion_templates  # type: ignore[no-redef]
   import png_renderer  # type: ignore[no-redef]
 
+# Fixed mtime for every ZIP entry. ZIP stores local time with 2-second
+# resolution and no time zone, so a constant keeps archives reproducible.
 _ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
 
+# OpenFX sources copied into `OpenFX_Source/` (release) and `ofx/` (repo
+# ZIP), relative to the `ofx/` source directory.
 _OFX_SOURCE_RELPATHS = (
     "Info.plist",
     "openfx_sym.lds",
@@ -35,12 +63,15 @@ _OFX_SOURCE_RELPATHS = (
     "openfx_include/ofxProperty.h",
 )
 
+# Installer scripts shipped at the release root (from the `ofx/` directory).
 _INSTALLER_NAMES = (
     "Install_PaperCraft_OpenFX_macOS.command",
     "Uninstall_PaperCraft_OpenFX_macOS.command",
     "install_linux_ofx.sh",
 )
 
+# Documentation shipped in every release, relative to the repo root. Keep in
+# sync with the Markdown link check in `papercraft_pro_test.py`.
 _DOC_RELPATHS = (
     "docs/design_doc.md",
     "docs/developer_guide.md",
@@ -48,6 +79,8 @@ _DOC_RELPATHS = (
     "docs/user_guide.md",
 )
 
+# Foley clips (validated by `drfx_validator.validate_wav_bytes`) and credits.
+# Also listed in `BUILD` (`paper_sfx_files`) and the tests.
 _PAPER_SFX_RELPATHS = (
     "Paper_SFX/01_Paper_Unfold.wav",
     "Paper_SFX/02_Paper_Crumple.wav",
@@ -56,6 +89,7 @@ _PAPER_SFX_RELPATHS = (
     "Paper_SFX/CREDITS.md",
 )
 
+# Repo-root files copied into the Complete Repo ZIP under `papercraft_pro/`.
 _REPO_ROOT_FILES = (
     "BUILD",
     "LICENSE",
@@ -69,6 +103,8 @@ _REPO_ROOT_FILES = (
     "png_renderer.py",
 )
 
+# Extra `ofx/` files that only the repo ZIP carries (C++ test, installers in
+# their source location), on top of `_OFX_SOURCE_RELPATHS`.
 _REPO_EXTRA_OFX_FILES = (
     "Install_PaperCraft_OpenFX_macOS.command",
     "Uninstall_PaperCraft_OpenFX_macOS.command",
@@ -78,12 +114,26 @@ _REPO_EXTRA_OFX_FILES = (
 
 
 def _is_executable_entry(rel_path: str) -> bool:
-  """Returns whether a packaged relative path requires 0o755 UNIX mode."""
+  """Returns whether a packaged relative path requires 0o755 UNIX mode.
+
+  Installers (`.command`, `.sh`) and the OpenFX shared library (`.ofx`) must
+  stay executable after unzip; everything else is 0o644.
+  """
   return rel_path.endswith((".command", ".sh", ".ofx"))
 
 
 def _write_deterministic_zip(files: Mapping[str, bytes]) -> bytes:
-  """Packages relative archive paths into a deterministic ZIP byte buffer."""
+  """Packages relative archive paths into a deterministic ZIP byte buffer.
+
+  See the module docstring for the determinism rules (sorted order, fixed
+  timestamp, UNIX create_system, normalized modes).
+
+  Args:
+    files: Mapping of forward-slash archive paths to file contents.
+
+  Returns:
+    Complete ZIP archive bytes.
+  """
   out = io.BytesIO()
   with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     for rel_path in sorted(files):
@@ -97,12 +147,15 @@ def _write_deterministic_zip(files: Mapping[str, bytes]) -> bytes:
           if _is_executable_entry(rel_path)
           else stat.S_IFREG | 0o644
       )
+      # The high 16 bits of external_attr hold the UNIX st_mode (file type +
+      # permission bits); unzip tools read them back when create_system == 3.
       info.external_attr = mode << 16
       zf.writestr(info, files[rel_path])
   return out.getvalue()
 
 
 def _read_bytes(path: str) -> bytes:
+  """Returns the full binary contents of the file at `path`."""
   with open(path, "rb") as f:
     return f.read()
 
@@ -112,7 +165,20 @@ def _resolve_package_defaults(
     linux_ofx_path: str | None,
     readme_text: str | None,
 ) -> tuple[str, str, str | None]:
-  """Resolves default OpenFX source, compiled binary, and README paths."""
+  """Resolves default OpenFX source, compiled binary, and README paths.
+
+  Defaults are relative to this module's directory (the repository root):
+  `ofx/`, `PaperCraftStudioPro.ofx`, and `README.md` when it exists.
+
+  Args:
+    ofx_source_dir: Explicit OpenFX source directory, or None/"" for default.
+    linux_ofx_path: Explicit compiled Linux `.ofx` path, or None/"".
+    readme_text: Explicit README contents, or None to read `README.md`.
+
+  Returns:
+    `(ofx_source_dir, linux_ofx_path, readme_text)`; `readme_text` is None
+    when no override is given and `README.md` does not exist.
+  """
   pkg_dir = os.path.dirname(os.path.abspath(__file__))
   resolved_ofx_dir = ofx_source_dir or os.path.join(pkg_dir, "ofx")
   resolved_linux_ofx = linux_ofx_path or os.path.join(
@@ -128,7 +194,16 @@ def _resolve_package_defaults(
 
 
 def build_drfx_entries() -> dict[str, bytes]:
-  """Creates the file tree contained inside MTTN_PaperCraft_Studio.drfx."""
+  """Creates the file tree contained inside MTTN_PaperCraft_Studio.drfx.
+
+  Resolve installs a `.drfx` by unpacking it into its Fusion Templates
+  folder; the `Edit/Effects/<category>` and `Edit/Transitions/<category>`
+  prefixes decide where the templates appear in the Effects Library. Each
+  `.setting` needs a same-named `.png` thumbnail next to it.
+
+  Returns:
+    Mapping of archive paths to `.setting` (UTF-8) and `.png` bytes.
+  """
   fx_dir = "Edit/Effects/MTTN PaperCraft Studio"
   tr_dir = "Edit/Transitions/MTTN PaperCraft Studio"
 
@@ -153,7 +228,22 @@ def build_ofx_package_entries(
     ofx_source_dir: str,
     linux_ofx_path: str,
 ) -> dict[str, bytes]:
-  """Builds native OpenFX bundle, source, and installer file map entries."""
+  """Builds native OpenFX bundle, source, and installer file map entries.
+
+  The bundle layout follows the OpenFX convention
+  `<Name>.ofx.bundle/Contents/<Arch>/<Name>.ofx`; only the Linux-x86-64
+  binary is packaged here (macOS installers compile from `OpenFX_Source/`).
+
+  Args:
+    ofx_source_dir: Directory with `Info.plist`, sources, and installers.
+    linux_ofx_path: Path to the compiled Linux `PaperCraftStudioPro.ofx`.
+
+  Returns:
+    Mapping of release-relative paths to file bytes.
+
+  Raises:
+    FileNotFoundError: If the Linux binary or any listed source is missing.
+  """
   if not os.path.isfile(linux_ofx_path):
     raise FileNotFoundError(
         f"Compiled Linux OpenFX binary not found at {linux_ofx_path}"
@@ -180,7 +270,17 @@ def build_ofx_package_entries(
 
 
 def build_doc_entries(pkg_dir: str) -> dict[str, bytes]:
-  """Reads all documentation files relative to `pkg_dir`."""
+  """Reads all documentation files relative to `pkg_dir`.
+
+  Args:
+    pkg_dir: Repository root directory.
+
+  Returns:
+    Mapping of `_DOC_RELPATHS` entries to file bytes.
+
+  Raises:
+    FileNotFoundError: If any documentation file is missing.
+  """
   entries: dict[str, bytes] = {}
   for rel in _DOC_RELPATHS:
     src_path = os.path.join(pkg_dir, rel)
@@ -191,7 +291,18 @@ def build_doc_entries(pkg_dir: str) -> dict[str, bytes]:
 
 
 def build_sfx_entries(pkg_dir: str) -> dict[str, bytes]:
-  """Reads the 4 real Foley WAV clips and credits file under `Paper_SFX/`."""
+  """Reads the 4 real Foley WAV clips and credits file under `Paper_SFX/`.
+
+  Args:
+    pkg_dir: Repository root directory.
+
+  Returns:
+    Mapping of `_PAPER_SFX_RELPATHS` entries to file bytes (not validated
+    here; `build_and_write_release` validates the WAVs).
+
+  Raises:
+    FileNotFoundError: If any SFX file is missing.
+  """
   entries: dict[str, bytes] = {}
   for rel in _PAPER_SFX_RELPATHS:
     src_path = os.path.join(pkg_dir, rel)
@@ -206,7 +317,21 @@ def build_repo_source_entries(
     ofx_source_dir: str,
     readme_override: str | None = None,
 ) -> dict[str, bytes]:
-  """Collects source, test, build, and doc files for the complete repo ZIP."""
+  """Collects source, test, build, and doc files for the complete repo ZIP.
+
+  Args:
+    pkg_dir: Repository root directory.
+    ofx_source_dir: OpenFX source directory; files land under `ofx/`.
+    readme_override: Replacement contents for `README.md`, or None to read
+      the file from disk.
+
+  Returns:
+    Mapping of repo-relative paths to file bytes (prefixed with
+    `papercraft_pro/` later by the caller).
+
+  Raises:
+    FileNotFoundError: If any listed repository file is missing.
+  """
   entries: dict[str, bytes] = {}
   for rel in _REPO_ROOT_FILES:
     if rel == "README.md" and readme_override is not None:
@@ -237,6 +362,10 @@ def build_and_write_release(
 ) -> dict[str, str]:
   """Builds, validates, and writes the full MTTN PaperCraft Studio release.
 
+  Validation (the `.drfx` structure and every WAV) runs before anything is
+  written, so a failing template or clip aborts without a partial `.drfx`.
+  Files that already exist in `output_dir` are overwritten.
+
   Args:
     output_dir: Target output directory path.
     export_unpacked: Whether to also write unpacked .setting/.png files.
@@ -246,6 +375,10 @@ def build_and_write_release(
 
   Returns:
     Mapping of logical artifact keys to output file paths.
+
+  Raises:
+    ValueError: If the `.drfx` or a WAV fails validation.
+    FileNotFoundError: If a required source, doc, SFX, or binary is missing.
   """
   os.makedirs(output_dir, exist_ok=True)
   pkg_dir = os.path.dirname(os.path.abspath(__file__))
@@ -253,6 +386,7 @@ def build_and_write_release(
       _resolve_package_defaults(ofx_source_dir, linux_ofx_path, readme_text)
   )
 
+  # --- Build and validate in memory ---
   drfx_entries = build_drfx_entries()
   drfx_bytes = _write_deterministic_zip(drfx_entries)
   drfx_validator.validate_drfx_bytes(drfx_bytes)
@@ -265,6 +399,7 @@ def build_and_write_release(
   ofx_entries = build_ofx_package_entries(resolved_ofx_dir, resolved_linux_ofx)
   doc_entries = build_doc_entries(pkg_dir)
 
+  # --- Write unpacked release tree ---
   drfx_path = os.path.join(output_dir, "MTTN_PaperCraft_Studio.drfx")
   with open(drfx_path, "wb") as f:
     f.write(drfx_bytes)
@@ -272,6 +407,11 @@ def build_and_write_release(
   written_paths: dict[str, str] = {"drfx": drfx_path}
 
   def _write_disk_tree(entries: Mapping[str, bytes]) -> None:
+    """Writes `entries` under `output_dir`, creating parent directories.
+
+    Mirrors the ZIP mode rules: executables get 0o755; other files keep the
+    process umask default.
+    """
     for rel_path, payload in sorted(entries.items()):
       abs_path = os.path.join(output_dir, rel_path)
       os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -322,6 +462,7 @@ def build_and_write_release(
     with open(license_out, "wb") as f:
       f.write(license_bytes)
 
+  # --- Full Bundle ZIP: the same release tree as one archive ---
   full_zip_map: dict[str, bytes] = {
       "MTTN_PaperCraft_Studio.drfx": drfx_bytes,
   }
@@ -346,6 +487,7 @@ def build_and_write_release(
     f.write(full_zip_bytes)
   written_paths["full_zip"] = full_zip_path
 
+  # --- Complete Repo ZIP: sources under papercraft_pro/, release nested ---
   repo_source_entries = build_repo_source_entries(
       pkg_dir, resolved_ofx_dir, resolved_readme
   )

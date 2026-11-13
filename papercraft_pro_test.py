@@ -1,4 +1,15 @@
-"""Tests for PaperCraft Studio Pro OpenFX bundle, installers, .drfx, and SFX."""
+"""Tests for PaperCraft Studio Pro OpenFX bundle, installers, .drfx, and SFX.
+
+Run from the repository root (also run by `.github/workflows/ci-release.yml`):
+
+  python3 -B papercraft_pro_test.py -v
+
+Uses absltest when available and falls back to `unittest` with a small shim
+for the absltest-only helpers. The end-to-end test builds a full release in
+a temp directory and also checks that relative Markdown links in the shipped
+docs resolve inside the Complete Repo ZIP. The installer tests need
+`/bin/bash`.
+"""
 
 import os
 import re
@@ -14,14 +25,18 @@ try:
 except ImportError:
 
   class _FallbackTestCase(unittest.TestCase):
+    """unittest.TestCase with the absltest helpers these tests use."""
 
     def assertLen(self, container, expected_len, msg=None):
+      """Asserts `len(container) == expected_len`."""
       self.assertEqual(len(container), expected_len, msg=msg)
 
     def assertNotEmpty(self, container, msg=None):
+      """Asserts that `container` has at least one element."""
       self.assertGreater(len(container), 0, msg=msg)
 
     def create_tempdir(self):
+      """Returns an object whose `full_path` is a self-cleaning temp dir."""
       td = tempfile.TemporaryDirectory()
       self.addCleanup(td.cleanup)
       return types.SimpleNamespace(full_path=td.name)
@@ -29,6 +44,8 @@ except ImportError:
   absltest = types.SimpleNamespace(TestCase=_FallbackTestCase, main=unittest.main)
 
 try:
+  # Internal monorepo import path; falls back to sibling modules when run
+  # from a plain checkout.
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import bundle_builder_lib
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import drfx_validator
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import fusion_templates
@@ -41,8 +58,10 @@ except ImportError:
 
 
 class PapercraftProTest(absltest.TestCase):
+  """End-to-end and unit checks for the release builder and validators."""
 
   def test_png_thumbnail(self):
+    """Both thumbnail variants are valid 104x58 PNGs and differ."""
     for variant in ("effect", "fold"):
       with self.subTest(variant=variant):
         thumb = png_renderer.render_thumbnail_png((232, 93, 56), variant)
@@ -55,6 +74,7 @@ class PapercraftProTest(absltest.TestCase):
     )
 
   def test_effect_fusion_template_validates_as_macro_operator(self):
+    """The effect template is a MacroOperator and passes the validator."""
     text = fusion_templates.build_effect_setting()
     self.assertIn("= MacroOperator", text)
     self.assertNotIn("= GroupOperator", text)
@@ -62,6 +82,7 @@ class PapercraftProTest(absltest.TestCase):
     drfx_validator.validate_setting_syntax_and_graph(text, "effect")
 
   def test_fold_transition_fusion_template_validates(self):
+    """The fold transition validates and kind/control errors are caught."""
     text = fusion_templates.build_fold_transition_setting()
     self.assertIn("PaperFoldTransition = MacroOperator", text)
     self.assertIn("MainInput2 = InstanceInput", text)
@@ -85,6 +106,7 @@ class PapercraftProTest(absltest.TestCase):
       drfx_validator.validate_setting_syntax_and_graph(bad_ref, "transition")
 
   def test_drfx_ships_effect_and_fold_transition(self):
+    """The .drfx holds exactly the effect and transition with thumbnails."""
     entries = bundle_builder_lib.build_drfx_entries()
     self.assertEqual(
         sorted(entries),
@@ -106,6 +128,7 @@ class PapercraftProTest(absltest.TestCase):
       )
 
   def test_validator_rejects_broken_or_group_operator_setting(self):
+    """Each class of broken .setting edit raises a specific ValueError."""
     valid = fusion_templates.build_effect_setting()
     group_op = valid.replace("= MacroOperator", "= GroupOperator")
     with self.assertRaisesRegex(ValueError, "MacroOperator"):
@@ -137,6 +160,7 @@ class PapercraftProTest(absltest.TestCase):
       drfx_validator.validate_setting_syntax_and_graph(bad_op, "effect")
 
   def test_bundled_paper_sfx_wavs(self):
+    """The four bundled Foley WAVs and credits exist and pass validation."""
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     sfx_map = bundle_builder_lib.build_sfx_entries(pkg_dir)
     wav_paths = {p for p in sfx_map if p.endswith(".wav")}
@@ -155,6 +179,7 @@ class PapercraftProTest(absltest.TestCase):
         drfx_validator.validate_wav_bytes(sfx_map[rel_path])
 
   def test_installers_syntax_and_dry_run(self):
+    """Installer scripts parse with `bash -n` and support `--dry-run`."""
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     for script in (
         "Install_PaperCraft_OpenFX_macOS.command",
@@ -187,6 +212,11 @@ class PapercraftProTest(absltest.TestCase):
     )
 
   def test_end_to_end_bundle_creation(self):
+    """A full release builds, has the right members, modes, and links.
+
+    Uses a mock Linux `.ofx` when no compiled binary exists, then also runs
+    the extracted Linux installer into a nested, not-yet-existing folder.
+    """
     scratch_dir = self.create_tempdir().full_path
     tmp_dir = os.path.join(scratch_dir, "out")
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
@@ -306,6 +336,8 @@ class PapercraftProTest(absltest.TestCase):
         mode = (rzf.getinfo(exe_member).external_attr >> 16) & 0o777
         self.assertEqual(mode, 0o755, msg=f"Bad permissions on {exe_member}")
 
+      # Every relative Markdown link in shipped docs must point at a member
+      # of the repo ZIP. Only the path is checked; `#anchor` parts are not.
       for md_entry in (
           "papercraft_pro/README.md",
           "papercraft_pro/README.en.md",
@@ -330,6 +362,7 @@ class PapercraftProTest(absltest.TestCase):
     nested_dest = os.path.join(
         tmp_dir, "nested_missing_parent", "OFX", "Plugins"
     )
+    # The installer must create missing parent directories for --dest.
     subprocess.run(
         ["/bin/bash", out["linux_installer"], "--dest", nested_dest],
         check=True,
@@ -346,8 +379,8 @@ class PapercraftProTest(absltest.TestCase):
         )
     )
 
-
   def test_validator_rejects_truncated_png_with_value_error(self):
+    """Thumbnails shorter than the 24-byte IHDR header raise ValueError."""
     entries = bundle_builder_lib.build_drfx_entries()
     png_key = next(k for k in entries if k.endswith(".png"))
     for bad_len in (8, 16, 23):
@@ -359,11 +392,28 @@ class PapercraftProTest(absltest.TestCase):
           drfx_validator.validate_drfx_bytes(drfx_bytes)
 
   def test_active_trans_style_matches_anim_progress(self):
+    """The chosen intro/outro style agrees with the progress ramp in use.
+
+    The SimpleExpressions are evaluated as Python: their syntax (`iif`,
+    `min`, `max`, `and`, attribute access) is a subset Python can run once
+    those names are provided.
+    """
     macro = "PaperCutoutFX"
     prog_expr = fusion_templates._anim_progress_expr(macro)  # pylint: disable=protected-access
     style_expr = fusion_templates._active_trans_style_expr(macro)  # pylint: disable=protected-access
 
     def eval_expr(expr, t, render_end, **ctrl_vals):
+      """Evaluates `expr` at frame `t` on a comp spanning 0..render_end.
+
+      Args:
+        expr: SimpleExpression string.
+        t: Current frame (`time`).
+        render_end: `comp.RenderEnd`; `comp.RenderStart` is 0.
+        **ctrl_vals: Macro control values, e.g. `IntroFrames=10`.
+
+      Returns:
+        The evaluated value.
+      """
       env = {
           "__builtins__": {},
           "iif": lambda c, a, b: a if c else b,

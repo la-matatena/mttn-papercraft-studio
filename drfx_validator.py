@@ -1,4 +1,21 @@
-"""Structural validators for Fusion .setting, .drfx bundles, and WAV audio."""
+"""Structural validators for Fusion .setting, .drfx bundles, and WAV audio.
+
+Resolve gives almost no feedback when a template is malformed (it is just
+missing from the Effects Library), so `bundle_builder_lib` runs these checks
+before writing a release and `papercraft_pro_test.py` exercises them.
+
+Entry points:
+
+* `validate_setting_syntax_and_graph`: one `.setting` text (balanced braces,
+  MacroOperator layout, MainInput/MainOutput wiring, dangling `SourceOp`s,
+  `LBLC_NumInputs` counts, SimpleExpression syntax and control references).
+* `validate_drfx_bytes`: the whole `.drfx` ZIP (one effect + one transition,
+  104x58 PNG thumbnails, bundled `Setting:/` assets).
+* `validate_wav_bytes`: Paper SFX format and loudness sanity checks.
+
+The checks are lightweight text scans, not a full Lua parser; they rely on
+the four-tab indentation emitted by `fusion_templates`.
+"""
 
 import io
 import math
@@ -8,13 +25,25 @@ import wave
 import zipfile
 
 try:
+  # Internal monorepo import path; falls back to the sibling module when run
+  # from a plain checkout.
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import png_renderer
 except ImportError:
   import png_renderer  # type: ignore[no-redef]
 
 
 def _check_balanced_delimiters(text: str) -> None:
-  """Verifies balanced {}, () and properly closed string literals."""
+  """Verifies balanced {}, () and properly closed string literals.
+
+  Characters inside double-quoted strings (including backslash escapes) are
+  ignored, so braces in labels or expressions do not count.
+
+  Args:
+    text: Full `.setting` text.
+
+  Raises:
+    ValueError: On a stray closer, unbalanced totals, or an open string.
+  """
   in_string = False
   escaped = False
   brace_depth = 0
@@ -55,7 +84,22 @@ def _check_balanced_delimiters(text: str) -> None:
 
 
 def _extract_brace_block(text: str, marker: str, start_pos: int = 0) -> str:
-  """Extracts the {...} substring immediately following a block marker."""
+  """Extracts the {...} substring immediately following a block marker.
+
+  Args:
+    text: Text to search.
+    marker: Literal marker such as `"Inputs = ordered()"`.
+    start_pos: Index to start searching from; used to skip blocks that
+      appear before the macro definition.
+
+  Returns:
+    Body between the first `{` after the marker and its matching `}`,
+    exclusive of both braces. Braces inside strings are ignored.
+
+  Raises:
+    ValueError: If the marker, its opening brace, or the closing brace is
+      missing.
+  """
   idx = text.find(marker, start_pos)
   if idx < 0:
     raise ValueError(f"Missing required block marker: {marker}")
@@ -91,6 +135,12 @@ def validate_setting_syntax_and_graph(
     template_kind: str,
 ) -> None:
   """Validates a Fusion .setting template's syntax, graph wiring, and UI.
+
+  Expected inputs per kind: effects declare only `MainInput1`, transitions
+  declare `MainInput1` (outgoing) and `MainInput2` (incoming), and generators
+  declare neither and must run for 1,000,000 frames so they never end early
+  on the timeline. The current `.drfx` ships no generator; that branch is
+  kept for older templates.
 
   Args:
     setting_text: Full contents of a Fusion .setting template file.
@@ -143,6 +193,7 @@ def validate_setting_syntax_and_graph(
     raise ValueError("Transition template must declare MainInput1 and 2.")
 
   # Collect top-level operator names inside the macro's internal Tools block.
+  # Top-level nodes are exactly four tabs deep (see fusion_templates).
   internal_ops = set(
       re.findall(
           r"^\t{4}([A-Za-z0-9_]+)\s*=\s*[A-Za-z0-9_]+\s*\{",
@@ -158,6 +209,8 @@ def validate_setting_syntax_and_graph(
       raise ValueError(f"Dangling SourceOp reference: {src_op!r}")
 
   # Collect declared UserControl identifiers and check LBLC_NumInputs counts.
+  # A drop-down LabelControl must be followed by exactly LBLC_NumInputs
+  # controls before the next drop-down label, or Fusion groups rows wrongly.
   control_entries = list(
       re.finditer(
           r"^\t{4}([A-Za-z0-9_]+)\s*=\s*\{",
@@ -197,6 +250,8 @@ def validate_setting_syntax_and_graph(
         )
 
   # Validate SimpleExpressions syntax and control references.
+  # SimpleExpressions are not Lua: they use bare math functions and the
+  # `and`/`or` keywords, so `math.` or C-style operators break evaluation.
   for expr in re.findall(r'Expression\s*=\s*"([^"]+)"', setting_text):
     if "math." in expr:
       raise ValueError(
@@ -227,6 +282,12 @@ def validate_setting_syntax_and_graph(
 
 def validate_drfx_bytes(drfx_bytes: bytes) -> None:
   """Validates a .drfx archive layout, .setting graphs, thumbnails, and paths.
+
+  The archive must hold exactly two templates: one under `Edit/Effects/` and
+  one under `Edit/Transitions/`, each with a same-named `.png` thumbnail of
+  `png_renderer.THUMBNAIL_WIDTH` x `THUMBNAIL_HEIGHT`. Any `Setting:/...`
+  asset path inside a template must exist next to it in the archive
+  (`Setting:` is Fusion's alias for the template's own folder).
 
   Args:
     drfx_bytes: Complete bytes of an MTTN_PaperCraft_Studio.drfx ZIP file.
@@ -274,6 +335,8 @@ def validate_drfx_bytes(drfx_bytes: bytes) -> None:
             f"Truncated PNG header in {thumb_path}: expected >= 24 bytes, "
             f"got {len(png_bytes)}."
         )
+      # Bytes 0-7 are the signature, 8-15 the IHDR length and type, and
+      # 16-23 the big-endian IHDR width and height.
       width, height = struct.unpack(">II", png_bytes[16:24])
       if (width, height) != (
           png_renderer.THUMBNAIL_WIDTH,
@@ -295,6 +358,12 @@ def validate_drfx_bytes(drfx_bytes: bytes) -> None:
 
 def validate_wav_bytes(wav_bytes: bytes) -> None:
   """Validates 48kHz 24-bit stereo WAV integrity, clipping, and edges.
+
+  Thresholds (linear full-scale units, 1.0 = 0 dBFS): duration 0.2-2.0 s,
+  RMS above 0.01 (about -40 dBFS, i.e. not silent), peak below 0.995 (no
+  clipping), mean |L - R| of at least 1e-4 (real stereo, not duplicated
+  mono), and first/last left-channel samples within 0.005 of zero (faded
+  edges that do not click when the clip starts or ends on the timeline).
 
   Args:
     wav_bytes: Complete RIFF WAV bytes.
@@ -319,6 +388,7 @@ def validate_wav_bytes(wav_bytes: bytes) -> None:
       raise ValueError(f"Unexpected SFX duration: {duration_s:.3f}s")
     raw = wav_in.readframes(num_frames)
 
+  # 24-bit signed PCM max is 2^23 - 1; scale samples to [-1, 1].
   scale = 1.0 / 8388607.0
   sq_sum = 0.0
   peak = 0.0
@@ -326,6 +396,7 @@ def validate_wav_bytes(wav_bytes: bytes) -> None:
   first_l = 0.0
   last_l = 0.0
 
+  # Frames are interleaved little-endian [L0 L1 L2 R0 R1 R2]: 6 bytes each.
   for i in range(num_frames):
     offset = i * 6
     sl = int.from_bytes(raw[offset : offset + 3], "little", signed=True) * scale

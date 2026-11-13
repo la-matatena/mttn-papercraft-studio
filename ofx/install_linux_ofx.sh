@@ -1,14 +1,46 @@
 #!/bin/bash
 # Installs PaperCraftStudioPro.ofx.bundle for DaVinci Resolve on Linux x86-64.
+#
+# Copies the prebuilt bundle that sits next to this script (in the extracted
+# release ZIP) into an OpenFX plugin folder Resolve scans at startup. It does
+# not compile anything; the Linux binary is built by CI.
+#
+# Usage:
+#   install_linux_ofx.sh [--user] [--dry-run] [--dest DIR]
+# Flags:
+#   --user      Install to ~/.local/share/OFX/Plugins instead of the
+#               system-wide /usr/OFX/Plugins (no sudo needed).
+#   --dry-run   Print source bundle and target folder; copy nothing.
+#   --dest DIR  Install into DIR (overrides --user).
+#   -h, --help  Show usage.
 
 set -euo pipefail
 
 readonly BUNDLE_NAME="PaperCraftStudioPro.ofx.bundle"
 
+#######################################
+# Prints the usage line.
+# Arguments:
+#   None
+# Outputs:
+#   Writes usage to stdout.
+#######################################
 usage() {
   echo "Usage: $(basename "$0") [--user] [--dry-run] [--dest DIR]"
 }
 
+#######################################
+# Parses flags and copies the bundle into the chosen OpenFX folder.
+# Globals:
+#   BUNDLE_NAME
+#   HOME
+# Arguments:
+#   Command-line flags (see file header).
+# Outputs:
+#   Writes progress and the install location to stdout, errors to stderr.
+# Returns:
+#   0 on success; exits 1 on bad flags or a missing source bundle.
+#######################################
 main() {
   local mode="system"
   local dry_run="false"
@@ -61,6 +93,9 @@ main() {
     exit 1
   fi
 
+  # Find the nearest existing ancestor of dest_dir to decide whether the
+  # install needs sudo. chmod restores the exec bit in case the ZIP
+  # extractor dropped it.
   local check_dir="${dest_dir}"
   while [[ ! -e "${check_dir}" && "${check_dir}" != "/" ]]; do
     check_dir="$(dirname "${check_dir}")"

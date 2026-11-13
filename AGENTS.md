@@ -9,6 +9,7 @@ Contexto rápido para asistentes de código que trabajen en `la-matatena/mttn-pa
 - **100 % CPU OpenFX 1.4 C++17 y sin marcas de agua**: compatible con DaVinci Resolve Free y Studio en macOS Universal (`arm64` + `x86_64`) y Linux `x86_64`, sin dependencias de red ni shaders propietarios.
 - **Audio Foley**: todos los WAV en `Paper_SFX/` deben ser grabaciones en dominio público (`CC0` / `Public Domain`) a 48 kHz y 24 bits estéreo, documentadas en `Paper_SFX/CREDITS.md`.
 - **Idioma y paridad**: `README.md` y `site/index.html` en español; `README.en.md` y `site/en/index.html` sincronizados en inglés; código e identificadores en inglés.
+- **Estilo y documentación**: sigue [`docs/developer_guide.md#code-style-and-documentation-conventions`](docs/developer_guide.md#code-style-and-documentation-conventions) (Google Style para C++, Python con 2 espacios y shell; docstrings y comentarios en inglés encima de cada función; marcadores `shortcut:`; los commits de solo documentación no cambian el comportamiento).
 
 ## Verificación antes de terminar
 

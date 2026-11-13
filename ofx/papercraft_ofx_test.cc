@@ -1,3 +1,34 @@
+// Integration tests for the PaperCraft OpenFX binary (papercraft_ofx_plugin.cc
+// plus papercraft_kernel.cc), driven the same way a host such as DaVinci
+// Resolve drives it.
+//
+// Approach: the tests do not link the plugin sources. Each test dlopen()s the
+// built PaperCraftStudioPro.ofx (see ResolvePluginBinaryPath()) and reaches
+// it only through the exported OfxGetNumberOfPlugins() / OfxGetPlugin()
+// entry points. That way the real build flags, symbol visibility and the
+// full action sequence (setHost, Load, Describe, DescribeInContext,
+// CreateInstance, GetClipPreferences, GetRegionsOfInterest, IsIdentity,
+// Render, DestroyInstance, Unload) are all under test.
+//
+// The mock host implements the four suites the plugin fetches:
+//   - Property suite: MockPropertySet, a mutex-guarded map from property name
+//     to a typed value vector (int, double, string or pointer).
+//   - Parameter suite: MockParamSet / MockParam. Values are not animated
+//     (GetValueAtTime ignores time); tests set them with MockParamSetValue().
+//   - Image effect suite: MockEffectObject (a descriptor or an instance) with
+//     MockClip entries. A clip returns the image property set bound to it by
+//     ConfigureClipAndImage(), and MockHost counts leased images so tests can
+//     assert that every clipGetImage() was released.
+//   - Multithread suite: real pthreads (at most 4) with thread-local
+//     "spawned" flags, so the plugin's parallel row dispatch runs truly
+//     concurrently.
+// Mock OpenFX handles are reinterpret_cast pointers to these structs.
+// CloneDescriptorToInstance() mimics the host creating an instance from a
+// described context.
+//
+// Run with Bazel (`papercraft_ofx_test` in BUILD) or as in CI: build the
+// bundle, compile this file against gtest, and set PAPERCRAFT_OFX_PATH.
+
 #include <dlfcn.h>
 #include <pthread.h>
 
@@ -35,9 +66,18 @@ namespace papercraft {
 namespace ofx_test {
 namespace {
 
+// ---------------------------------------------------------------------------
+// Locating the plugin binary.
+// ---------------------------------------------------------------------------
+
+// Signatures of the two C entry points exported by the plugin.
 using GetNumPluginsFn = int (*)();
 using GetPluginFn = OfxPlugin* (*)(int);
 
+// Returns the path of the plugin binary to dlopen: $PAPERCRAFT_OFX_PATH if
+// set, else the first existing candidate under Bazel's $TEST_SRCDIR runfiles
+// or the working directory. If none exists, returns the first candidate so
+// the dlopen failure message names a meaningful path.
 std::string ResolvePluginBinaryPath() {
   if (const char* explicit_path = std::getenv("PAPERCRAFT_OFX_PATH");
       explicit_path != nullptr && explicit_path[0] != '\0') {
@@ -64,6 +104,11 @@ std::string ResolvePluginBinaryPath() {
   return candidates.front();
 }
 
+// ---------------------------------------------------------------------------
+// Mock property suite.
+// ---------------------------------------------------------------------------
+
+// Minimal non-copyable pthread mutex wrapper used by the mock host.
 class PthreadMutex {
  public:
   PthreadMutex() { pthread_mutex_init(&mu_, nullptr); }
@@ -78,6 +123,7 @@ class PthreadMutex {
   pthread_mutex_t mu_;
 };
 
+// RAII lock for PthreadMutex.
 class ScopedMutexLock {
  public:
   explicit ScopedMutexLock(PthreadMutex& mu) : mu_(mu) { mu_.Lock(); }
@@ -89,6 +135,8 @@ class ScopedMutexLock {
   PthreadMutex& mu_;
 };
 
+// One OpenFX property value. Only the vector matching `kind` is meaningful;
+// a property keeps the type of its last write, like a real host's.
 struct PropValue {
   enum class Kind { kUnset, kInt, kDouble, kString, kPointer };
   Kind kind = Kind::kUnset;
@@ -98,11 +146,14 @@ struct PropValue {
   std::vector<void*> ptrs;
 };
 
+// Property set behind every mock OfxPropertySetHandle. Guarded by `mu`
+// because the plugin's render workers may read properties concurrently.
 struct MockPropertySet {
   PthreadMutex mu;
   std::map<std::string, PropValue> map;
 };
 
+// Converts between opaque OpenFX property handles and MockPropertySet.
 MockPropertySet* AsProps(OfxPropertySetHandle h) {
   return reinterpret_cast<MockPropertySet*>(h);
 }
@@ -111,6 +162,8 @@ OfxPropertySetHandle ToPropHandle(MockPropertySet* p) {
   return reinterpret_cast<OfxPropertySetHandle>(p);
 }
 
+// Replaces the whole value of property `name` with `count` items of type T.
+// `Field` selects the PropValue vector that stores T.
 template <typename T, PropValue::Kind K, std::vector<T> PropValue::* Field>
 OfxStatus SetPropN(OfxPropertySetHandle h, const char* name, int count,
                    const T* vals) {
@@ -126,6 +179,7 @@ OfxStatus SetPropN(OfxPropertySetHandle h, const char* name, int count,
   return kOfxStatOK;
 }
 
+// Sets element `index` of property `name`, growing the vector as needed.
 template <typename T, PropValue::Kind K, std::vector<T> PropValue::* Field>
 OfxStatus SetPropOne(OfxPropertySetHandle h, const char* name, int index,
                      const T& val) {
@@ -144,6 +198,9 @@ OfxStatus SetPropOne(OfxPropertySetHandle h, const char* name, int index,
   return kOfxStatOK;
 }
 
+// Copies the first `count` items of property `name` into `out`. Fails with
+// kOfxStatErrUnknown if the property is missing or has another type, which
+// is how the plugin's fallback paths get exercised.
 template <typename T, PropValue::Kind K, std::vector<T> PropValue::* Field>
 OfxStatus GetPropN(OfxPropertySetHandle h, const char* name, int count,
                    T* out) {
@@ -166,6 +223,9 @@ OfxStatus GetPropN(OfxPropertySetHandle h, const char* name, int count,
   return kOfxStatOK;
 }
 
+// OfxPropertySuiteV1 entry points. Each one forwards to the SetProp*/GetProp*
+// templates above. Strings returned by getters point into the property set
+// and stay valid until the property is next written.
 OfxStatus MockPropSetPointer(OfxPropertySetHandle h, const char* p, int idx,
                              void* v) {
   return SetPropOne<void*, PropValue::Kind::kPointer, &PropValue::ptrs>(h, p,
@@ -328,6 +388,7 @@ OfxStatus MockPropGetDimension(OfxPropertySetHandle h, const char* p,
   return kOfxStatOK;
 }
 
+// Property suite table, in OfxPropertySuiteV1 member order.
 const OfxPropertySuiteV1 kPropSuite = {
     MockPropSetPointer,  MockPropSetString,   MockPropSetDouble,
     MockPropSetInt,      MockPropSetPointerN, MockPropSetStringN,
@@ -337,6 +398,13 @@ const OfxPropertySuiteV1 kPropSuite = {
     MockPropGetIntN,     MockPropReset,       MockPropGetDimension,
 };
 
+// ---------------------------------------------------------------------------
+// Mock parameter suite.
+// ---------------------------------------------------------------------------
+
+// One defined parameter. `props` holds what the plugin set at describe time
+// (label, default, limits); the current value lives in `int_val` (int, bool,
+// choice) or `double_vals` (double, 2D, RGB) and is not animated.
 struct MockParam {
   std::string type;
   std::string name;
@@ -345,11 +413,14 @@ struct MockParam {
   double double_vals[3] = {0.0, 0.0, 0.0};
 };
 
+// All parameters of one descriptor or instance, keyed by parameter ID.
 struct MockParamSet {
   MockPropertySet owner_props;
   std::map<std::string, std::unique_ptr<MockParam>> params;
 };
 
+// paramDefine: creates (or replaces) parameter `name` and returns its
+// property set so the plugin can fill in label, default and limits.
 OfxStatus MockParamDefine(OfxParamSetHandle param_set, const char* param_type,
                           const char* name, OfxPropertySetHandle* prop_set) {
   if (param_set == nullptr || param_type == nullptr || name == nullptr) {
@@ -366,6 +437,7 @@ OfxStatus MockParamDefine(OfxParamSetHandle param_set, const char* param_type,
   return kOfxStatOK;
 }
 
+// paramGetHandle: looks a parameter up by ID; kOfxStatErrUnknown if absent.
 OfxStatus MockParamGetHandle(OfxParamSetHandle param_set, const char* name,
                              OfxParamHandle* param_out,
                              OfxPropertySetHandle* prop_set) {
@@ -384,6 +456,7 @@ OfxStatus MockParamGetHandle(OfxParamSetHandle param_set, const char* name,
   return kOfxStatOK;
 }
 
+// Property-set accessors for a parameter set and for a single parameter.
 OfxStatus MockParamSetGetPropertySet(OfxParamSetHandle param_set,
                                      OfxPropertySetHandle* prop_out) {
   auto* ps = reinterpret_cast<MockParamSet*>(param_set);
@@ -398,6 +471,9 @@ OfxStatus MockParamGetPropertySet(OfxParamHandle param_h,
   return kOfxStatOK;
 }
 
+// Writes the current value of `param_h` through the variadic out-pointers in
+// `ap`, following the OpenFX convention: one int* for int/bool/choice, one,
+// two or three double* for double/2D/RGB.
 OfxStatus ReadParamVaList(OfxParamHandle param_h, va_list ap) {
   if (param_h == nullptr) {
     return kOfxStatErrBadHandle;
@@ -433,6 +509,8 @@ OfxStatus ReadParamVaList(OfxParamHandle param_h, va_list ap) {
   return kOfxStatErrUnsupported;
 }
 
+// paramGetValue / paramGetValueAtTime. Time is ignored: the mock has no
+// keyframes, so every frame sees the last value set by the test.
 OfxStatus MockParamGetValue(OfxParamHandle param_h, ...) {
   va_list ap;
   va_start(ap, param_h);
@@ -449,6 +527,9 @@ OfxStatus MockParamGetValueAtTime(OfxParamHandle param_h, OfxTime time, ...) {
   return st;
 }
 
+// Parameter-suite entry points the plugin never uses: unsupported or no-op
+// stubs. MockParamSetValue() is the exception: tests call it directly to set
+// a parameter (int for int/bool/choice, doubles for double/2D/RGB).
 OfxStatus MockParamGetDerivative(OfxParamHandle /*p*/, OfxTime /*t*/, ...) {
   return kOfxStatErrUnsupported;
 }
@@ -508,6 +589,7 @@ OfxStatus MockParamEditBegin(OfxParamSetHandle /*s*/, const char* /*n*/) {
 }
 OfxStatus MockParamEditEnd(OfxParamSetHandle /*s*/) { return kOfxStatOK; }
 
+// Parameter suite table, in OfxParameterSuiteV1 member order.
 const OfxParameterSuiteV1 kParamSuite = {
     MockParamDefine,         MockParamGetHandle,   MockParamSetGetPropertySet,
     MockParamGetPropertySet, MockParamGetValue,    MockParamGetValueAtTime,
@@ -517,8 +599,16 @@ const OfxParameterSuiteV1 kParamSuite = {
     MockParamCopy,           MockParamEditBegin,   MockParamEditEnd,
 };
 
+// ---------------------------------------------------------------------------
+// Mock host, clips and effects.
+// ---------------------------------------------------------------------------
+
 struct MockHost;
 
+// One clip ("Output", "Source", "SourceFrom" or "SourceTo"). `props` holds
+// clip properties (connected, depth, frame range, plus the test-only
+// "MockRoD"); `bound_image` is the image returned by clipGetImage(), or
+// nullptr to simulate "no image at this time".
 struct MockClip {
   std::string name;
   MockHost* host = nullptr;
@@ -526,6 +616,8 @@ struct MockClip {
   MockPropertySet* bound_image = nullptr;
 };
 
+// An effect descriptor or instance: its properties, parameters and clips.
+// OfxImageEffectHandle values given to the plugin point at one of these.
 struct MockEffectObject {
   MockHost* host = nullptr;
   MockPropertySet props;
@@ -533,6 +625,9 @@ struct MockEffectObject {
   std::map<std::string, std::unique_ptr<MockClip>> clips;
 };
 
+// The host itself. `ofx_host` is what setHost receives. `lease_mu` guards
+// `active_leased_images`, the count of images fetched and not yet released;
+// tests expect it back at 0 after every render.
 struct MockHost {
   MockPropertySet host_props;
   OfxHost ofx_host;
@@ -546,6 +641,8 @@ struct MockHost {
 const OfxMultiThreadSuiteV1* GetMultiThreadSuite();
 const OfxImageEffectSuiteV1* GetImageEffectSuite();
 
+// OfxHost::fetchSuite: returns the mock property, parameter, image-effect and
+// multithread suites (version 1 only); nullptr for anything else.
 const void* MockHost::FetchSuite(OfxPropertySetHandle /*host*/,
                                  const char* suite_name, int suite_version) {
   if (suite_version != 1 || suite_name == nullptr) {
@@ -566,9 +663,17 @@ const void* MockHost::FetchSuite(OfxPropertySetHandle /*host*/,
   return nullptr;
 }
 
+// ---------------------------------------------------------------------------
+// Mock multithread suite.
+// ---------------------------------------------------------------------------
+
+// Per-thread state reported by multiThreadIsSpawnedThread() and
+// multiThreadIndex(). The plugin must not nest multiThread() calls from a
+// spawned thread, and these flags let it detect that.
 thread_local bool g_is_spawned_thread = false;
 thread_local unsigned int g_spawned_thread_index = 0;
 
+// Arguments for one worker started by MockMultiThread().
 struct WorkerThreadArgs {
   OfxThreadFunctionV1* func = nullptr;
   unsigned int index = 0;
@@ -576,6 +681,8 @@ struct WorkerThreadArgs {
   void* custom_arg = nullptr;
 };
 
+// pthread entry point: marks the thread as spawned, runs the plugin's
+// thread function, then clears the marks.
 void* RunMockWorkerThread(void* raw) {
   auto* args = static_cast<WorkerThreadArgs*>(raw);
   g_is_spawned_thread = true;
@@ -586,6 +693,9 @@ void* RunMockWorkerThread(void* raw) {
   return nullptr;
 }
 
+// multiThread: runs `func` on min(n_threads, 4) real pthreads and joins them
+// all before returning, as the OpenFX spec requires. If a thread cannot be
+// started, joins the ones already running and fails.
 OfxStatus MockMultiThread(OfxThreadFunctionV1 func, unsigned int n_threads,
                           void* custom_arg) {
   if (func == nullptr || n_threads == 0) {
@@ -612,11 +722,13 @@ OfxStatus MockMultiThread(OfxThreadFunctionV1 func, unsigned int n_threads,
   return kOfxStatOK;
 }
 
+// multiThreadNumCPUs: always 4, so tests behave the same on any machine.
 OfxStatus MockMultiThreadNumCPUs(unsigned int* n_cpus) {
   *n_cpus = 4;
   return kOfxStatOK;
 }
 
+// multiThreadIndex / multiThreadIsSpawnedThread, backed by the thread-locals.
 OfxStatus MockMultiThreadIndex(unsigned int* idx) {
   *idx = g_spawned_thread_index;
   return kOfxStatOK;
@@ -624,6 +736,8 @@ OfxStatus MockMultiThreadIndex(unsigned int* idx) {
 
 int MockMultiThreadIsSpawnedThread(void) { return g_is_spawned_thread ? 1 : 0; }
 
+// Mutex functions of the multithread suite, backed by heap-allocated
+// pthread mutexes. The plugin does not use them today.
 OfxStatus MockMutexCreate(OfxMutexHandle* m, int /*lock_count*/) {
   auto* pm = new pthread_mutex_t;
   pthread_mutex_init(pm, nullptr);
@@ -650,6 +764,7 @@ OfxStatus MockMutexTryLock(const OfxMutexHandle m) {
              : kOfxStatFailed;
 }
 
+// Returns the multithread suite table, in OfxMultiThreadSuiteV1 order.
 const OfxMultiThreadSuiteV1* GetMultiThreadSuite() {
   static const OfxMultiThreadSuiteV1 kSuite = {
       MockMultiThread,      MockMultiThreadNumCPUs,
@@ -661,6 +776,11 @@ const OfxMultiThreadSuiteV1* GetMultiThreadSuite() {
   return &kSuite;
 }
 
+// ---------------------------------------------------------------------------
+// Mock image effect suite.
+// ---------------------------------------------------------------------------
+
+// getPropertySet / getParamSet for an effect handle (a MockEffectObject*).
 OfxStatus MockEffectGetPropertySet(OfxImageEffectHandle effect,
                                    OfxPropertySetHandle* prop_set) {
   auto* obj = reinterpret_cast<MockEffectObject*>(effect);
@@ -675,6 +795,7 @@ OfxStatus MockEffectGetParamSet(OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
+// clipDefine: adds clip `name` to a descriptor and returns its properties.
 OfxStatus MockClipDefine(OfxImageEffectHandle effect, const char* name,
                          OfxPropertySetHandle* prop_set) {
   auto* obj = reinterpret_cast<MockEffectObject*>(effect);
@@ -688,6 +809,7 @@ OfxStatus MockClipDefine(OfxImageEffectHandle effect, const char* name,
   return kOfxStatOK;
 }
 
+// clipGetHandle: looks a clip up by name; kOfxStatErrUnknown if absent.
 OfxStatus MockClipGetHandle(OfxImageEffectHandle effect, const char* name,
                             OfxImageClipHandle* clip_out,
                             OfxPropertySetHandle* prop_set) {
@@ -703,6 +825,7 @@ OfxStatus MockClipGetHandle(OfxImageEffectHandle effect, const char* name,
   return kOfxStatOK;
 }
 
+// clipGetPropertySet: returns the clip's own properties.
 OfxStatus MockClipGetPropertySet(OfxImageClipHandle clip_h,
                                  OfxPropertySetHandle* prop_set) {
   auto* clip = reinterpret_cast<MockClip*>(clip_h);
@@ -710,6 +833,9 @@ OfxStatus MockClipGetPropertySet(OfxImageClipHandle clip_h,
   return kOfxStatOK;
 }
 
+// clipGetImage: returns the clip's bound image (time and region ignored) and
+// counts one lease. Fails when nothing is bound, which is how tests simulate
+// a missing image at a clip edge.
 OfxStatus MockClipGetImage(OfxImageClipHandle clip_h, OfxTime /*time*/,
                            const OfxRectD* /*region*/,
                            OfxPropertySetHandle* image_handle) {
@@ -726,6 +852,9 @@ OfxStatus MockClipGetImage(OfxImageClipHandle clip_h, OfxTime /*time*/,
   return kOfxStatOK;
 }
 
+// clipReleaseImage: ends one lease. The owning host is found through the
+// test-only "MockHostPtr" property that ConfigureClipAndImage() stores on
+// every image.
 OfxStatus MockClipReleaseImage(OfxPropertySetHandle image_handle) {
   auto* ps = AsProps(image_handle);
   void* host_ptr = nullptr;
@@ -739,6 +868,8 @@ OfxStatus MockClipReleaseImage(OfxPropertySetHandle image_handle) {
   return kOfxStatOK;
 }
 
+// clipGetRegionOfDefinition: returns the clip's test-only "MockRoD" property
+// (x1, y1, x2, y2), or fails if the test did not set it.
 OfxStatus MockClipGetRod(OfxImageClipHandle clip_h, OfxTime /*time*/,
                          OfxRectD* bounds) {
   auto* clip = reinterpret_cast<MockClip*>(clip_h);
@@ -754,6 +885,8 @@ OfxStatus MockClipGetRod(OfxImageClipHandle clip_h, OfxTime /*time*/,
   return kOfxStatOK;
 }
 
+// abort (never requested) and image-memory functions (plain malloc/free).
+// The plugin does not use them today.
 int MockAbort(OfxImageEffectHandle /*effect*/) { return 0; }
 OfxStatus MockImageMemoryAlloc(OfxImageEffectHandle /*effect*/, size_t bytes,
                                OfxImageMemoryHandle* mem) {
@@ -772,6 +905,7 @@ OfxStatus MockImageMemoryUnlock(OfxImageMemoryHandle /*mem*/) {
   return kOfxStatOK;
 }
 
+// Returns the image effect suite table, in OfxImageEffectSuiteV1 order.
 const OfxImageEffectSuiteV1* GetImageEffectSuite() {
   static const OfxImageEffectSuiteV1 kSuite = {
       MockEffectGetPropertySet, MockEffectGetParamSet,  MockClipDefine,
@@ -783,6 +917,14 @@ const OfxImageEffectSuiteV1* GetImageEffectSuite() {
   return &kSuite;
 }
 
+// ---------------------------------------------------------------------------
+// Test helpers.
+// ---------------------------------------------------------------------------
+
+// Mimics the host turning a described context into an instance: copies the
+// clips (with their properties) and the parameters from `context_desc` into
+// `inst`, seeds each parameter's value from its kOfxParamPropDefault, and
+// records `context` on the instance.
 void CloneDescriptorToInstance(const MockEffectObject& context_desc,
                                MockEffectObject* inst, const char* context) {
   inst->host = context_desc.host;
@@ -814,6 +956,12 @@ void CloneDescriptorToInstance(const MockEffectObject& context_desc,
   }
 }
 
+// Marks `clip` as connected with pixel depth `depth` and the given frame
+// range, sets its RoD to (0, 0, width, height), and binds `img_props` as the
+// image clipGetImage() will return. The image wraps the caller-owned RGBA
+// buffer `data` (premultiplied, bounds = RoD) with `row_bytes` per row; a
+// negative `row_bytes` with `data` pointing at the last row models bottom-up
+// storage. Tests may override individual image properties afterwards.
 void ConfigureClipAndImage(MockHost* host, MockClip* clip,
                            MockPropertySet* img_props, void* data, int width,
                            int height, int row_bytes, const char* depth,
@@ -844,6 +992,8 @@ void ConfigureClipAndImage(MockHost* host, MockClip* clip,
   clip->bound_image = img_props;
 }
 
+// RAII wrapper around dlopen()/dlclose() for the plugin binary. raw() is
+// nullptr if loading failed; Sym() looks up an exported symbol.
 class LoadedOfxBundle {
  public:
   explicit LoadedOfxBundle(const std::string& path) {
@@ -865,6 +1015,7 @@ class LoadedOfxBundle {
   void* handle_ = nullptr;
 };
 
+// Returns the plugin whose identifier is `id`, or nullptr.
 const OfxPlugin* FindPluginById(GetPluginFn get_plugin, int count,
                                 const char* id) {
   for (int i = 0; i < count; ++i) {
@@ -876,6 +1027,7 @@ const OfxPlugin* FindPluginById(GetPluginFn get_plugin, int count,
   return nullptr;
 }
 
+// Verifies the exported plugin table and that internal symbols stay hidden.
 TEST(PaperCraftOfxTest, ExportsCutoutFilterAndFoldTransitionAndHidesInternals) {
   const std::string path = ResolvePluginBinaryPath();
   LoadedOfxBundle bundle(path);
@@ -914,6 +1066,7 @@ TEST(PaperCraftOfxTest, ExportsCutoutFilterAndFoldTransitionAndHidesInternals) {
   EXPECT_EQ(dlsym(bundle.raw(), "CutoutMainEntry"), nullptr);
 }
 
+// Verifies Cutout lifecycle: keyed render + collar, contexts, sticker mode.
 TEST(PaperCraftOfxTest,
      CutoutFilterLifecycleRendersTornPaperChromaKeyAndSticker) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
@@ -1136,6 +1289,7 @@ TEST(PaperCraftOfxTest,
             kOfxStatOK);
 }
 
+// Verifies negative-rowBytes 8-bit output matches and keeps canary rows.
 TEST(PaperCraftOfxTest,
      NegativeRowBytesByteBufferPreservesCanaryGuardRowsAndMatchesPositive) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
@@ -1226,6 +1380,8 @@ TEST(PaperCraftOfxTest,
             kOfxStatOK);
 }
 
+// Owns one plugin instance for a test. The destructor sends DestroyInstance
+// and Unload so every test cleans up even when an ASSERT returns early.
 struct ScopedPluginInstance {
   const OfxPlugin* plugin = nullptr;
   MockHost* host = nullptr;
@@ -1240,6 +1396,10 @@ struct ScopedPluginInstance {
   }
 };
 
+// Runs setHost, Load, Describe and DescribeInContext(`context`) for plugin
+// `id`, then clones the descriptor and sends CreateInstance, leaving a ready
+// instance in `out`. A failed ASSERT returns from this helper only, not from
+// the calling test.
 void InitPluginInstance(LoadedOfxBundle* bundle, const char* id,
                         const char* context, MockHost* host,
                         ScopedPluginInstance* out) {
@@ -1269,6 +1429,8 @@ void InitPluginInstance(LoadedOfxBundle* bundle, const char* id,
             kOfxStatOK);
 }
 
+// Sends one Render action at `time` with render scale 1 and no explicit
+// render window (so the plugin renders the whole output buffer).
 OfxStatus RenderFrame(const ScopedPluginInstance& pi, OfxTime time) {
   MockPropertySet render_in;
   MockPropSetDouble(ToPropHandle(&render_in), kOfxPropTime, 0, time);
@@ -1280,6 +1442,7 @@ OfxStatus RenderFrame(const ScopedPluginInstance& pi, OfxTime time) {
                               ToPropHandle(&render_in), nullptr);
 }
 
+// Verifies an opaque source with all-zero alpha still renders as opaque.
 TEST(PaperCraftOfxTest, OpaqueInputClipRendersCleanly) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1337,6 +1500,7 @@ TEST(PaperCraftOfxTest, OpaqueInputClipRendersCleanly) {
   }
 }
 
+// Verifies overlapping intro/outro stays smooth and mirrorTransV applies.
 TEST(PaperCraftOfxTest, ShortClipIntroOutroOverlapAndMirrorBehaveSmoothly) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1412,6 +1576,7 @@ TEST(PaperCraftOfxTest, ShortClipIntroOutroOverlapAndMirrorBehaveSmoothly) {
   }
 }
 
+// Verifies a cropped source tile lands at its bounds, not stretched to RoD.
 TEST(PaperCraftOfxTest, CroppedInputTileMapsViaRegionOfDefinition) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1485,6 +1650,8 @@ TEST(PaperCraftOfxTest, CroppedInputTileMapsViaRegionOfDefinition) {
 
 constexpr char kFoldTransitionId[] = "com.papercraft.PaperFoldTransition";
 
+// Set an int/bool/choice or double parameter on the instance by ID; fails the
+// test if the plugin did not define that ID.
 void SetIntParam(ScopedPluginInstance* pi, const char* name, int value) {
   ASSERT_EQ(pi->inst.param_set.params.count(name), 1u) << name;
   MockParamSetValue(
@@ -1499,6 +1666,7 @@ void SetDoubleParam(ScopedPluginInstance* pi, const char* name, double value) {
       value);
 }
 
+// Returns a w x h premultiplied float RGBA buffer filled with (r, g, b, a).
 std::vector<float> SolidRgba(int w, int h, float r, float g, float b,
                              float a) {
   std::vector<float> buf(static_cast<std::size_t>(w) * h * 4);
@@ -1511,6 +1679,7 @@ std::vector<float> SolidRgba(int w, int h, float r, float g, float b,
   return buf;
 }
 
+// Returns the mean alpha of an RGBA float buffer (0 = empty, 1 = covered).
 double MeanAlpha(const std::vector<float>& buf) {
   double sum = 0.0;
   for (std::size_t i = 3; i < buf.size(); i += 4) {
@@ -1520,6 +1689,9 @@ double MeanAlpha(const std::vector<float>& buf) {
 }
 
 // Renders the transition at `progress` into a fresh float buffer.
+// The buffer starts at -1 so unwritten pixels are detectable. The Output
+// clip's binding to the stack-local `out_img` is cleared before returning so
+// it never dangles.
 std::vector<float> RenderTransitionAt(MockHost* host, ScopedPluginInstance* pi,
                                       int w, int h, double progress) {
   std::vector<float> out(static_cast<std::size_t>(w) * h * 4, -1.0f);
@@ -1533,6 +1705,7 @@ std::vector<float> RenderTransitionAt(MockHost* host, ScopedPluginInstance* pi,
   return out;
 }
 
+// Verifies the transition describes only its context, clips and parameters.
 TEST(PaperCraftOfxTest, FoldTransitionDescribesTransitionContextOnly) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1601,6 +1774,7 @@ TEST(PaperCraftOfxTest, FoldTransitionDescribesTransitionContextOnly) {
             kOfxStatOK);
 }
 
+// Verifies p=0/1 render the clips unchanged and isIdentity names them.
 TEST(PaperCraftOfxTest, FoldTransitionEndpointsMatchClipsAndReportIdentity) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1648,6 +1822,7 @@ TEST(PaperCraftOfxTest, FoldTransitionEndpointsMatchClipsAndReportIdentity) {
   EXPECT_EQ(identity_clip(0.5), "");
 }
 
+// Verifies Auto unfolds over empty at clip start and folds away at clip end.
 TEST(PaperCraftOfxTest, FoldTransitionAutoUnfoldsAtClipStartAndFoldsAtEnd) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1709,6 +1884,7 @@ TEST(PaperCraftOfxTest, FoldTransitionAutoUnfoldsAtClipStartAndFoldsAtEnd) {
   EXPECT_EQ(host.active_leased_images, 0);
 }
 
+// Verifies folded flaps show the cream paper back, with or without border.
 TEST(PaperCraftOfxTest, FoldTransitionShowsPaperBacksideWhileFolded) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1748,6 +1924,7 @@ TEST(PaperCraftOfxTest, FoldTransitionShowsPaperBacksideWhileFolded) {
   }
 }
 
+// Verifies stop-motion holds one pose within a step and changes across it.
 TEST(PaperCraftOfxTest, FoldTransitionStopMotionHoldsPosesBetweenSteps) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1777,6 +1954,7 @@ TEST(PaperCraftOfxTest, FoldTransitionStopMotionHoldsPosesBetweenSteps) {
   EXPECT_NE(b, c);
 }
 
+// Verifies all patterns/stages/actions render, plus 8-bit negative rowBytes.
 TEST(PaperCraftOfxTest, FoldTransitionPatternsActionsAndByteDepthRender) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());
   ASSERT_NE(bundle.raw(), nullptr);
@@ -1840,6 +2018,7 @@ TEST(PaperCraftOfxTest, FoldTransitionPatternsActionsAndByteDepthRender) {
   EXPECT_EQ(host.active_leased_images, 0);
 }
 
+// Verifies Cutout output feeds the transition without double collar or pops.
 TEST(PaperCraftOfxTest,
      CutoutEffectAndFoldTransitionCombineSeamlesslyOnSameClip) {
   LoadedOfxBundle bundle(ResolvePluginBinaryPath());

@@ -1,3 +1,40 @@
+// MTTN PaperCraft Studio: OpenFX host glue and exported entry points.
+//
+// This file wraps the host-independent rendering kernel (papercraft_kernel.h)
+// in a binary OpenFX bundle that DaVinci Resolve (or any OpenFX image-effect
+// host) can load. One binary registers two plugins:
+//
+//   com.papercraft.CutoutFX            Filter context: torn-paper cutout,
+//                                      chroma key, intro/outro animations.
+//   com.papercraft.PaperFoldTransition Transition context: stop-motion paper
+//                                      fold & unfold between two clips.
+//
+// The only exported symbols are OfxGetNumberOfPlugins() and OfxGetPlugin()
+// (see the bottom of the file). Each plugin's mainEntry forwards host actions
+// to DispatchAction(), which calls one Handle* function per action. This file
+// never touches pixels itself: it translates OpenFX properties, parameters,
+// clips and images into kernel structs (CutoutParams,
+// PaperFoldTransitionParams, ImageView, PixelRect) and then calls
+// RenderCutoutFrame() or RenderPaperFoldTransition().
+//
+// OpenFX lifecycle, in the order the host drives it:
+//   setHost                   -> SetHostCutout / SetHostFoldTransition
+//   kOfxActionLoad            -> HandleLoad (fetch host suites)
+//   kOfxActionDescribe        -> HandleDescribe (labels, context, threading)
+//   ...DescribeInContext      -> HandleDescribeInContext (clips, parameters)
+//   kOfxActionCreateInstance  -> HandleCreateInstance (new PluginInstance)
+//   then, repeatedly per frame:
+//     ...GetClipPreferences   -> HandleGetClipPreferences
+//     ...GetRegionsOfInterest -> HandleGetRegionsOfInterest
+//     ...IsIdentity           -> HandleIsIdentity
+//     ...Render               -> HandleRender
+//   kOfxActionDestroyInstance -> HandleDestroyInstance (delete instance)
+//   kOfxActionUnload          -> HandleUnload (drop suite pointers)
+//
+// Build: compiled together with papercraft_kernel.cc. The standalone build
+// (Install_PaperCraft_OpenFX_macOS.command) defines PAPERCRAFT_STANDALONE_OFX
+// and uses flat include paths; the internal build uses full repo paths.
+
 #if defined(PAPERCRAFT_STANDALONE_OFX)
 #include "ofxCore.h"
 #include "ofxImageEffect.h"
@@ -26,34 +63,60 @@ namespace papercraft {
 namespace ofx {
 namespace {
 
+// ---------------------------------------------------------------------------
+// Plugin constants and host suites.
+// ---------------------------------------------------------------------------
+
+// Number of entries in gPlugins (Cutout filter + Fold transition).
 constexpr int kPluginCount = 2;
+// Reported to the host through OfxPlugin and kOfxPropVersion. Hosts treat a
+// new major version as a different plugin for saved projects, so bump the
+// major only for changes that break existing parameter values.
 constexpr int kVersionMajor = 3;
 constexpr int kVersionMinor = 1;
 constexpr const char* kVersionLabel = "3.1.0";
 
 // Each registered OpenFX plugin gets its own entry points and host suites.
+// The enum value doubles as the index into the MutableSuites() table.
 enum class PluginRole {
   kCutout = 0,
   kFoldTransition = 1,
 };
 
+// Host suite pointers fetched in HandleLoad(). The memory belongs to the host
+// and stays valid between kOfxActionLoad and kOfxActionUnload.
 struct HostSuites {
+  // Set by setHost before kOfxActionLoad.
   OfxHost* host = nullptr;
   const OfxPropertySuiteV1* prop = nullptr;
   const OfxParameterSuiteV1* param = nullptr;
   const OfxImageEffectSuiteV1* effect = nullptr;
+  // Optional: when nullptr, HandleRender renders all rows on one thread.
   const OfxMultiThreadSuiteV1* thread = nullptr;
 };
 
+// Returns the process-wide suite table for `role`. There is one entry per
+// plugin because the host calls setHost and kOfxActionLoad separately for
+// each plugin, even though both live in this binary. The function-local
+// static avoids static initialization order problems. The table is written
+// only in setHost/Load/Unload and is read-only while instances render.
 HostSuites& MutableSuites(PluginRole role) {
   static std::array<HostSuites, kPluginCount> suites;
   return suites[static_cast<std::size_t>(role)];
 }
 
+// Null-safe C string equality. OpenFX action names, contexts and property
+// values are C strings that can be nullptr when a property is missing.
 bool StrEq(const char* a, const char* b) {
   return a != nullptr && b != nullptr && std::strcmp(a, b) == 0;
 }
 
+// RAII guard for an image fetched with clipGetImage(). The destructor calls
+// clipReleaseImage() so that every early return in HandleRender hands the
+// image back to the host; hosts can stall or leak frames otherwise (the tests
+// check that the mock host has zero leased images after each render).
+// `handle` is public so it can be passed straight to clipGetImage() as the
+// output argument.
 class ScopedOfxImage {
  public:
   explicit ScopedOfxImage(const OfxImageEffectSuiteV1* effect)
@@ -77,10 +140,28 @@ class ScopedOfxImage {
   const OfxImageEffectSuiteV1* effect_ = nullptr;
 };
 
+// ---------------------------------------------------------------------------
+// Per-instance state and multithreaded row dispatch.
+// ---------------------------------------------------------------------------
+
+// State of one effect instance (one clip or transition on the timeline).
+//
+// Ownership: allocated in HandleCreateInstance(), stored as a raw pointer in
+// the host's kOfxPropInstanceData property, and deleted in
+// HandleDestroyInstance(). Everything else only borrows it via GetInstance().
+//
+// Clip and parameter handles are looked up by name once at creation, so
+// render does not repeat string lookups every frame. The handles belong to
+// the host and stay valid for the instance's lifetime. A handle that stays
+// nullptr (the parameter does not exist for this role) makes the Read*Param
+// helpers return their default. The struct is read-only after creation, so
+// concurrent render calls can share it without locking.
 struct PluginInstance {
   PluginRole role = PluginRole::kCutout;
   OfxImageClipHandle output_clip = nullptr;
+  // Cutout filter only: the "Source" clip (optional in the filter context).
   OfxImageClipHandle source_clip = nullptr;
+  // Fold transition only: outgoing ("SourceFrom") and incoming ("SourceTo").
   OfxImageClipHandle source_from_clip = nullptr;
   OfxImageClipHandle source_to_clip = nullptr;
 
@@ -146,13 +227,29 @@ struct PluginInstance {
 // from `next_row` so fast threads (and performance cores) keep working while
 // rows covering the paper, which cost much more than empty background rows,
 // are spread across all threads.
+//
+// Threading: the context lives on the stack of the parallel_for lambda in
+// HandleRender(). multiThread() blocks until every worker returns, so the
+// pointer stays valid for the whole dispatch. Workers only modify `next_row`
+// (atomically); the other fields are read-only once dispatch starts.
 struct ParallelDispatchContext {
+  // Next row not yet claimed by any worker.
   std::atomic<int> next_row{0};
+  // Exclusive end row of the dispatch.
   int y_end = 0;
+  // Rows claimed per fetch_add.
   int chunk = 1;
+  // Per-row kernel callback. Must be safe to run concurrently for different
+  // rows; it is owned by the caller of parallel_for.
   const std::function<void(int y)>* row_fn = nullptr;
 };
 
+// OfxThreadFunctionV1 run on each thread spawned by the host's multiThread().
+// Repeatedly claims `chunk` rows and runs `row_fn` on them until all rows are
+// taken. `thread_index` is unused because work is pulled dynamically instead
+// of split into fixed slices. Relaxed ordering is enough: fetch_add only has
+// to hand out disjoint row ranges, and multiThread() joins all workers before
+// the caller reads the output image.
 void ParallelThreadWorker(unsigned int /*thread_index*/,
                           unsigned int thread_max, void* custom_arg) {
   auto* ctx = static_cast<ParallelDispatchContext*>(custom_arg);
@@ -172,6 +269,22 @@ void ParallelThreadWorker(unsigned int /*thread_index*/,
   }
 }
 
+// ---------------------------------------------------------------------------
+// Parameter definition helpers.
+//
+// Called only from HandleDescribeInContext(). Every `name` argument is the
+// parameter's persistent ID: the host saves keyframes and values in projects
+// under it, and HandleCreateInstance() looks the handle up by the same
+// string. Renaming an ID silently resets that control in existing projects,
+// so IDs must stay stable; labels, hints and group order may change freely.
+// If the host rejects a definition the helper does nothing; the instance then
+// gets a nullptr handle and the Read*Param helpers use their defaults.
+// ---------------------------------------------------------------------------
+
+// Defines a parameter of OpenFX type `param_type` and sets the properties
+// shared by all types: label, optional parent group ID (`parent`) and
+// optional tooltip (`hint`). Returns the parameter's property set so callers
+// can add type-specific properties, or nullptr if paramDefine failed.
 OfxPropertySetHandle DefineParamCommon(const HostSuites& s,
                                        OfxParamSetHandle param_set,
                                        const char* param_type, const char* name,
@@ -192,6 +305,9 @@ OfxPropertySetHandle DefineParamCommon(const HostSuites& s,
   return props;
 }
 
+// Defines a collapsible parameter group (a twirl-down section in Resolve's
+// Inspector). Child parameters join it by passing `name` as their `parent`.
+// `open_default` sets whether the group starts expanded.
 void DefineGroupParam(const HostSuites& s, OfxParamSetHandle param_set,
                       const char* name, const char* label, bool open_default) {
   OfxPropertySetHandle props = DefineParamCommon(
@@ -201,6 +317,8 @@ void DefineGroupParam(const HostSuites& s, OfxParamSetHandle param_set,
   }
 }
 
+// Defines a checkbox parameter with default `def_val`. Read back with
+// ReadBoolParam().
 void DefineBoolParam(const HostSuites& s, OfxParamSetHandle param_set,
                      const char* name, const char* label, const char* parent,
                      const char* hint, bool def_val) {
@@ -211,6 +329,9 @@ void DefineBoolParam(const HostSuites& s, OfxParamSetHandle param_set,
   }
 }
 
+// Defines an integer parameter. [min_val, max_val] is the hard limit the
+// host enforces; [dmin, dmax] is only the slider range, so users can still
+// type values outside it up to the hard limit.
 void DefineIntParam(const HostSuites& s, OfxParamSetHandle param_set,
                     const char* name, const char* label, const char* parent,
                     const char* hint, int def_val, int min_val, int max_val,
@@ -226,6 +347,10 @@ void DefineIntParam(const HostSuites& s, OfxParamSetHandle param_set,
   }
 }
 
+// Defines a scalar double parameter. `double_type` (for example
+// kOfxParamDoubleTypeAngle for degrees or kOfxParamDoubleTypeScale) only
+// changes how the host displays the value; nullptr keeps the host default.
+// Hard limits and slider range work as in DefineIntParam().
 void DefineDoubleParam(const HostSuites& s, OfxParamSetHandle param_set,
                        const char* name, const char* label, const char* parent,
                        const char* hint, const char* double_type,
@@ -246,6 +371,11 @@ void DefineDoubleParam(const HostSuites& s, OfxParamSetHandle param_set,
   s.prop->propSetDouble(props, kOfxParamPropDisplayMax, 0, dmax);
 }
 
+// Defines a 2D position parameter in normalized frame units (0..1 = frame
+// edges). It uses the plain double type, not an OpenFX normalized/canonical
+// XY type, so the host passes the values through unchanged and the kernel
+// does the mapping to pixels. The hard limit -1..2 allows placing the subject
+// partly off screen; the slider covers the visible frame 0..1.
 void DefineDouble2DParam(const HostSuites& s, OfxParamSetHandle param_set,
                          const char* name, const char* label,
                          const char* parent, const char* hint, double def_x,
@@ -269,6 +399,8 @@ void DefineDouble2DParam(const HostSuites& s, OfxParamSetHandle param_set,
   s.prop->propSetDoubleN(props, kOfxParamPropDisplayMax, 2, dmaxs);
 }
 
+// Defines an RGB color picker with default (r, g, b), each channel limited to
+// 0..1.
 void DefineRgbParam(const HostSuites& s, OfxParamSetHandle param_set,
                     const char* name, const char* label, const char* parent,
                     const char* hint, double r, double g, double b) {
@@ -287,6 +419,11 @@ void DefineRgbParam(const HostSuites& s, OfxParamSetHandle param_set,
   s.prop->propSetDoubleN(props, kOfxParamPropDisplayMax, 3, maxs);
 }
 
+// Defines a drop-down whose entries are `options`, with default index
+// `def_val`. The host saves the selected index, not the label, so new
+// options must be appended at the end; reordering changes existing projects.
+// The index maps directly to kernel enums (CutoutAnimStyle,
+// FoldTransitionAction, FoldPattern) or to CutoutParams::source_mode.
 template <std::size_t N>
 void DefineChoiceParam(const HostSuites& s, OfxParamSetHandle param_set,
                        const char* name, const char* label, const char* parent,
@@ -301,6 +438,24 @@ void DefineChoiceParam(const HostSuites& s, OfxParamSetHandle param_set,
   }
 }
 
+// ---------------------------------------------------------------------------
+// Parameter layouts.
+//
+// Group IDs ("MediaSourceGroup", "FoldGroup", ...) and parameter IDs are
+// persistent (see the helper section above). Parameters that exist in both
+// plugins deliberately use the same ID (for example "borderWidth",
+// "paperColor", "shadowAngle", "mirrorTransH") so HandleCreateInstance() can
+// bind them in one shared block. Keep the IDs here, the bind() calls in
+// HandleCreateInstance() and the defaults in Read*Params() in sync.
+// Group labels start with a number so the Inspector order is obvious.
+// "_norm" style values (border width, roughness, shadow distance/softness,
+// jitter) are fractions of the frame size, so the look does not depend on
+// resolution.
+// ---------------------------------------------------------------------------
+
+// Defines the Paper Cutout FX controls in seven groups: media source and
+// placement, green screen key, torn border, paper texture, intro/outro
+// animations, drop shadow, and stop-motion plus master transform.
 void DefineCutoutParameters(const HostSuites& s, OfxParamSetHandle param_set) {
   DefineGroupParam(s, param_set, "MediaSourceGroup",
                    "1. Media Source & Placement", true);
@@ -471,6 +626,11 @@ void DefineCutoutParameters(const HostSuites& s, OfxParamSetHandle param_set) {
                   false);
 }
 
+// Defines the Paper Fold & Unfold controls: the mandatory transition progress
+// parameter plus three groups (fold behavior, paper look, stop-motion and
+// shadow). Shared IDs reuse the Cutout names, but some defaults differ (for
+// example grainStrength 0.38 vs 0.35), so ReadFoldTransitionParams() keeps
+// its own default values.
 void DefineFoldTransitionParameters(const HostSuites& s,
                                     OfxParamSetHandle param_set) {
   // Mandatory OpenFX transition progress, animated 0 -> 1 by the host.
@@ -565,6 +725,14 @@ void DefineFoldTransitionParameters(const HostSuites& s,
                     kOfxParamDoubleTypePlain, 0.020, 0.0, 0.20, 0.0, 0.08);
 }
 
+// ---------------------------------------------------------------------------
+// Plugin-level actions: load, unload, describe.
+// ---------------------------------------------------------------------------
+
+// kOfxActionLoad: first action after setHost. Fetches the V1 property,
+// parameter, image-effect and multithread suites from the host. The first
+// three are required (kOfxStatErrMissingHostFeature makes the host skip the
+// plugin); the multithread suite is optional.
 OfxStatus HandleLoad(PluginRole role) {
   HostSuites& s = MutableSuites(role);
   if (s.host == nullptr || s.host->fetchSuite == nullptr) {
@@ -584,6 +752,9 @@ OfxStatus HandleLoad(PluginRole role) {
   return kOfxStatOK;
 }
 
+// kOfxActionUnload: last action before the host drops the plugin. Clears the
+// suite pointers so nothing can use them after the host frees them. The
+// OfxHost pointer is kept; the host resets it via setHost before reloading.
 OfxStatus HandleUnload(PluginRole role) {
   HostSuites& s = MutableSuites(role);
   s.prop = nullptr;
@@ -593,6 +764,11 @@ OfxStatus HandleUnload(PluginRole role) {
   return kOfxStatOK;
 }
 
+// kOfxActionDescribe: writes plugin-wide properties into the global
+// descriptor `effect`: labels, the "MTTN PaperCraft Studio" grouping (the
+// folder shown under Open FX in Resolve), version, the single supported
+// context, pixel depths, and threading/tiling capabilities. No clips or
+// parameters exist yet; those come in HandleDescribeInContext().
 OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
   const HostSuites& s = MutableSuites(role);
   if (s.effect == nullptr || s.prop == nullptr) {
@@ -633,11 +809,15 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
                         is_transition ? kOfxImageEffectContextTransition
                                       : kOfxImageEffectContextFilter);
 
+  // The kernel reads and writes all three depths natively.
   const char* depths[3] = {kOfxBitDepthFloat, kOfxBitDepthShort,
                            kOfxBitDepthByte};
   s.prop->propSetStringN(props, kOfxImageEffectPropSupportedPixelDepths, 3,
                          depths);
 
+  // Render keeps no shared mutable state, so the host may run any number of
+  // render calls at once and may split frames across its own threads. Inputs
+  // and output may differ in size (multi-resolution), e.g. cropped clips.
   s.prop->propSetString(props, kOfxImageEffectPluginRenderThreadSafety, 0,
                         kOfxImageEffectRenderFullySafe);
   s.prop->propSetInt(props, kOfxImageEffectPluginPropHostFrameThreading, 0, 1);
@@ -648,6 +828,9 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
 }
 
 // Defines an RGBA clip that always arrives as one full-frame buffer.
+// Used by HandleDescribeInContext(); `name` must be one of the clip names the
+// OpenFX spec fixes for the context ("Output", "Source", "SourceFrom",
+// "SourceTo"). Returns false if the host refused the clip.
 bool DefineRgbaClip(const HostSuites& s, OfxImageEffectHandle effect,
                     const char* name, bool optional) {
   OfxPropertySetHandle props = nullptr;
@@ -664,6 +847,11 @@ bool DefineRgbaClip(const HostSuites& s, OfxImageEffectHandle effect,
   return true;
 }
 
+// kOfxImageEffectActionDescribeInContext: called once per context the host
+// wants to use, with the context name in `in_args`. Each plugin accepts only
+// its own context (Filter for Cutout, Transition for Fold) and answers
+// kOfxStatErrMissingHostFeature for any other, so Resolve lists each effect
+// in exactly one category. On success defines the clips and all parameters.
 OfxStatus HandleDescribeInContext(PluginRole role, OfxImageEffectHandle effect,
                                   OfxPropertySetHandle in_args) {
   const HostSuites& s = MutableSuites(role);
@@ -686,6 +874,8 @@ OfxStatus HandleDescribeInContext(PluginRole role, OfxImageEffectHandle effect,
   if (!DefineRgbaClip(s, effect, kOfxImageEffectOutputClipName, false)) {
     return kOfxStatFailed;
   }
+  // The filter's Source clip is optional so the built-in sticker source mode
+  // works without any input. Transitions always need both clips.
   const bool clips_ok =
       is_transition
           ? DefineRgbaClip(s, effect,
@@ -712,6 +902,16 @@ OfxStatus HandleDescribeInContext(PluginRole role, OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
+// ---------------------------------------------------------------------------
+// Instance lifetime.
+// ---------------------------------------------------------------------------
+
+// kOfxActionCreateInstance: allocates a PluginInstance for the new effect
+// instance `effect` and caches its clip and parameter handles. Only the
+// Output clip is required; any other handle the host does not return stays
+// nullptr and falls back to defaults at render time. The unique_ptr gives up
+// ownership only after the host has stored the pointer in
+// kOfxPropInstanceData, so failure paths do not leak.
 OfxStatus HandleCreateInstance(PluginRole role, OfxImageEffectHandle effect) {
   const HostSuites& s = MutableSuites(role);
   if (s.effect == nullptr || s.prop == nullptr || s.param == nullptr) {
@@ -732,6 +932,9 @@ OfxStatus HandleCreateInstance(PluginRole role, OfxImageEffectHandle effect) {
       inst->output_clip == nullptr) {
     return kOfxStatFailed;
   }
+  // Looks up a parameter by its persistent ID. Errors are ignored on purpose:
+  // a missing parameter leaves *out as nullptr, which readers treat as
+  // "use the default".
   auto bind = [&](const char* name, OfxParamHandle* out) {
     s.param->paramGetHandle(param_set, name, out, nullptr);
   };
@@ -808,6 +1011,9 @@ OfxStatus HandleCreateInstance(PluginRole role, OfxImageEffectHandle effect) {
   return kOfxStatOK;
 }
 
+// Returns the PluginInstance stored on `effect` by HandleCreateInstance(), or
+// nullptr if there is none or the suites are not loaded. The caller borrows
+// the pointer; it stays valid until kOfxActionDestroyInstance.
 PluginInstance* GetInstance(const HostSuites& s, OfxImageEffectHandle effect) {
   OfxPropertySetHandle props = nullptr;
   if (effect == nullptr || s.effect == nullptr || s.prop == nullptr ||
@@ -823,6 +1029,9 @@ PluginInstance* GetInstance(const HostSuites& s, OfxImageEffectHandle effect) {
   return static_cast<PluginInstance*>(raw);
 }
 
+// kOfxActionDestroyInstance: deletes the PluginInstance and clears
+// kOfxPropInstanceData so a repeated destroy is harmless. Returns
+// kOfxStatReplyDefault when there is nothing this plugin can clean up.
 OfxStatus HandleDestroyInstance(PluginRole role, OfxImageEffectHandle effect) {
   const HostSuites& s = MutableSuites(role);
   if (s.effect == nullptr || s.prop == nullptr) {
@@ -843,6 +1052,14 @@ OfxStatus HandleDestroyInstance(PluginRole role, OfxImageEffectHandle effect) {
   return kOfxStatOK;
 }
 
+// ---------------------------------------------------------------------------
+// Clip preferences and regions of interest.
+// ---------------------------------------------------------------------------
+
+// Returns the depth this plugin would like for input `clip`: the clip's
+// native (unmapped) depth if it is byte or short, float otherwise. Returns
+// nullptr when the clip is missing or not connected, so it does not take part
+// in the depth decision.
 const char* PickPreferredDepth(const HostSuites& s, OfxImageClipHandle clip) {
   if (clip == nullptr) {
     return nullptr;
@@ -873,6 +1090,12 @@ const char* PickPreferredDepth(const HostSuites& s, OfxImageClipHandle clip) {
   return kOfxBitDepthFloat;
 }
 
+// kOfxImageEffectActionGetClipPreferences: tells the host which format to
+// deliver. Output is always RGBA and premultiplied. All connected inputs and
+// the output share one depth so the kernel never mixes formats. The output is
+// marked frame-varying because animations, edge boil and stop-motion jitter
+// change it every frame even when the input is a still. Per-clip properties
+// follow the OpenFX naming pattern "OfxImageClipPropDepth_<clip name>".
 OfxStatus HandleGetClipPreferences(PluginRole role, OfxImageEffectHandle effect,
                                    OfxPropertySetHandle out_args) {
   const HostSuites& s = MutableSuites(role);
@@ -929,6 +1152,13 @@ OfxStatus HandleGetClipPreferences(PluginRole role, OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
+// kOfxImageEffectActionGetRegionsOfInterest: asks for the whole region of
+// definition of every input, because folds, torn collars, shadows and the
+// master transform can sample any source pixel for any output pixel. RoDs
+// (canonical coordinates) that look degenerate or unbounded are skipped:
+// empty, larger than 16384 per side, or beyond +/-1e7 (what hosts report for
+// infinite generators). If no clip gets a RoI, kOfxStatReplyDefault lets the
+// host use its default.
 OfxStatus HandleGetRegionsOfInterest(PluginRole role,
                                      OfxImageEffectHandle effect,
                                      OfxPropertySetHandle in_args,
@@ -971,6 +1201,18 @@ OfxStatus HandleGetRegionsOfInterest(PluginRole role,
   return set_any ? kOfxStatOK : kOfxStatReplyDefault;
 }
 
+// ---------------------------------------------------------------------------
+// Parameter readers.
+//
+// Each reader samples a parameter at host time `time` (frames) with
+// paramGetValueAtTime(), so keyframed values animate. They return the given
+// default when the handle is nullptr (parameter not bound) or the host call
+// fails, so render never sees uninitialized values. Called from render and
+// isIdentity, which may run on several host threads at once; the parameter
+// suite allows concurrent reads during render.
+// ---------------------------------------------------------------------------
+
+// Reads an integer, boolean or choice parameter (all are ints in OpenFX).
 int ReadIntParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
                  int def_val) {
   if (param == nullptr) {
@@ -982,11 +1224,13 @@ int ReadIntParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
              : def_val;
 }
 
+// Reads a boolean parameter (stored as int 0/1).
 bool ReadBoolParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
                    bool def_val) {
   return ReadIntParam(s, param, time, def_val ? 1 : 0) != 0;
 }
 
+// Reads a scalar double parameter and narrows it to float for the kernel.
 float ReadFloatParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
                      float def_val) {
   if (param == nullptr) {
@@ -998,6 +1242,8 @@ float ReadFloatParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
              : def_val;
 }
 
+// Reads a 2D double parameter into *out_x / *out_y (normalized frame units
+// for the position parameters defined by DefineDouble2DParam()).
 void ReadDouble2DParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
                        float* out_x, float* out_y, float def_x, float def_y) {
   if (param == nullptr) {
@@ -1016,6 +1262,7 @@ void ReadDouble2DParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
   }
 }
 
+// Reads an RGB color parameter into *out_r / *out_g / *out_b (0..1).
 void ReadRgbParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
                   float* out_r, float* out_g, float* out_b, float def_r,
                   float def_g, float def_b) {
@@ -1039,6 +1286,12 @@ void ReadRgbParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
   }
 }
 
+// Builds the kernel's CutoutParams for frame `time`. The defaults passed to
+// each reader must match DefineCutoutParameters(). `render_scale_x` is the
+// host's proxy scale (1.0 = full resolution, 0.5 = half-res preview); it
+// converts pixel-unit parameters so the look matches across preview and final
+// renders. Also reads the clip's frame range, which the kernel needs to time
+// intro/outro animations.
 CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
                               OfxTime time, double render_scale_x) {
   CutoutParams cp;
@@ -1055,6 +1308,8 @@ CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
                1.0f, 0.0f);
   cp.key_gain = ReadFloatParam(s, inst.key_gain, time, 1.0f);
   cp.key_balance = ReadFloatParam(s, inst.key_balance, time, 0.5f);
+  // Edge choke is entered in full-resolution pixels; scale it to the render
+  // resolution. The 0.05 floor guards against a zero or garbage scale.
   cp.edge_choke_px = ReadFloatParam(s, inst.edge_choke_px, time, 0.0f) *
                      static_cast<float>(std::max(0.05, render_scale_x));
 
@@ -1104,9 +1359,12 @@ CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
   cp.flip_v = ReadBoolParam(s, inst.flip_v, time, false);
 
   cp.current_time = time;
+  // Fallback range when no clip reports a usable one.
   cp.frame_start = 0.0;
   cp.frame_end = 120.0;
 
+  // Copies a clip's kOfxImageEffectPropFrameRange (host frames) into cp if it
+  // is a sane positive span; returns whether it did.
   auto try_range = [&](OfxImageClipHandle clip) {
     if (clip == nullptr) {
       return false;
@@ -1130,12 +1388,18 @@ CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
     return false;
   };
 
+  // Prefer the source clip's range; fall back to the output clip's range (for
+  // example in sticker mode with no input connected).
   if (!try_range(inst.source_clip)) {
     try_range(inst.output_clip);
   }
   return cp;
 }
 
+// Builds the kernel's PaperFoldTransitionParams for frame `time`. The
+// defaults must match DefineFoldTransitionParameters(). `progress` is the
+// host-animated 0..1 transition parameter; stop-motion quantization of it
+// happens later in ComputeSteppedTransitionProgress().
 PaperFoldTransitionParams ReadFoldTransitionParams(const HostSuites& s,
                                                    const PluginInstance& inst,
                                                    OfxTime time) {
@@ -1175,8 +1439,17 @@ PaperFoldTransitionParams ReadFoldTransitionParams(const HostSuites& s,
   return tp;
 }
 
+// ---------------------------------------------------------------------------
+// Identity, image access and render.
+// ---------------------------------------------------------------------------
+
+// kOfxImageEffectActionIsIdentity. Answers for the transition only; the cutout
+// always returns kOfxStatReplyDefault (it changes every frame).
 // The first and last transition frames are the outgoing and incoming clips
-// unchanged, so the host can skip rendering them.
+// unchanged, so the host can skip rendering them. For those frames this
+// writes the clip to pass through (kOfxPropName) and the time into
+// `out_args`. The check uses the stepped progress, so it matches what
+// HandleRender would draw.
 OfxStatus HandleIsIdentity(PluginRole role, OfxImageEffectHandle effect,
                            OfxPropertySetHandle in_args,
                            OfxPropertySetHandle out_args) {
@@ -1202,6 +1475,9 @@ OfxStatus HandleIsIdentity(PluginRole role, OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
+// Returns how the pixels in `img_handle` store alpha. Reads the image's
+// kOfxImageEffectPropPreMultiplication, falls back to the clip's property,
+// and assumes premultiplied when neither is set (the OpenFX default).
 AlphaMode ParseAlphaMode(const HostSuites& s, OfxImageClipHandle clip,
                          OfxPropertySetHandle img_handle) {
   char* premult = nullptr;
@@ -1225,6 +1501,14 @@ AlphaMode ParseAlphaMode(const HostSuites& s, OfxImageClipHandle clip,
   return AlphaMode::kPremultiplied;
 }
 
+// Fills `out_view` (a non-owning kernel ImageView) from a host image: data
+// pointer, pixel bounds, signed row bytes (negative for bottom-up storage),
+// depth and alpha mode. `bounds` is the part of the image actually in memory;
+// `rod` is the full frame it belongs to, which can be larger when the host
+// delivers a cropped tile. A missing RoD falls back to the bounds.
+// Returns false on failure. *out_wrong_format is set only when the image is
+// not RGBA or has an unknown depth, so the caller can answer
+// kOfxStatErrImageFormat instead of a generic failure.
 bool ExtractImageView(const HostSuites& s, OfxImageClipHandle clip,
                       OfxPropertySetHandle img_handle, ImageView* out_view,
                       bool* out_wrong_format) {
@@ -1288,6 +1572,17 @@ bool ExtractImageView(const HostSuites& s, OfxImageClipHandle clip,
   return IsValidRgbaView(*out_view);
 }
 
+// kOfxImageEffectActionRender: renders one frame (or one render window of
+// it) at host time `time`.
+//
+// Steps: fetch the output image; use its RoD as the canvas (full-frame
+// geometry) and the host's render window as the rows/columns to fill; read
+// parameters; fetch inputs; call the kernel. All images are held by
+// ScopedOfxImage guards, so they are released on every return path.
+//
+// Threading: the plugin declares itself fully thread safe, so the host may
+// call this concurrently for different frames or windows of one instance.
+// Each call only reads PluginInstance and keeps its state on the stack.
 OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
                        OfxPropertySetHandle in_args) {
   const HostSuites& s = MutableSuites(role);
@@ -1299,6 +1594,7 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
   double time = 0.0;
   s.prop->propGetDouble(in_args, kOfxPropTime, 0, &time);
 
+  // Render scale < 1 means a proxy/preview render at reduced resolution.
   double render_scale[2] = {1.0, 1.0};
   s.prop->propGetDoubleN(in_args, kOfxImageEffectPropRenderScale, 2,
                          render_scale);
@@ -1317,6 +1613,7 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
   }
   const PixelRect canvas_bounds = out_view.rod;
 
+  // Default to the whole output buffer if the host sends no valid window.
   PixelRect render_window = out_view.bounds;
   int win_vals[4] = {0, 0, 0, 0};
   if (s.prop->propGetIntN(in_args, kOfxImageEffectPropRenderWindow, 4,
@@ -1325,6 +1622,14 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
     render_window = {win_vals[0], win_vals[1], win_vals[2], win_vals[3]};
   }
 
+  // ParallelRowsFn handed to the kernel: runs row_fn(y) for every y in
+  // [y_start, y_end) and returns only when all rows are done. Uses the host's
+  // multiThread() with ParallelThreadWorker when possible. Runs inline
+  // instead when there is no thread suite, we are already on a thread the
+  // host spawned (nested multiThread calls are not allowed), the job is
+  // under 16 rows (thread start-up would cost more), or only one worker
+  // would be used. If multiThread() fails, all rows are re-run serially;
+  // row_fn only writes its own output row, so repeating rows is safe.
   ParallelRowsFn parallel_for = [&](int y_start, int y_end,
                                     const std::function<void(int y)>& row_fn) {
     const int total = y_end - y_start;
@@ -1351,6 +1656,8 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
     ParallelDispatchContext ctx;
     ctx.next_row.store(y_start, std::memory_order_relaxed);
     ctx.y_end = y_end;
+    // About 8 chunks per worker: small enough to balance uneven rows, large
+    // enough to keep atomic contention low.
     ctx.chunk = std::max(1, total / static_cast<int>(workers * 8));
     ctx.row_fn = &row_fn;
     if (s.thread->multiThread(ParallelThreadWorker, workers, &ctx) !=
@@ -1366,6 +1673,8 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
         ReadFoldTransitionParams(s, *inst, time);
     const float p = ComputeSteppedTransitionProgress(tp);
     // A missing image is the empty side of a clip edge, not an error.
+    // Returns false only for a wrong pixel format. Applies the "Premultiplied
+    // Source Alpha" override for clips that are really straight alpha.
     auto fetch = [&](OfxImageClipHandle clip, ScopedOfxImage* guard,
                      ImageView* view) {
       if (clip == nullptr || s.effect->clipGetImage(clip, time, nullptr,
@@ -1388,6 +1697,8 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
     ScopedOfxImage to_guard(s.effect);
     ImageView from_view;
     ImageView to_view;
+    // Skip fetching a clip that the stepped progress fully hides
+    // (p == 1 hides SourceFrom, p == 0 hides SourceTo).
     if ((p < 1.0f &&
          !fetch(inst->source_from_clip, &from_guard, &from_view)) ||
         (p > 0.0f && !fetch(inst->source_to_clip, &to_guard, &to_view))) {
@@ -1400,6 +1711,8 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
 
   CutoutParams cp = ReadCutoutParams(s, *inst, time, render_scale[0]);
   ScopedOfxImage src_guard(s.effect);
+  // Stays an empty view when there is no source image or in sticker mode
+  // (source_mode 1); RenderCutoutFrame() accepts an empty source.
   ImageView src_view;
   if (inst->source_clip != nullptr && cp.source_mode == 0) {
     if (s.effect->clipGetImage(inst->source_clip, time, nullptr,
@@ -1421,6 +1734,15 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
+// ---------------------------------------------------------------------------
+// Action dispatch and exported plugin table.
+// ---------------------------------------------------------------------------
+
+// Routes one host action for plugin `role` to its Handle* function. `handle`
+// is the effect handle for every action except Load/Unload (where it is
+// nullptr). Actions this plugin has no work for but must acknowledge return
+// kOfxStatOK; anything else returns kOfxStatReplyDefault so the host applies
+// its default behavior.
 OfxStatus DispatchAction(PluginRole role, const char* action,
                          const void* handle, OfxPropertySetHandle in_args,
                          OfxPropertySetHandle out_args) {
@@ -1470,6 +1792,8 @@ OfxStatus DispatchAction(PluginRole role, const char* action,
   return kOfxStatReplyDefault;
 }
 
+// OfxPlugin::setHost callbacks. The host calls them before kOfxActionLoad to
+// hand over its OfxHost (used to fetch suites); one per plugin role.
 void SetHostCutout(OfxHost* host) {
   MutableSuites(PluginRole::kCutout).host = host;
 }
@@ -1478,6 +1802,9 @@ void SetHostFoldTransition(OfxHost* host) {
   MutableSuites(PluginRole::kFoldTransition).host = host;
 }
 
+// OfxPlugin::mainEntry callbacks. mainEntry has no user-data argument, so a
+// separate function per plugin is the only way to know which role an action
+// is for.
 OfxStatus MainEntryCutout(const char* action, const void* handle,
                           OfxPropertySetHandle in_args,
                           OfxPropertySetHandle out_args) {
@@ -1492,6 +1819,10 @@ OfxStatus MainEntryFoldTransition(const char* action, const void* handle,
                         out_args);
 }
 
+// Plugin table returned by OfxGetPlugin(); the array index is the `nth`
+// argument. The identifiers ("com.papercraft.CutoutFX",
+// "com.papercraft.PaperFoldTransition") are permanent: hosts save them in
+// projects, so changing one makes every existing use show as missing.
 OfxPlugin gPlugins[kPluginCount] = {
     {
         kOfxImageEffectPluginApi,
@@ -1517,12 +1848,17 @@ OfxPlugin gPlugins[kPluginCount] = {
 }  // namespace ofx
 }  // namespace papercraft
 
+// The two C entry points every OpenFX binary must export. Everything else is
+// hidden by -fvisibility=hidden plus the exported-symbol list (macOS) or
+// openfx_sym.lds (Linux); the tests check that internals are not visible.
 extern "C" {
 
+// Returns how many plugins this binary contains.
 __attribute__((visibility("default"))) int OfxGetNumberOfPlugins(void) {
   return papercraft::ofx::kPluginCount;
 }
 
+// Returns plugin `nth` (0-based), or nullptr if `nth` is out of range.
 __attribute__((visibility("default"))) OfxPlugin* OfxGetPlugin(int nth) {
   if (nth < 0 || nth >= papercraft::ofx::kPluginCount) {
     return nullptr;

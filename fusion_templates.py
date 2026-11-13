@@ -1,4 +1,55 @@
-"""Procedural Fusion .setting template builders for DaVinci Resolve."""
+"""Procedural Fusion .setting template builders for DaVinci Resolve.
+
+This module emits the two legacy Edit-page Fusion macros shipped inside
+`MTTN_PaperCraft_Studio.drfx` (the OpenFX plugins are the primary product):
+
+* `build_effect_setting()`: the **Paper Cutout FX** Edit effect
+  (`Edit/Effects/...`).
+* `build_fold_transition_setting()`: the **Paper Fold & Unfold** Edit
+  transition (`Edit/Transitions/...`).
+
+`bundle_builder_lib.build_drfx_entries()` calls both builders, and
+`drfx_validator.validate_setting_syntax_and_graph()` checks their output.
+
+`.setting` structure
+--------------------
+A `.setting` file is a Lua-table literal that Fusion pastes into a comp:
+
+  {
+    Tools = ordered() {
+      <MacroName> = MacroOperator {
+        Inputs = ordered() {      -- MainInput1/2 + UserControl defaults
+          MainInput1 = InstanceInput { SourceOp = "...", Source = "Input" },
+          <ControlId> = Input { Value = ..., },
+        },
+        Outputs = { MainOutput1 = InstanceOutput { SourceOp = "..." } },
+        ViewInfo = OperatorInfo { Pos = { 0, 0 } },
+        Tools = ordered() { ... internal nodes, 4 tabs deep ... },
+        UserControls = ordered() { ... Inspector sliders/combos ... },
+      },
+    },
+    ActiveTool = "<MacroName>",
+  }
+
+Resolve maps `MainInput1` to the clip (effect) or outgoing clip
+(transition) and `MainInput2` to the incoming clip. Internal nodes sit at
+exactly four leading tabs; the validator relies on that indentation to find
+operator and control names, so keep the tab depth when editing templates.
+
+SimpleExpressions
+-----------------
+Animated values use Fusion SimpleExpressions (`Expression = "..."`), not
+Lua. They reference macro controls as `<MacroName>.<ControlId>`, the current
+frame as `time`, and the clip range as `comp.RenderStart`/`comp.RenderEnd`.
+Rules enforced by the validator: use `iif(cond, a, b)` for branching,
+`and`/`or` (never `&&`/`||`), bare `sin`/`cos`/`floor`/`pow`/`pi` (never
+`math.`), and balanced parentheses. Booleans from checkboxes and combo indices
+are compared against `x > 0.5` or rounded with `floor(x + 0.5)` because
+Fusion stores every control as a float.
+
+Expressions must not contain double quotes because they are embedded in a
+quoted Lua string without escaping.
+"""
 
 from collections.abc import Sequence
 import dataclasses
@@ -6,7 +57,23 @@ import dataclasses
 
 @dataclasses.dataclass(frozen=True)
 class ControlSpec:
-  """Describes a single Inspector UserControl entry inside a Fusion macro."""
+  """Describes a single Inspector UserControl entry inside a Fusion macro.
+
+  Attributes:
+    control_id: Fusion input identifier; expressions read it as
+      `<MacroName>.<control_id>`. Keep stable to preserve saved projects.
+    label: Inspector label (`LINKS_Name`) shown to users.
+    input_control: Fusion `INPID_InputControl` type, e.g. `SliderControl`,
+      `CheckboxControl`, or `ComboControl`.
+    default: Initial value (`INP_Default`).
+    min_scale: Slider range start (`INP_MinScale`); a UI hint, not a clamp.
+    max_scale: Slider range end (`INP_MaxScale`); a UI hint, not a clamp.
+    min_allowed: Hard lower clamp (`INP_MinAllowed`), or None for no clamp.
+    max_allowed: Hard upper clamp (`INP_MaxAllowed`), or None for no clamp.
+    integer: Whether the value snaps to integers (`INP_Integer`).
+    combo_options: Ordered labels for a `ComboControl`; index 0 is the first.
+    center: Slider reset/center tick (`ICD_Center`), or None to omit.
+  """
 
   control_id: str
   label: str
@@ -21,8 +88,20 @@ class ControlSpec:
   center: float | None = None
 
 
+# --- Inspector UserControls serialization ---
+
+
 def _format_num(value: float, integer: bool = False) -> str:
-  """Formats numeric control values cleanly for Fusion .setting Lua tables."""
+  """Formats numeric control values cleanly for Fusion .setting Lua tables.
+
+  Args:
+    value: Number to format.
+    integer: Whether to round and print without a decimal point.
+
+  Returns:
+    `"3"` for integers, `"1.0"` for whole floats (keeps the value typed as a
+    float in Lua), otherwise up to 6 significant digits (e.g. `"0.016"`).
+  """
   if integer:
     return str(int(round(value)))
   if float(value).is_integer():
@@ -31,7 +110,17 @@ def _format_num(value: float, integer: bool = False) -> str:
 
 
 def _render_control_entry(spec: ControlSpec) -> str:
-  """Serializes one UserControls entry in Fusion .setting Lua syntax."""
+  """Serializes one UserControls entry in Fusion .setting Lua syntax.
+
+  Checkboxes skip the slider scale keys and add `CBC_TriState = false`;
+  combos append one `{ CCS_AddString = "..." }` row per option, in order.
+
+  Args:
+    spec: Control description.
+
+  Returns:
+    Multi-line Lua table entry indented four tabs deep, ending in `},`.
+  """
   lines = [
       f"\t\t\t\t{spec.control_id} = {{",
       f'\t\t\t\t\tLINKS_Name = "{spec.label}",',
@@ -81,7 +170,20 @@ def _render_user_controls(
     groups: Sequence[tuple[str, str, Sequence[ControlSpec]]],
     default_open_groups: Sequence[str] = (),
 ) -> str:
-  """Renders collapsible Inspector LabelControl sections and their controls."""
+  """Renders collapsible Inspector LabelControl sections and their controls.
+
+  Each group becomes a `LabelControl` with `LBLC_DropDownButton = true`
+  followed by its controls. `LBLC_NumInputs` must equal the number of
+  controls that follow the label, or Fusion nests the wrong rows;
+  `drfx_validator` checks this count.
+
+  Args:
+    groups: Ordered `(group_id, group_title, controls)` tuples.
+    default_open_groups: Group IDs whose drop-down starts expanded.
+
+  Returns:
+    The full `UserControls = ordered() { ... },` block, three tabs deep.
+  """
   open_set = set(default_open_groups)
   blocks: list[str] = ["\t\t\tUserControls = ordered() {"]
   for group_id, group_title, controls in groups:
@@ -114,7 +216,19 @@ def _render_group_defaults(
     groups: Sequence[tuple[str, str, Sequence[ControlSpec]]],
     default_open_groups: Sequence[str] = (),
 ) -> str:
-  """Renders default Input values for macro UserControls."""
+  """Renders default Input values for macro UserControls.
+
+  These rows go in the macro `Inputs` block so a fresh instance starts with
+  the same values as `INP_Default`, and group labels start open (1) or
+  closed (0).
+
+  Args:
+    groups: Ordered `(group_id, group_title, controls)` tuples.
+    default_open_groups: Group IDs whose drop-down starts expanded.
+
+  Returns:
+    Newline-joined `<id> = Input { Value = ..., },` rows, four tabs deep.
+  """
   open_set = set(default_open_groups)
   lines: list[str] = []
   for group_id, _, controls in groups:
@@ -130,10 +244,27 @@ def _render_group_defaults(
   return "\n".join(lines)
 
 
+# --- Paper Cutout FX control groups ---
+
+
 def _core_cutout_control_groups(
     include_source_group: bool,
 ) -> list[tuple[str, str, list[ControlSpec]]]:
-  """Builds the Inspector control groups for the Paper Cutout FX effect."""
+  """Builds the Inspector control groups for the Paper Cutout FX effect.
+
+  Positions and offsets are in Fusion normalized frame space (0..1, origin
+  bottom-left, 0.5 = center); sizes such as `BorderSize` are fractions of
+  frame width; angles are degrees; durations are frames.
+
+  Args:
+    include_source_group: True to add the `MediaSourceMode` combo (legacy
+      generator layout); False for the Edit effect, which always uses the
+      clip it is applied to.
+
+  Returns:
+    Ordered `(group_id, group_title, controls)` tuples. Group IDs and control
+    IDs are referenced by expressions and must stay stable.
+  """
   groups: list[tuple[str, str, list[ControlSpec]]] = []
   if include_source_group:
     groups.append((
@@ -710,8 +841,27 @@ def _core_cutout_control_groups(
   return groups
 
 
+# --- Paper Cutout FX SimpleExpressions and node graph ---
+
+
 def _stepped_time_expr(macro_name: str) -> str:
-  """Returns Fusion SimpleExpression for optional stop-motion stepped time."""
+  """Returns Fusion SimpleExpression for optional stop-motion stepped time.
+
+  Generated form, with `t = min(comp.RenderEnd, max(comp.RenderStart, time))`
+  and `h = max(1, M.StopMotionHoldFrames)`:
+
+    iif(M.EnableStopMotion > 0.5,
+        comp.RenderStart + floor((t - comp.RenderStart) / h) * h, t)
+
+  so time advances in steps of `h` frames (a "shot on twos/threes" look) and
+  never leaves the clip range. `max(1, ...)` avoids division by zero.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator (`M` above).
+
+  Returns:
+    SimpleExpression evaluating to a frame number.
+  """
   clamped_t = "min(comp.RenderEnd, max(comp.RenderStart, time))"
   hold = f"max(1, {macro_name}.StopMotionHoldFrames)"
   return (
@@ -722,7 +872,20 @@ def _stepped_time_expr(macro_name: str) -> str:
 
 
 def _trans_progress_exprs(macro_name: str) -> tuple[str, str]:
-  """Returns (in_prog, out_prog) Fusion SimpleExpressions in [0, 1]."""
+  """Returns (in_prog, out_prog) Fusion SimpleExpressions in [0, 1].
+
+  `in_prog` ramps 0 -> 1 over the first `IntroFrames` frames after
+  `comp.RenderStart`; `out_prog` ramps 1 -> 0 over the last `OutroFrames`
+  frames before `comp.RenderEnd`. Each is a constant 1 when its style is
+  "None" (combo index 0) or its duration is 0, so a disabled side never
+  hides the cutout. `max(1, frames)` guards against division by zero.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+
+  Returns:
+    `(in_prog, out_prog)` SimpleExpression strings.
+  """
   in_prog = (
       f"iif({macro_name}.IntroStyle > 0.5 and {macro_name}.IntroFrames > 0, "
       "min(1, max(0, (time - comp.RenderStart) / "
@@ -740,9 +903,11 @@ def _anim_progress_expr(macro_name: str) -> str:
   """Returns normalized 0..1 visibility multiplier for Intro/Outro transitions.
 
   1.0 means fully open/flat; 0.0 means fully folded/collapsed off-screen.
+  Taking `min(in_prog, out_prog)` lets intro and outro windows overlap on
+  short clips without the value ever exceeding either ramp.
 
   Args:
-    macro_name: Name of the enclosing Fusion GroupOperator.
+    macro_name: Name of the enclosing Fusion MacroOperator.
 
   Returns:
     Fusion SimpleExpression string computing normalized 0..1 visibility.
@@ -752,7 +917,19 @@ def _anim_progress_expr(macro_name: str) -> str:
 
 
 def _active_trans_style_expr(macro_name: str) -> str:
-  """Selects IntroStyle when intro dominates _anim_progress_expr, else OutroStyle."""
+  """Selects IntroStyle when the intro ramp dominates, else OutroStyle.
+
+  "Dominates" means the intro is enabled and `in_prog <= out_prog`, i.e. the
+  intro ramp is the one `min()` picked in `_anim_progress_expr`. Ties go to
+  the intro. With `IntroFrames == 0` the intro is never chosen, even at
+  `comp.RenderStart` (see `test_active_trans_style_matches_anim_progress`).
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+
+  Returns:
+    SimpleExpression evaluating to a style combo index (0..4, as a float).
+  """
   in_prog, out_prog = _trans_progress_exprs(macro_name)
   return (
       f"iif({macro_name}.IntroStyle > 0.5 and {macro_name}.IntroFrames > 0 "
@@ -765,22 +942,58 @@ def _render_core_cutout_nodes(
     macro_name: str,
     source_output_op: str,
 ) -> str:
-  """Generates the shared Fusion node graph downstream of the media source."""
+  """Generates the shared Fusion node graph downstream of the media source.
+
+  Node chain (each arrow is a `SourceOp` link; `Pos` values only place nodes
+  in the Fusion flow view and do not affect rendering):
+
+    source -> ChromaKeyer (DeltaKeyer) -> KeyBypassSwitch (Dissolve picks
+      keyed or raw clip) -> SubjectEdgeChoke (ErodeDilate) ->
+      MediaClipTransform (Clip* placement)
+    MediaClipTransform -> BorderExpand -> BorderCornerSmooth (Blur) ->
+      BorderAlphaCrunch (alpha threshold) -> BorderTearDisplace (displaced by
+      TearEdgeNoise) = torn border matte
+    PaperBaseColor x PaperFiberNoise x PaperCreaseNoise (Multiply merges) ->
+      PaperSheetTextured, masked by the border matte -> PaperCutoutShape
+    PaperCutoutShape + MediaClipTransform -> CompositeSubjectOnPaper ->
+      MediaPaperOverlay (crease multiply) -> CrumpleDisplace -> FoldDVE ->
+      GlideTransform -> CutoutShadow -> StopMotionJitter -> MasterTransform
+      -> PosterizeTime (TimeStretcher; the macro's MainOutput1)
+
+  CrumpleDisplace, FoldDVE, and GlideTransform implement the intro/outro
+  styles; all other nodes are steady-state look controls.
+
+  Args:
+    macro_name: Name of the enclosing MacroOperator; expressions read
+      controls as `<macro_name>.<ControlId>`.
+    source_output_op: Name of the internal node that receives MainInput1.
+
+  Returns:
+    Node definitions (four tabs deep) to append inside the macro `Tools`
+    block, starting with a newline.
+  """
   p_expr = _anim_progress_expr(macro_name)
   style_expr = _active_trans_style_expr(macro_name)
   step_t = _stepped_time_expr(macro_name)
 
   # Precomputed signed multipliers for horizontal/vertical transition mirror.
+  # mh/mv are -1 or 1 (multiply a direction); flip_h/flip_v are 0 or 1
+  # because Transform.FlipHoriz/FlipVert are checkbox inputs.
   mh = f"iif({macro_name}.TransitionMirrorH > 0.5, -1, 1)"
   mv = f"iif({macro_name}.TransitionMirrorV > 0.5, -1, 1)"
   flip_h = f"iif({macro_name}.MasterFlipH > 0.5, 1, 0)"
   flip_v = f"iif({macro_name}.MasterFlipV > 0.5, 1, 0)"
 
   # Transition curve (smooth ease-out cubic: 1 - (1 - p)^3).
+  # inv_p is the remaining "closedness" (1 at the hidden end, 0 when flat), so
+  # every style amount below is written as `amount * inv_p` and fades to 0.
   ease_p = f"(1 - pow(1 - ({p_expr}), 3))"
   inv_p = f"(1 - ({ease_p}))"
 
   # 1 = Paper Unfold (3D), 2 = Crumple Ball, 3 = Airplane Glide, 4 = Flat Pop.
+  # `floor(style + 0.5) == k` rounds the float combo index before comparing.
+  # Amounts: Displace refraction (fraction of frame), DVE rotations in
+  # degrees, DVE ZMove in scene units, Transform Center in normalized 0..1.
   crumple_str_expr = (
       f"iif(floor({style_expr} + 0.5) == 2, 0.22 * ({inv_p}), "
       f"iif(floor({style_expr} + 0.5) == 1, 0.045 * ({inv_p}), 0))"
@@ -798,6 +1011,8 @@ def _render_core_cutout_nodes(
       f"({mv}) * (-28) * ({inv_p}), 0))"
   )
   dve_zmove_expr = f"iif(floor({style_expr} + 0.5) == 2, 1.6 * ({inv_p}), 0)"
+  # Glide (3) travels TransitionDistance along TransitionAngle (degrees ->
+  # radians via pi / 180); Flat Pop (4) drops in from 0.35 below center.
   glide_center_expr = (
       "Point("
       f"0.5 + iif(floor({style_expr} + 0.5) == 3, "
@@ -810,6 +1025,8 @@ def _render_core_cutout_nodes(
       f"({mv}) * (-0.35) * ({inv_p}), 0))"
       ")"
   )
+  # Scale-in per style. The max(0.001/0.05, ...) floors keep Transform.Size
+  # strictly positive so the cutout never collapses to a zero-size image.
   glide_size_expr = (
       f"iif(floor({style_expr} + 0.5) == 4, "
       f"max(0.001, {ease_p}), "
@@ -1308,9 +1525,19 @@ def _render_core_cutout_nodes(
 \t\t\t\t}},"""
 
 
+# --- Paper Cutout FX effect template ---
+
 
 def build_effect_setting() -> str:
-  """Builds the Paper Cutout FX direct-clip Edit Effect .setting file."""
+  """Builds the Paper Cutout FX direct-clip Edit Effect .setting file.
+
+  Resolve feeds the clip into `MainInput1`, which lands on the pass-through
+  `SourceClipInput` node (a BrightnessContrast with default inputs, used as
+  a named entry point) and flows through `_render_core_cutout_nodes`.
+
+  Returns:
+    Complete `.setting` file contents (UTF-8 text, trailing newline).
+  """
   macro_name = "PaperCutoutFX"
   groups = _core_cutout_control_groups(include_source_group=False)
   default_open = ("MediaSourceGroup", "PaperBorderGroup", "TransitionGroup")
@@ -1354,6 +1581,8 @@ def build_effect_setting() -> str:
 """
 
 
+# --- Compact node-rendering helpers (used by the fold transition) ---
+
 
 def _node(
     name: str,
@@ -1362,7 +1591,18 @@ def _node(
     pos: tuple[float, float],
     preamble: str = "",
 ) -> str:
-  """Renders one internal tool of a macro's Tools block."""
+  """Renders one internal tool of a macro's Tools block.
+
+  Args:
+    name: Unique node name; other nodes link to it via `SourceOp`.
+    tool: Fusion tool registry ID, e.g. `Merge`, `Transform`, `DVE`.
+    inputs: Pre-rendered input rows from `_expr`, `_link`, or `_value`.
+    pos: Flow-view position `(x, y)`; cosmetic only.
+    preamble: Optional raw line placed before `Inputs`, e.g. `_DISSOLVE`.
+
+  Returns:
+    Multi-line node definition, four tabs deep, ending in `},`.
+  """
   lines = [f"\t\t\t\t{name} = {tool} {{"]
   if preamble:
     lines.append(f"\t\t\t\t\t{preamble}")
@@ -1378,24 +1618,63 @@ def _node(
 
 
 def _expr(name: str, value: str, expression: str) -> str:
+  """Renders an input driven by a SimpleExpression.
+
+  Args:
+    name: Tool input name, e.g. `Mix` or `Center`.
+    value: Static fallback value in Lua syntax (`"0"`, `"{ 0.5, 0.5 }"`).
+    expression: SimpleExpression; must not contain double quotes.
+
+  Returns:
+    One `<name> = Input { Value = ..., Expression = "...", },` row.
+  """
   return f'{name} = Input {{ Value = {value}, Expression = "{expression}", }},'
 
 
 def _link(name: str, source_op: str, source: str = "Output") -> str:
+  """Renders an input wired to another node's output.
+
+  Args:
+    name: Tool input name, e.g. `Background`, `Foreground`, `EffectMask`.
+    source_op: Name of the upstream node inside the same macro.
+    source: Upstream output name; `"Output"` for images, `"Mask"` for masks.
+
+  Returns:
+    One `<name> = Input { SourceOp = "...", Source = "...", },` row.
+  """
   return f'{name} = Input {{ SourceOp = "{source_op}", Source = "{source}", }},'
 
 
 def _value(name: str, value: str) -> str:
+  """Renders an input with a constant value.
+
+  Args:
+    name: Tool input name.
+    value: Value in Lua syntax, e.g. `"1"`, `'FuID { "Atop" }'`.
+
+  Returns:
+    One `<name> = Input { Value = ..., },` row.
+  """
   return f"{name} = Input {{ Value = {value}, }},"
 
 
+# Preamble that every Dissolve tool carries in saved comps; selects the plain
+# cross-dissolve so `Mix` acts as a 0/1 switch between Background/Foreground.
 _DISSOLVE = 'Transitions = { [0] = "DFTDissolve" },'
+
+
+# --- Paper Fold & Unfold transition template ---
 
 
 def _fold_transition_control_groups() -> list[
     tuple[str, str, list[ControlSpec]]
 ]:
-  """Inspector controls of the Paper Fold & Unfold Fusion transition."""
+  """Inspector controls of the Paper Fold & Unfold Fusion transition.
+
+  Returns:
+    Ordered `(group_id, group_title, controls)` tuples. Distances are
+    normalized frame units, angles are degrees, holds are frames.
+  """
   checkbox = dict(
       input_control="CheckboxControl",
       min_allowed=0,
@@ -1545,6 +1824,15 @@ def build_fold_transition_setting() -> str:
   a sliding folded packet, stop-motion holds, jitter, and a drop shadow. The
   hinges are vertical, so the layout holds for any frame aspect ratio.
 
+  Graph outline: OutgoingInput/IncomingInput -> ActiveClip (which clip is
+  being folded) -> ActiveCreased -> MirrorIn -> three RectangleMask panels
+  (Left/Middle/Right, each a third of the width plus 0.002 overlap to hide
+  seams) -> Left/Right flaps get a paper back and swing on a DVE about their
+  hinge -> SheetRight/SheetFolded stack the panels -> MirrorOut ->
+  PacketMotion (toss/slide) -> PacketShadow -> HandJitter -> composited over
+  the underlay clip -> ExactEndSwitch/ExactBoundaryClamp force the pure
+  incoming/outgoing clip on the first and last frames.
+
   Returns:
     Complete .setting file contents.
   """
@@ -1554,6 +1842,9 @@ def build_fold_transition_setting() -> str:
   group_defaults = _render_group_defaults(groups, default_open)
   user_controls = _render_user_controls(groups, default_open)
 
+  # Transition progress p in [0, 1] across the transition's comp range. With
+  # stop-motion on, p advances only every `hold` frames (step_index counts
+  # held steps). p is pinned to exactly 0/1 at the range boundaries.
   dur = "max(1, comp.RenderEnd - comp.RenderStart)"
   hold = f"max(1, {m}.StopMotionHoldFrames)"
   step_index = f"floor((time - comp.RenderStart) / {hold})"
@@ -1566,26 +1857,50 @@ def build_fold_transition_setting() -> str:
       f"min(1, max(0, {chosen_p}))))"
   )
   # Openness of the active sheet: 1 = flat, 0 = folded packet.
+  # FoldAction 0 (unfold in): q = p. 1 (fold out): q = 1 - p. 2 (fold out,
+  # then unfold in): q goes 1 -> 0 over the first half and 0 -> 1 after.
   q = (
       f"iif({m}.FoldAction < 0.5, {p}, iif({m}.FoldAction < 1.5, 1 - ({p}), "
       f"iif(({p}) < 0.5, 1 - 2 * ({p}), 2 * ({p}) - 1)))"
   )
+  # 1 when the folding sheet shows the outgoing clip (fold out, or first half
+  # of fold-out-then-in); drives the ActiveClip Dissolve.
   outgoing_active = (
       f"iif({m}.FoldAction > 0.5 and {m}.FoldAction < 1.5, 1, "
       f"iif({m}.FoldAction > 1.5 and ({p}) < 0.5, 1, 0))"
   )
   # Cosine eases keep each stage's progress inside one reference.
+  # Flap angles in degrees (0 = flat; 176/174 stop just short of a full
+  # 180-degree fold). The left flap moves while q is in
+  # [0.1, 0.64] and the right one in [0.505, 1.0]: as q rises (unfolding),
+  # the left panel opens first, then the right.
   angle_left = f"176 * (0.5 + 0.5 * cos(pi * min(1, max(0, (({q}) - 0.1) / 0.54))))"
   angle_right = (
       f"174 * (0.5 + 0.5 * cos(pi * min(1, max(0, (({q}) - 0.505) / 0.495))))"
   )
+  # toss: 1 -> 0 over q in [0, 0.18], squared; drives the folded packet's
+  # slide, scale, spin, and shadow lift. settle: 0 when flat, 1 once q <= 0.88;
+  # fades in creases, shadow, and hand jitter as the sheet folds.
   toss = f"pow(0.5 + 0.5 * cos(pi * min(1, max(0, ({q}) / 0.18))), 2)"
   settle = f"min(1, max(0, (1 - ({q})) / 0.12))"
   mirror_sign = f"iif({m}.MirrorH > 0.5, -1, 1)"
   third = 1.0 / 3.0
+  # Panel mask width: one third of the frame plus 0.002 so adjacent panels
+  # overlap slightly and no seam shows between them.
   panel_w = f"{third + 0.002:.6f}"
 
   def panel_mask(name: str, center_x: float, y: float) -> str:
+    """Renders a full-height RectangleMask covering one vertical third.
+
+    Args:
+      name: Node name.
+      center_x: Mask center X in normalized frame units (0..1).
+      y: Flow-view Y position (cosmetic).
+
+    Returns:
+      RectangleMask node text. Height 4 (normalized units) overshoots the
+      frame so the mask always spans the full height.
+    """
     return _node(
         name,
         "RectangleMask",
@@ -1599,6 +1914,16 @@ def build_fold_transition_setting() -> str:
     )
 
   def masked_panel(name: str, mask: str, y: float) -> str:
+    """Cuts one panel out of the (mirrored) active clip.
+
+    Args:
+      name: Node name, e.g. `LeftFront`.
+      mask: Name of the RectangleMask node used as `EffectMask`.
+      y: Flow-view Y position (cosmetic).
+
+    Returns:
+      Merge node placing the masked clip over `TransparentCanvas`.
+    """
     return _node(
         name,
         "Merge",
@@ -1611,6 +1936,18 @@ def build_fold_transition_setting() -> str:
     )
 
   def panel_back(name: str, front: str, y: float) -> str:
+    """Builds the plain paper back of a flap.
+
+    Uses an `Atop` merge so `PaperBack` fills only the front panel's alpha.
+
+    Args:
+      name: Node name, e.g. `LeftBack`.
+      front: Name of the matching masked front panel node.
+      y: Flow-view Y position (cosmetic).
+
+    Returns:
+      Merge node text.
+    """
     return _node(
         name,
         "Merge",
@@ -1623,6 +1960,23 @@ def build_fold_transition_setting() -> str:
     )
 
   def flap_chain(prefix: str, angle: str, shift: float, y: float) -> list[str]:
+    """Builds the four nodes that swing one flap about its hinge.
+
+    `<prefix>Face` shows the front until the flap passes 90 degrees, then
+    the paper back. DVE rotates around the frame center, so `HingeIn` shifts
+    the flap until its hinge sits at x = 0.5, `Swing` rotates it about Y,
+    and `HingeOut` shifts it back.
+
+    Args:
+      prefix: `Left` or `Right`; expects `<prefix>Front`/`<prefix>Back`.
+      angle: SimpleExpression for the fold angle in degrees (0 = flat).
+      shift: Horizontal offset (normalized) that moves the hinge to the
+        center; its sign also picks the rotation direction.
+      y: Flow-view Y position (cosmetic).
+
+    Returns:
+      `[Face, HingeIn, Swing, HingeOut]` node texts in link order.
+    """
     face = f"{prefix}Face"
     return [
         _node(
@@ -1670,8 +2024,11 @@ def build_fold_transition_setting() -> str:
         ),
     ]
 
+  # The shadow falls up to 3.5x farther while the packet is tossed (lifted).
   shadow_reach = f"{m}.ShadowDistance * (1 + 2.5 * ({toss}))"
   nodes = [
+      # Pass-through entry points for MainInput1 (outgoing) and MainInput2
+      # (incoming); BrightnessContrast with no inputs set is an identity op.
       _node("OutgoingInput", "BrightnessContrast", [], (0, 49.5)),
       _node("IncomingInput", "BrightnessContrast", [], (0, 148.5)),
       _node(
@@ -1826,6 +2183,9 @@ def build_fold_transition_setting() -> str:
           ],
           (1650, 82.5),
       ),
+      # Per-step hand wobble: 12.9898 / 78.233 / 43.17 are arbitrary
+      # "hash" frequencies (as in the classic GLSL rand) that make each held
+      # step land on an unrelated offset; amplitude 0.006 frame, 2.2 degrees.
       _node(
           "HandJitter",
           "Transform",
@@ -1847,6 +2207,9 @@ def build_fold_transition_setting() -> str:
           ],
           (1760, 82.5),
       ),
+      # Clip revealed under the moving sheet: the incoming clip when folding
+      # out (FoldAction 1), the outgoing clip when unfolding in (0), and
+      # nothing (TransparentCanvas) for fold-out-then-in (2).
       _node(
           "Underlay",
           "Dissolve",
@@ -1882,6 +2245,9 @@ def build_fold_transition_setting() -> str:
           ],
           (1870, 148.5),
       ),
+      # Frame-exact boundaries: the last frame is the clean incoming clip and
+      # the first frame the clean outgoing clip, so cuts into and out of the
+      # transition never show a partially folded sheet.
       _node(
           "ExactEndSwitch",
           "Dissolve",
