@@ -183,7 +183,7 @@ The tables that follow list all controls exposed in the DaVinci Resolve Inspecto
 | **2. Green Screen & Matte Cleanup** | **Screen Color** | RGB color picker | `0.0, 1.0, 0.0` (green) | Selects the key color to remove |
 | **2. Green Screen & Matte Cleanup** | **Key Gain** | Float (`0.0` to `3.0`) | `1.0` | Controls matte contrast against the keyed backdrop |
 | **2. Green Screen & Matte Cleanup** | **Key Balance** | Float (`0.0` to `1.0`) | `0.5` | Shifts the soft key threshold midpoint |
-| **2. Green Screen & Matte Cleanup** | **Edge Choke (px)** | Float (`-32.0` to `32.0`) | `0.0` | Shrinks (negative) or expands (positive) the extracted matte |
+| **2. Green Screen & Matte Cleanup** | **Edge Choke (px)** | Float (`-32.0` to `32.0`) | `0.0` | Shrinks (negative) or expands (positive) the extracted matte; proxy renders scale it by both render-scale axes |
 | **3. Torn Paper Cutout Border** | **Enable Paper Border** | Boolean | `True` | Wraps a procedural ragged cardstock collar around the matte |
 | **3. Torn Paper Cutout Border** | **Border Width** | Float (`0.0` to `0.15`) | `0.018` | Sets collar thickness relative to frame height |
 | **3. Torn Paper Cutout Border** | **Torn Edge Roughness** | Float (`0.0` to `0.20`) | `0.012` | Controls amplitude of torn edge teeth |
