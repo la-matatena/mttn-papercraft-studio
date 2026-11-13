@@ -107,6 +107,22 @@ def _pseudo_noise(x: float, y: float) -> float:
   return val / 1.95
 
 
+def _bbox_ranges(
+    cx: float,
+    cy: float,
+    half_w: float,
+    half_h: float,
+    width: int,
+    height: int,
+) -> tuple[range, range]:
+  """Returns clamped (x_range, y_range) covering [cx - half_w, cx + half_w]."""
+  x0 = max(0, math.floor(cx - half_w))
+  x1 = min(width, math.ceil(cx + half_w) + 1)
+  y0 = max(0, math.floor(cy - half_h))
+  y1 = min(height, math.ceil(cy + half_h) + 1)
+  return range(x0, x1), range(y0, y1)
+
+
 def _draw_variant_motif(
     canvas: bytearray,
     width: int,
@@ -117,8 +133,9 @@ def _draw_variant_motif(
   """Draws a centered vector-style motif inside the thumbnail paper card."""
   cx = width * 0.5
   cy = height * 0.5
-  for py in range(height):
-    for px in range(width):
+  xs, ys = _bbox_ranges(cx, cy, 10.5, 10.5, width, height)
+  for py in ys:
+    for px in xs:
       dx = px - cx
       dy = py - cy
       alpha = 0.0
@@ -175,8 +192,13 @@ def render_thumbnail_png(
   sin_a = math.sin(-0.07)
 
   # Pass 1: Soft offset drop shadow behind tilted torn paper card.
-  for py in range(height):
-    for px in range(width):
+  s_half_w = 37.7 * abs(cos_a) + 24.2 * abs(sin_a)
+  s_half_h = 37.7 * abs(sin_a) + 24.2 * abs(cos_a)
+  s_xs, s_ys = _bbox_ranges(
+      cx + 2.5, cy + 3.0, s_half_w, s_half_h, width, height
+  )
+  for py in s_ys:
+    for px in s_xs:
       sdx = px - (cx + 2.5)
       sdy = py - (cy + 3.0)
       lx = sdx * cos_a + sdy * sin_a
@@ -190,8 +212,11 @@ def render_thumbnail_png(
         _blend_over(canvas, width, height, px, py, (8, 9, 14), shadow_a)
 
   # Pass 2: Warm cream textured paper cutout card.
-  for py in range(height):
-    for px in range(width):
+  c_half_w = 33.8 * abs(cos_a) + 20.3 * abs(sin_a)
+  c_half_h = 33.8 * abs(sin_a) + 20.3 * abs(cos_a)
+  c_xs, c_ys = _bbox_ranges(cx, cy, c_half_w, c_half_h, width, height)
+  for py in c_ys:
+    for px in c_xs:
       dx = px - cx
       dy = py - cy
       lx = dx * cos_a + dy * sin_a

@@ -347,5 +347,60 @@ class PapercraftProTest(absltest.TestCase):
     )
 
 
+  def test_validator_rejects_truncated_png_with_value_error(self):
+    entries = bundle_builder_lib.build_drfx_entries()
+    png_key = next(k for k in entries if k.endswith(".png"))
+    for bad_len in (8, 16, 23):
+      with self.subTest(bad_len=bad_len):
+        broken = dict(entries)
+        broken[png_key] = b"\x89PNG\r\n\x1a\n" + b"\x00" * (bad_len - 8)
+        drfx_bytes = bundle_builder_lib._write_deterministic_zip(broken)  # pylint: disable=protected-access
+        with self.assertRaisesRegex(ValueError, "Truncated PNG"):
+          drfx_validator.validate_drfx_bytes(drfx_bytes)
+
+  def test_active_trans_style_matches_anim_progress(self):
+    macro = "PaperCutoutFX"
+    prog_expr = fusion_templates._anim_progress_expr(macro)  # pylint: disable=protected-access
+    style_expr = fusion_templates._active_trans_style_expr(macro)  # pylint: disable=protected-access
+
+    def eval_expr(expr, t, render_end, **ctrl_vals):
+      env = {
+          "__builtins__": {},
+          "iif": lambda c, a, b: a if c else b,
+          "min": min,
+          "max": max,
+          "comp": types.SimpleNamespace(RenderStart=0, RenderEnd=render_end),
+          "time": t,
+          macro: types.SimpleNamespace(**ctrl_vals),
+      }
+      return eval(expr, env)  # pylint: disable=eval-used
+
+    # IntroFrames == 0 must never select IntroStyle even at RenderStart.
+    for t in (0, 25):
+      ctrls = dict(IntroStyle=2, IntroFrames=0, OutroStyle=3, OutroFrames=10)
+      self.assertEqual(eval_expr(style_expr, t, 30, **ctrls), 3)
+      expected_prog = 1.0 if t == 0 else 0.5
+      self.assertAlmostEqual(
+          eval_expr(prog_expr, t, 30, **ctrls), expected_prog
+      )
+
+    # Overlapping intro/outro windows on a 10-frame comp.
+    overlap_ctrls = dict(
+        IntroStyle=1, IntroFrames=10, OutroStyle=4, OutroFrames=10
+    )
+    self.assertAlmostEqual(
+        eval_expr(prog_expr, 2, 10, **overlap_ctrls), 0.2
+    )
+    self.assertEqual(eval_expr(style_expr, 2, 10, **overlap_ctrls), 1)
+    self.assertAlmostEqual(
+        eval_expr(prog_expr, 5, 10, **overlap_ctrls), 0.5
+    )
+    self.assertEqual(eval_expr(style_expr, 5, 10, **overlap_ctrls), 1)
+    self.assertAlmostEqual(
+        eval_expr(prog_expr, 8, 10, **overlap_ctrls), 0.2
+    )
+    self.assertEqual(eval_expr(style_expr, 8, 10, **overlap_ctrls), 4)
+
+
 if __name__ == "__main__":
   absltest.main()

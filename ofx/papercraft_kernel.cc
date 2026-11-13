@@ -91,14 +91,14 @@ PixelRect EffectiveRod(const ImageView& view) {
   return view.bounds;
 }
 
-RgbaColor ReadPixel(const ImageView& view, int x, int y) {
-  const std::uint8_t* ptr = PixelConstPtr(view, x, y);
+inline RgbaColor ReadPixelPtr(const std::uint8_t* ptr, PixelDepth depth,
+                              AlphaMode alpha_mode) {
   RgbaColor out;
-  if (view.depth == PixelDepth::kFloat) {
+  if (depth == PixelDepth::kFloat) {
     float c[4];
     std::memcpy(c, ptr, sizeof(c));
     out = {c[0], c[1], c[2], c[3]};
-  } else if (view.depth == PixelDepth::kShort) {
+  } else if (depth == PixelDepth::kShort) {
     std::uint16_t c[4];
     std::memcpy(c, ptr, sizeof(c));
     constexpr float kInv = 1.0f / 65535.0f;
@@ -108,23 +108,27 @@ RgbaColor ReadPixel(const ImageView& view, int x, int y) {
     out = {ptr[0] * kInvByte, ptr[1] * kInvByte, ptr[2] * kInvByte,
            ptr[3] * kInvByte};
   }
-  if (view.alpha_mode == AlphaMode::kOpaque) {
+  if (alpha_mode == AlphaMode::kOpaque) {
     out.a = 1.0f;
-  } else if (view.alpha_mode == AlphaMode::kUnPremultiplied) {
+  } else if (alpha_mode == AlphaMode::kUnPremultiplied) {
     const float a = Clamp01(out.a);
     out = {out.r * a, out.g * a, out.b * a, a};
   }
   return out;
 }
 
-void WritePixel(const ImageView& view, int x, int y, const RgbaColor& color) {
-  std::uint8_t* ptr = PixelMutPtr(view, x, y);
-  if (view.depth == PixelDepth::kFloat) {
+RgbaColor ReadPixel(const ImageView& view, int x, int y) {
+  return ReadPixelPtr(PixelConstPtr(view, x, y), view.depth, view.alpha_mode);
+}
+
+inline void WritePixelPtr(std::uint8_t* ptr, PixelDepth depth,
+                          const RgbaColor& color) {
+  if (depth == PixelDepth::kFloat) {
     const float c[4] = {color.r, color.g, color.b, color.a};
     std::memcpy(ptr, c, sizeof(c));
     return;
   }
-  if (view.depth == PixelDepth::kShort) {
+  if (depth == PixelDepth::kShort) {
     const std::uint16_t c[4] = {
         static_cast<std::uint16_t>(Clamp01(color.r) * 65535.0f + 0.5f),
         static_cast<std::uint16_t>(Clamp01(color.g) * 65535.0f + 0.5f),
@@ -138,6 +142,10 @@ void WritePixel(const ImageView& view, int x, int y, const RgbaColor& color) {
   ptr[1] = static_cast<std::uint8_t>(Clamp01(color.g) * 255.0f + 0.5f);
   ptr[2] = static_cast<std::uint8_t>(Clamp01(color.b) * 255.0f + 0.5f);
   ptr[3] = static_cast<std::uint8_t>(Clamp01(color.a) * 255.0f + 0.5f);
+}
+
+void WritePixel(const ImageView& view, int x, int y, const RgbaColor& color) {
+  WritePixelPtr(PixelMutPtr(view, x, y), view.depth, color);
 }
 
 RgbaColor SampleBilinearTransparentOutside(const ImageView& view, float px,
@@ -154,6 +162,28 @@ RgbaColor SampleBilinearTransparentOutside(const ImageView& view, float px,
     return {};
   }
 
+  const float sx = px - 0.5f;
+  const float sy = py - 0.5f;
+  const int x0 = static_cast<int>(std::floor(sx));
+  const int y0 = static_cast<int>(std::floor(sy));
+  const float fx = sx - static_cast<float>(x0);
+  const float fy = sy - static_cast<float>(y0);
+
+  if (x0 >= view.bounds.x1 && x0 + 1 < view.bounds.x2 && y0 >= view.bounds.y1 &&
+      y0 + 1 < view.bounds.y2) {
+    const std::ptrdiff_t px_bytes = PixelSizeBytes(view);
+    const std::uint8_t* p00 = PixelConstPtr(view, x0, y0);
+    const std::uint8_t* p01 = p00 + view.row_bytes;
+    return LerpColor(
+        LerpColor(ReadPixelPtr(p00, view.depth, view.alpha_mode),
+                  ReadPixelPtr(p00 + px_bytes, view.depth, view.alpha_mode),
+                  fx),
+        LerpColor(ReadPixelPtr(p01, view.depth, view.alpha_mode),
+                  ReadPixelPtr(p01 + px_bytes, view.depth, view.alpha_mode),
+                  fx),
+        fy);
+  }
+
   auto read_safe = [&](int ix, int iy) -> RgbaColor {
     if (ix < view.bounds.x1 || ix >= view.bounds.x2 || iy < view.bounds.y1 ||
         iy >= view.bounds.y2) {
@@ -161,13 +191,6 @@ RgbaColor SampleBilinearTransparentOutside(const ImageView& view, float px,
     }
     return ReadPixel(view, ix, iy);
   };
-
-  const float sx = px - 0.5f;
-  const float sy = py - 0.5f;
-  const int x0 = static_cast<int>(std::floor(sx));
-  const int y0 = static_cast<int>(std::floor(sy));
-  const float fx = sx - static_cast<float>(x0);
-  const float fy = sy - static_cast<float>(y0);
 
   return LerpColor(
       LerpColor(read_safe(x0, y0), read_safe(x0 + 1, y0), fx),
@@ -419,6 +442,8 @@ RgbaColor ApplyChromaKey(const CutoutParams& params,
 struct SubjectTransform {
   float cw = 1.0f;
   float ch = 1.0f;
+  float inv_cw = 1.0f;
+  float inv_ch = 1.0f;
   float origin_x = 0.0f;
   float origin_y = 0.0f;
   float cx_canvas = 0.5f;
@@ -432,6 +457,8 @@ struct SubjectTransform {
   float src_rod_y1 = 0.0f;
   float src_rod_w = 1.0f;
   float src_rod_h = 1.0f;
+  float rod_scale_x = 1.0f;
+  float rod_scale_y = 1.0f;
   bool use_demo = false;
 };
 
@@ -441,6 +468,8 @@ SubjectTransform BuildSubjectTransform(const CutoutParams& params,
   SubjectTransform xf;
   xf.cw = static_cast<float>(std::max(1, canvas_bounds.x2 - canvas_bounds.x1));
   xf.ch = static_cast<float>(std::max(1, canvas_bounds.y2 - canvas_bounds.y1));
+  xf.inv_cw = 1.0f / xf.cw;
+  xf.inv_ch = 1.0f / xf.ch;
   xf.origin_x = static_cast<float>(canvas_bounds.x1);
   xf.origin_y = static_cast<float>(canvas_bounds.y1);
   xf.cx_canvas = xf.origin_x + xf.cw * 0.5f;
@@ -458,6 +487,8 @@ SubjectTransform BuildSubjectTransform(const CutoutParams& params,
     xf.src_rod_y1 = static_cast<float>(src_rod.y1);
     xf.src_rod_w = static_cast<float>(std::max(1, src_rod.x2 - src_rod.x1));
     xf.src_rod_h = static_cast<float>(std::max(1, src_rod.y2 - src_rod.y1));
+    xf.rod_scale_x = xf.src_rod_w * xf.inv_cw;
+    xf.rod_scale_y = xf.src_rod_h * xf.inv_ch;
   }
   return xf;
 }
@@ -477,16 +508,16 @@ RgbaColor EvaluateSubjectAtCanonicalPx(const CutoutParams& params,
       (dx * xf.sin_a + dy * xf.cos_a) * xf.inv_scale + xf.cy_canvas;
 
   if (xf.use_demo) {
-    const float nx = (rx - xf.origin_x) / xf.cw;
-    const float ny = (ry - xf.origin_y) / xf.ch;
-    return EvaluateDemoSticker(nx, ny, xf.cw / xf.ch);
+    const float nx = (rx - xf.origin_x) * xf.inv_cw;
+    const float ny = (ry - xf.origin_y) * xf.inv_ch;
+    return EvaluateDemoSticker(nx, ny, xf.cw * xf.inv_ch);
   }
 
   // Remap canonical pixel coordinates via full-frame source RoD so cropped
   // input buffers map accurately while SampleBilinearTransparentOutside guards
   // physical bounds.
-  const float sx = xf.src_rod_x1 + ((rx - xf.origin_x) / xf.cw) * xf.src_rod_w;
-  const float sy = xf.src_rod_y1 + ((ry - xf.origin_y) / xf.ch) * xf.src_rod_h;
+  const float sx = xf.src_rod_x1 + (rx - xf.origin_x) * xf.rod_scale_x;
+  const float sy = xf.src_rod_y1 + (ry - xf.origin_y) * xf.rod_scale_y;
 
   const RgbaColor raw = SampleBilinearTransparentOutside(source, sx, sy);
   if (params.enable_chroma_key) {
@@ -584,10 +615,14 @@ void DistanceTransform1D(const float* input, int n, int* v,
 // the general 1D transform over those squared distances.
 void DistanceTransform2D(int width, int height,
                          const ParallelRowsFn& parallel_for,
-                         std::vector<float>* grid) {
+                         std::vector<float>* grid,
+                         std::vector<int>* scratch = nullptr) {
   if (width <= 0 || height <= 0 || width > kMaxSdfDim || height > kMaxSdfDim) {
     return;
   }
+  std::vector<int> local_scratch;
+  std::vector<int>& down_all = scratch != nullptr ? *scratch : local_scratch;
+  down_all.resize(static_cast<std::size_t>(width) * height);
   constexpr int kColBlock = 64;
   const int num_blocks = (width + kColBlock - 1) / kColBlock;
   RunScanlines(0, num_blocks, parallel_for, [&](int block) {
@@ -596,11 +631,11 @@ void DistanceTransform2D(int width, int height,
     // Distance to the nearest feature above (inclusive), or -1 if none yet.
     std::array<int, kColBlock> last;
     last.fill(-1);
-    std::vector<int> down(static_cast<std::size_t>(bw) * height);
+    int* down = down_all.data() + static_cast<std::size_t>(x0) * height;
     for (int y = 0; y < height; ++y) {
       const float* row =
           grid->data() + static_cast<std::size_t>(y) * width + x0;
-      int* d = down.data() + static_cast<std::size_t>(y) * bw;
+      int* d = down + static_cast<std::size_t>(y) * bw;
       for (int c = 0; c < bw; ++c) {
         if (row[c] < 1e18f) {
           last[c] = y;
@@ -612,7 +647,7 @@ void DistanceTransform2D(int width, int height,
     next.fill(-1);
     for (int y = height - 1; y >= 0; --y) {
       float* row = grid->data() + static_cast<std::size_t>(y) * width + x0;
-      const int* d = down.data() + static_cast<std::size_t>(y) * bw;
+      const int* d = down + static_cast<std::size_t>(y) * bw;
       for (int c = 0; c < bw; ++c) {
         if (d[c] == 0) {
           next[c] = y;
@@ -719,8 +754,11 @@ CoarseSignedDistanceField BuildSubjectSignedDistanceField(
     }
   });
 
-  DistanceTransform2D(sdf.width, sdf.height, parallel_for, &outside_sq);
-  DistanceTransform2D(sdf.width, sdf.height, parallel_for, &inside_sq);
+  std::vector<int> dt_scratch;
+  DistanceTransform2D(sdf.width, sdf.height, parallel_for, &outside_sq,
+                      &dt_scratch);
+  DistanceTransform2D(sdf.width, sdf.height, parallel_for, &inside_sq,
+                      &dt_scratch);
 
   sdf.signed_dist_px.resize(total);
   const float half_step = 0.5f * static_cast<float>(step);
@@ -915,6 +953,9 @@ void MapOutputToPaperCanonical(const CutoutParams& params,
   const float ax = (rx * anim.a_cos - ry * anim.a_sin) * inv_pop;
   const float ay = (rx * anim.a_sin + ry * anim.a_cos) * inv_pop;
 
+  const float inv_cw = 1.0f / cw;
+  const float inv_ch = 1.0f / ch;
+
   // Apply inverse 3D perspective hinge tilt across horizontal/vertical axes.
   // Without tilt or perspective this divides by exactly 1, so skip it.
   float px = ax;
@@ -922,8 +963,8 @@ void MapOutputToPaperCanonical(const CutoutParams& params,
   if (anim.perspective_k != 0.0f || anim.perspective_ky != 0.0f ||
       anim.tilt_y_cos != 1.0f) {
     const float w_persp =
-        std::max(0.15f, 1.0f + anim.perspective_k * (ax / cw) +
-                            anim.perspective_ky * (ay / ch));
+        std::max(0.15f, 1.0f + anim.perspective_k * (ax * inv_cw) +
+                            anim.perspective_ky * (ay * inv_ch));
     px = ax / (anim.tilt_y_cos * w_persp);
     py = ay / w_persp;
   }
@@ -933,8 +974,8 @@ void MapOutputToPaperCanonical(const CutoutParams& params,
   if (apply_crumple && anim.crumple_warp_norm > 1e-4f) {
     float gdx = 0.0f;
     float gdy = 0.0f;
-    const float cnx = 0.5f + px / cw;
-    const float cny = 0.5f + py / ch;
+    const float cnx = 0.5f + px * inv_cw;
+    const float cny = 0.5f + py * inv_ch;
     CrumpleDisplacement(cnx, cny, params.crease_scale,
                         static_cast<std::uint32_t>(params.random_seed) + 503u,
                         &gdx, &gdy, &crease_val);
@@ -1584,7 +1625,32 @@ struct BoundsBox {
   }
 };
 
-using FoldPolygon = std::vector<std::array<float, 2>>;
+// Fixed-capacity convex polygon for fold-bounds clipping (avoids per-polygon
+// heap allocations during FoldSheetBounds).
+struct FoldPolygon {
+  static constexpr std::size_t kMaxVertices = 16;
+  std::array<std::array<float, 2>, kMaxVertices> pts{};
+  std::size_t count = 0;
+
+  FoldPolygon() = default;
+  FoldPolygon(std::initializer_list<std::array<float, 2>> init) {
+    for (const auto& p : init) {
+      push_back(p);
+    }
+  }
+
+  void push_back(const std::array<float, 2>& p) {
+    if (count < kMaxVertices) {
+      pts[count++] = p;
+    }
+  }
+  std::size_t size() const { return count; }
+  const std::array<float, 2>& operator[](std::size_t i) const {
+    return pts[i];
+  }
+  const std::array<float, 2>* begin() const { return pts.data(); }
+  const std::array<float, 2>* end() const { return pts.data() + count; }
+};
 
 // Bounds of every piece vertex mapped by `map`, padded by `pad`; empty (no
 // point inside) when there are no pieces.
@@ -1679,8 +1745,11 @@ std::vector<FoldPolygon> FoldSheetBounds(
     std::array<BoundsBox, kMaxFoldHinges + 1>* levels) {
   const float hw = sheet.half_w + grow_px;
   const float hh = sheet.half_h + grow_px;
-  std::vector<FoldPolygon> pieces(
-      1, FoldPolygon{{-hw, -hh}, {hw, -hh}, {hw, hh}, {-hw, hh}});
+  std::vector<FoldPolygon> pieces;
+  pieces.reserve(1u << std::min(layout.count, kMaxFoldHinges));
+  pieces.push_back(FoldPolygon{{-hw, -hh}, {hw, -hh}, {hw, hh}, {-hw, hh}});
+  std::vector<FoldPolygon> next;
+  next.reserve(pieces.capacity());
   const auto same = [](float x, float y, float* ox, float* oy) {
     *ox = x;
     *oy = y;
@@ -1689,19 +1758,19 @@ std::vector<FoldPolygon> FoldSheetBounds(
   for (int k = 0; k < layout.count; ++k) {
     const FoldHinge& h = layout.hinges[k];
     if (h.phi > 1e-3f) {
-      std::vector<FoldPolygon> next;
+      next.clear();
       for (const FoldPolygon& piece : pieces) {
         // The stationary side keeps the 1.25 px coverage ramp past the hinge.
-        FoldPolygon stay = ClipToHingeSide(piece, h, 1.0f, 1.5f);
+        const FoldPolygon stay = ClipToHingeSide(piece, h, 1.0f, 1.5f);
         if (stay.size() >= 3) {
-          next.push_back(std::move(stay));
+          next.push_back(stay);
         }
         const FoldPolygon flap = ClipToHingeSide(piece, h, -1.0f, 0.0f);
         if (flap.size() >= 3) {
           next.push_back(FoldedFlapBounds(layout, h, flap));
         }
       }
-      pieces = std::move(next);
+      std::swap(pieces, next);
     }
     (*levels)[k + 1] = BoundsOfPieces(pieces, 2.0f, same);
   }
@@ -1747,32 +1816,8 @@ struct FoldShadeContext {
   // Points outside see no paper, which prunes the folded-layer recursion.
   std::array<BoundsBox, kMaxFoldHinges + 1> stack_bounds;
   std::array<BoundsBox, kMaxFoldHinges + 1> coverage_bounds;
+  std::array<std::array<float, 2>, kMaxFoldHinges> flap_light = {};
 };
-
-void ConfigureFoldLight(float shadow_angle_deg, FoldShadeContext* ctx) {
-  const float rad = shadow_angle_deg * kDegToRad;
-  ctx->shadow_dir_x = std::cos(rad);
-  ctx->shadow_dir_y = std::sin(rad);
-  ctx->light_x = -0.6f * ctx->shadow_dir_x;
-  ctx->light_y = -0.6f * ctx->shadow_dir_y;
-  ctx->light_z = 0.8f;
-}
-
-// Flat coordinates of the flap point seen at (d, t) from hinge `h`: `d` px
-// past the hinge for an open flap, or `-d` px back over the stationary side
-// for a folded-over flap.
-void UnfoldFlapPoint(const FoldLayout& layout, const FoldHinge& h, float d,
-                     float t, bool folded_over, bool toward_viewer, float* xf,
-                     float* yf) {
-  const float s = folded_over
-                      ? std::max(0.0f, -d) / std::max(0.03f, -h.cos_phi)
-                      : d / std::max(0.03f, h.cos_phi);
-  const float lift = (s * h.sin_phi + (folded_over ? 3.0f : 0.0f)) *
-                     (toward_viewer ? 1.0f : -1.0f);
-  const float tf = t / std::max(0.5f, 1.0f + layout.persp_k * lift);
-  *xf = h.px + s * h.nx + tf * h.tx;
-  *yf = h.py + s * h.ny + tf * h.ty;
-}
 
 // Lambert shading of the visible flap face relative to a flat sheet.
 float FlapLight(const FoldShadeContext& ctx, const FoldHinge& h,
@@ -1789,6 +1834,38 @@ float FlapLight(const FoldShadeContext& ctx, const FoldHinge& h,
   return Clamp((kAmbient + (1.0f - kAmbient) * lambert) /
                    (kAmbient + (1.0f - kAmbient) * ctx.light_z),
                0.62f, 1.15f);
+}
+
+void ConfigureFoldLight(float shadow_angle_deg, FoldShadeContext* ctx) {
+  const float rad = shadow_angle_deg * kDegToRad;
+  ctx->shadow_dir_x = std::cos(rad);
+  ctx->shadow_dir_y = std::sin(rad);
+  ctx->light_x = -0.6f * ctx->shadow_dir_x;
+  ctx->light_y = -0.6f * ctx->shadow_dir_y;
+  ctx->light_z = 0.8f;
+  if (ctx->layout != nullptr) {
+    for (int k = 0; k < ctx->layout->count; ++k) {
+      const FoldHinge& h = ctx->layout->hinges[k];
+      ctx->flap_light[k][0] = FlapLight(*ctx, h, false);
+      ctx->flap_light[k][1] = FlapLight(*ctx, h, true);
+    }
+  }
+}
+
+// Flat coordinates of the flap point seen at (d, t) from hinge `h`: `d` px
+// past the hinge for an open flap, or `-d` px back over the stationary side
+// for a folded-over flap.
+void UnfoldFlapPoint(const FoldLayout& layout, const FoldHinge& h, float d,
+                     float t, bool folded_over, bool toward_viewer, float* xf,
+                     float* yf) {
+  const float s = folded_over
+                      ? std::max(0.0f, -d) / std::max(0.03f, -h.cos_phi)
+                      : d / std::max(0.03f, h.cos_phi);
+  const float lift = (s * h.sin_phi + (folded_over ? 3.0f : 0.0f)) *
+                     (toward_viewer ? 1.0f : -1.0f);
+  const float tf = t / std::max(0.5f, 1.0f + layout.persp_k * lift);
+  *xf = h.px + s * h.nx + tf * h.tx;
+  *yf = h.py + s * h.ny + tf * h.ty;
 }
 
 // Union coverage of every paper layer at sheet-local (x, y), for shadows.
@@ -2038,7 +2115,6 @@ RgbaColor EvalFoldStack(const FoldShadeContext& ctx, int k, float x, float y,
       continue;
     }
     const float d = (x - h.px) * h.nx + (y - h.py) * h.ny;
-    const float t = (x - h.px) * h.tx + (y - h.py) * h.ty;
     const bool toward_viewer = h.valley != back_side;
 
     if (h.cos_phi >= 0.0f) {
@@ -2046,9 +2122,10 @@ RgbaColor EvalFoldStack(const FoldShadeContext& ctx, int k, float x, float y,
       if (d <= 0.0f) {
         shade *= 1.0f - 0.14f * h.sin_phi * Smoothstep(-ao_band, 0.0f, d);
       } else {
+        const float t = (x - h.px) * h.tx + (y - h.py) * h.ty;
         UnfoldFlapPoint(*ctx.layout, h, d, t, false, toward_viewer, &x, &y);
         const float s = d / std::max(0.03f, h.cos_phi);
-        shade *= FlapLight(ctx, h, toward_viewer) *
+        shade *= ctx.flap_light[k][toward_viewer ? 1 : 0] *
                  (1.0f - 0.15f * h.sin_phi * Smoothstep(ao_band, 0.0f, s));
       }
       continue;
@@ -2058,11 +2135,13 @@ RgbaColor EvalFoldStack(const FoldShadeContext& ctx, int k, float x, float y,
     if (d >= 1.25f) {
       return {};
     }
+    const float t = (x - h.px) * h.tx + (y - h.py) * h.ty;
     const float cov = Smoothstep(1.25f, -1.25f, d);
     float xf = 0.0f;
     float yf = 0.0f;
     UnfoldFlapPoint(*ctx.layout, h, d, t, true, toward_viewer, &xf, &yf);
-    const float flap_shade = shade * FlapLight(ctx, h, toward_viewer);
+    const float flap_shade =
+        shade * ctx.flap_light[k][toward_viewer ? 1 : 0];
 
     if (!toward_viewer) {
       // Mountain flap (or valley seen from behind): it hides under the sheet.
@@ -2191,18 +2270,28 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
 
   const CutoutAnimState anim = ComputeCutoutAnimState(params, cw, ch);
 
+  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+  const PixelDepth out_depth = output.depth;
+
   // If collapsed below visibility threshold at transition endpoints, clear.
   if (anim.ease_p <= 1e-4f && anim.style != CutoutAnimStyle::kNone) {
     RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
-      for (int x = x_begin; x < x_end; ++x) {
-        WritePixel(output, x, y, {});
+      std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+        WritePixelPtr(out_px, out_depth, {});
       }
     });
     return;
   }
 
-  const CoarseSignedDistanceField sdf = BuildSubjectSignedDistanceField(
-      params, subj_xf, src_view, canvas_bounds, parallel_for);
+  const bool need_sdf =
+      params.enable_border || params.shadow_opacity > 1e-4f ||
+      std::abs(params.edge_choke_px) > 0.01f ||
+      anim.style == CutoutAnimStyle::kPaperUnfold;
+  const CoarseSignedDistanceField sdf =
+      need_sdf ? BuildSubjectSignedDistanceField(params, subj_xf, src_view,
+                                                 canvas_bounds, parallel_for)
+               : CoarseSignedDistanceField{};
 
   const float border_px =
       params.enable_border ? std::max(0.0f, params.border_width_norm * min_dim)
@@ -2215,7 +2304,8 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
       static_cast<std::uint32_t>(std::max(0, params.random_seed));
   const std::uint32_t boil_seed =
       seed +
-      static_cast<std::uint32_t>(std::floor(anim.step_time * params.edge_boil));
+      static_cast<std::uint32_t>(
+          std::max(0.0f, std::floor(anim.step_time * params.edge_boil)));
 
   const float sh_rad = params.shadow_angle_deg * kDegToRad;
   const float sh_dx_px =
@@ -2276,13 +2366,14 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
     ctx.flap_shadow_soft_px = std::max(2.0f, 0.006f * min_dim);
     // Bounds per fold level prune the layer recursion away from the paper.
     const float sdf_slack = 2.0f * static_cast<float>(sdf.step) + 3.0f;
-    FoldSheetBounds(sheet, layout, border_px + tear_amp_px + sdf_slack,
-                    &ctx.stack_bounds);
-    FoldSheetBounds(sheet, layout,
-                    border_px +
-                        std::max({1.2f, sh_soft_px, ctx.flap_shadow_soft_px}) +
-                        sdf_slack,
-                    &ctx.coverage_bounds);
+    const std::vector<FoldPolygon> paper_cover = FoldSheetBounds(
+        sheet, layout, border_px + tear_amp_px + sdf_slack, &ctx.stack_bounds);
+    const std::vector<FoldPolygon> coverage_cover = FoldSheetBounds(
+        sheet, layout,
+        border_px +
+            std::max({1.2f, sh_soft_px, ctx.flap_shadow_soft_px}) +
+            sdf_slack,
+        &ctx.coverage_bounds);
     CenterFoldedPacket(ctx, q, &layout);
 
     auto sample_subject = [&](float ux, float uy, float dist_px) {
@@ -2320,23 +2411,59 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
     };
 
     const float lift_k = 1.0f + 2.5f * layout.lift;
+    const float m_scale = 1.0f / anim.inv_m_scale;
+    const auto to_canvas = [&](float lx, float ly, float* cx, float* cy) {
+      float rx = 0.0f;
+      float ry = 0.0f;
+      packet.ToCanvas(lx, ly, &rx, &ry);
+      if (params.flip_h) {
+        rx = -rx;
+      }
+      if (params.flip_v) {
+        ry = -ry;
+      }
+      *cx = cx_out + (rx * anim.cos_m + ry * anim.sin_m) * m_scale;
+      *cy = cy_out + (-rx * anim.sin_m + ry * anim.cos_m) * m_scale;
+    };
+    const auto to_shadow = [&](float lx, float ly, float* cx, float* cy) {
+      to_canvas(lx, ly, cx, cy);
+      *cx += sh_dx_px * lift_k;
+      *cy += sh_dy_px * lift_k;
+    };
+    const BoundsBox paper_box = BoundsOfPieces(paper_cover, 3.0f, to_canvas);
+    const BoundsBox shadow_box = BoundsOfPieces(coverage_cover, 3.0f, to_shadow);
+
     RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
       const float py_out = static_cast<float>(y) + 0.5f;
-      for (int x = x_begin; x < x_end; ++x) {
+      const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
+      const bool row_shadow = params.shadow_opacity > 1e-4f &&
+                              py_out >= shadow_box.y1 &&
+                              py_out <= shadow_box.y2;
+      std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+      if (!row_paper && !row_shadow) {
+        for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+          WritePixelPtr(out_px, out_depth, {});
+        }
+        return;
+      }
+      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
         const float px_out = static_cast<float>(x) + 0.5f;
-        float lx = 0.0f;
-        float ly = 0.0f;
-        to_local(px_out, py_out, &lx, &ly);
-        const RgbaColor fg = ScalePremult(
-            EvalFoldStack(ctx, layout.count - 1, lx, ly, false, 1.0f,
-                          sample_subject),
-            layout.alpha);
-        if (fg.a >= 0.999f) {
-          WritePixel(output, x, y, fg);
-          continue;
+        RgbaColor fg;
+        if (row_paper && px_out >= paper_box.x1 && px_out <= paper_box.x2) {
+          float lx = 0.0f;
+          float ly = 0.0f;
+          to_local(px_out, py_out, &lx, &ly);
+          fg = ScalePremult(
+              EvalFoldStack(ctx, layout.count - 1, lx, ly, false, 1.0f,
+                            sample_subject),
+              layout.alpha);
+          if (fg.a >= 0.999f) {
+            WritePixelPtr(out_px, out_depth, fg);
+            continue;
+          }
         }
         float shadow_a = 0.0f;
-        if (params.shadow_opacity > 1e-4f) {
+        if (row_shadow && px_out >= shadow_box.x1 && px_out <= shadow_box.x2) {
           float slx = 0.0f;
           float sly = 0.0f;
           to_local(px_out - sh_dx_px * lift_k, py_out - sh_dy_px * lift_k,
@@ -2345,16 +2472,18 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
                      EvalFoldCoverage(ctx, layout.count - 1, slx, sly, false,
                                       sh_soft_px);
         }
-        WritePixel(output, x, y,
-                   CompositeOver(fg, {0.0f, 0.0f, 0.0f, shadow_a}));
+        WritePixelPtr(out_px, out_depth,
+                      CompositeOver(fg, {0.0f, 0.0f, 0.0f, shadow_a}));
       }
     });
     return;
   }
 
+  const float inv_min_dim = 1.0f / min_dim;
   RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
     const float py_out = static_cast<float>(y) + 0.5f;
-    for (int x = x_begin; x < x_end; ++x) {
+    std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+    for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
       const float px_out = static_cast<float>(x) + 0.5f;
       float ux = 0.0f;
       float uy = 0.0f;
@@ -2362,20 +2491,27 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
       MapOutputToPaperCanonical(params, anim, cw, ch, origin_x, origin_y,
                                 px_out, py_out, true, &ux, &uy, &anim_crease);
 
-      const float nu_x = (ux - origin_x) / min_dim;
-      const float nu_y = (uy - origin_y) / min_dim;
+      const float nu_x = (ux - origin_x) * inv_min_dim;
+      const float nu_y = (uy - origin_y) * inv_min_dim;
 
       // Evaluate paper tear boundary only within the possible torn-edge band.
-      const float dist_px = sdf.SamplePx(ux, uy);
-      const float base_edge_dist = dist_px - border_px;
-      const float tear_n =
-          (params.enable_border && tear_amp_px > 0.01f &&
-           std::abs(base_edge_dist) <= tear_amp_px + 3.1f)
-              ? TearEdgeNoise(nu_x, nu_y, params.tear_frequency,
-                              params.tear_detail, boil_seed)
-              : 0.0f;
-      const float edge_sdf = base_edge_dist - tear_amp_px * tear_n;
-      const float sheet_alpha = Smoothstep(1.2f, -1.2f, edge_sdf);
+      float dist_px = 0.0f;
+      float edge_sdf = 0.0f;
+      float sheet_alpha = 1.0f;
+      if (need_sdf) {
+        dist_px = sdf.SamplePx(ux, uy);
+        const float base_edge_dist =
+            dist_px - border_px -
+            (params.enable_border ? 0.0f : std::max(0.0f, params.edge_choke_px));
+        const float tear_n =
+            (params.enable_border && tear_amp_px > 0.01f &&
+             std::abs(base_edge_dist) <= tear_amp_px + 3.1f)
+                ? TearEdgeNoise(nu_x, nu_y, params.tear_frequency,
+                                params.tear_detail, boil_seed)
+                : 0.0f;
+        edge_sdf = base_edge_dist - tear_amp_px * tear_n;
+        sheet_alpha = Smoothstep(1.2f, -1.2f, edge_sdf);
+      }
 
       // Soft 3D drop shadow behind the paper cutout, evaluated without the
       // multi-octave crumple displacement. Only needed where the cutout is not
@@ -2397,32 +2533,11 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
       };
 
       if (sheet_alpha <= 1e-4f) {
-        WritePixel(output, x, y, shadow_at_pixel());
+        WritePixelPtr(out_px, out_depth, shadow_at_pixel());
         continue;
       }
 
-      // Compute cardstock fiber grain & fold crease shading.
-      const float grain =
-          Lerp(1.0f, PaperFiberGrain(nu_x, nu_y, params.grain_scale, seed),
-               Clamp01(params.grain_strength));
-      const float crease_val =
-          PaperCreaseField(nu_x, nu_y, params.crease_scale, seed + 89u);
-      const float crease_mul =
-          1.0f - 0.34f * Clamp01(params.crease_strength) * crease_val;
-      const float rim_bright =
-          1.0f + 0.08f * Smoothstep(3.0f, 0.0f, std::abs(edge_sdf));
-      const float shade =
-          Clamp(grain * crease_mul * rim_bright * (1.0f - 0.35f * anim_crease),
-                0.25f, 1.15f);
-
-      const RgbaColor paper_fg = {
-          Clamp01(params.paper_r * shade) * sheet_alpha,
-          Clamp01(params.paper_g * shade) * sheet_alpha,
-          Clamp01(params.paper_b * shade) * sheet_alpha,
-          sheet_alpha,
-      };
-
-      // Evaluate full-res subject over textured cardstock collar.
+      // Evaluate full-res subject before cardstock grain/crease shading.
       RgbaColor subject =
           EvaluateSubjectAtCanonicalPx(params, subj_xf, src_view, ux, uy);
       if (std::abs(params.edge_choke_px) > 0.01f && subject.a > 1e-4f) {
@@ -2434,8 +2549,28 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
                    subject.b * scale_a, new_a};
       }
 
+      const bool need_overlay =
+          params.media_texture_overlay > 1e-4f && subject.a > 1e-4f;
+      const bool need_paper_bg = params.enable_border && subject.a < 1.0f;
+
+      float grain = 1.0f;
+      float crease_mul = 1.0f;
+      if (need_overlay || need_paper_bg) {
+        if (params.grain_strength > 1e-3f) {
+          grain = Lerp(1.0f,
+                       PaperFiberGrain(nu_x, nu_y, params.grain_scale, seed),
+                       Clamp01(params.grain_strength));
+        }
+        if (params.crease_strength > 1e-3f) {
+          const float crease_val =
+              PaperCreaseField(nu_x, nu_y, params.crease_scale, seed + 89u);
+          crease_mul =
+              1.0f - 0.34f * Clamp01(params.crease_strength) * crease_val;
+        }
+      }
+
       // Apply printed cardstock crease texture subtly onto the subject ink.
-      if (params.media_texture_overlay > 1e-4f && subject.a > 1e-4f) {
+      if (need_overlay) {
         const float ink_mul = Lerp(1.0f, grain * crease_mul,
                                    Clamp01(params.media_texture_overlay));
         subject.r *= ink_mul;
@@ -2443,16 +2578,31 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
         subject.b *= ink_mul;
       }
 
-      const RgbaColor cutout_fg =
-          params.enable_border
-              ? CompositeOver(subject, paper_fg)
-              : RgbaColor{subject.r * sheet_alpha, subject.g * sheet_alpha,
-                          subject.b * sheet_alpha, subject.a * sheet_alpha};
+      RgbaColor cutout_fg;
+      if (need_paper_bg) {
+        const float rim_bright =
+            1.0f + 0.08f * Smoothstep(3.0f, 0.0f, std::abs(edge_sdf));
+        const float shade = Clamp(
+            grain * crease_mul * rim_bright * (1.0f - 0.35f * anim_crease),
+            0.25f, 1.15f);
+        const RgbaColor paper_fg = {
+            Clamp01(params.paper_r * shade) * sheet_alpha,
+            Clamp01(params.paper_g * shade) * sheet_alpha,
+            Clamp01(params.paper_b * shade) * sheet_alpha,
+            sheet_alpha,
+        };
+        cutout_fg = CompositeOver(subject, paper_fg);
+      } else if (params.enable_border) {
+        cutout_fg = subject;
+      } else {
+        cutout_fg = {subject.r * sheet_alpha, subject.g * sheet_alpha,
+                     subject.b * sheet_alpha, subject.a * sheet_alpha};
+      }
 
       // Over() ignores the background once fg.a >= 1, so skip the shadow.
       const RgbaColor shadow_rgba =
           cutout_fg.a >= 1.0f ? RgbaColor{} : shadow_at_pixel();
-      WritePixel(output, x, y, CompositeOver(cutout_fg, shadow_rgba));
+      WritePixelPtr(out_px, out_depth, CompositeOver(cutout_fg, shadow_rgba));
     }
   });
 }
@@ -2736,13 +2886,16 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   };
   const BoundsBox paper_box = BoundsOfPieces(paper_cover, 3.0f, to_canvas);
   const BoundsBox shadow_box = BoundsOfPieces(coverage_cover, 3.0f, to_shadow);
+  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+  const PixelDepth out_depth = output.depth;
 
   RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
     const float py_out = static_cast<float>(y) + 0.5f;
     const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
     const bool row_shadow = sh_opacity > 1e-4f && py_out >= shadow_box.y1 &&
                             py_out <= shadow_box.y2;
-    for (int x = x_begin; x < x_end; ++x) {
+    std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+    for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
       const float px_out = static_cast<float>(x) + 0.5f;
       RgbaColor fg;
       if (row_paper && px_out >= paper_box.x1 && px_out <= paper_box.x2) {
@@ -2753,7 +2906,7 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
                                         1.0f, sample_active),
                           layout.alpha);
         if (fg.a >= 0.999f) {
-          WritePixel(output, x, y, fg);
+          WritePixelPtr(out_px, out_depth, fg);
           continue;
         }
       }
@@ -2784,7 +2937,7 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
       if (sh_a > 1e-4f) {
         bg = CompositeOver({0.0f, 0.0f, 0.0f, sh_a}, bg);
       }
-      WritePixel(output, x, y, CompositeOver(fg, bg));
+      WritePixelPtr(out_px, out_depth, CompositeOver(fg, bg));
     }
   });
 }

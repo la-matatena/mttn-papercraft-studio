@@ -269,6 +269,11 @@ def validate_drfx_bytes(drfx_bytes: bytes) -> None:
       png_bytes = zf.read(thumb_path)
       if not png_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError(f"Invalid PNG signature in {thumb_path}")
+      if len(png_bytes) < 24:
+        raise ValueError(
+            f"Truncated PNG header in {thumb_path}: expected >= 24 bytes, "
+            f"got {len(png_bytes)}."
+        )
       width, height = struct.unpack(">II", png_bytes[16:24])
       if (width, height) != (
           png_renderer.THUMBNAIL_WIDTH,

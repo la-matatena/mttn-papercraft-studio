@@ -595,6 +595,9 @@ OfxStatus HandleUnload(PluginRole role) {
 
 OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
   const HostSuites& s = MutableSuites(role);
+  if (s.effect == nullptr || s.prop == nullptr) {
+    return kOfxStatErrMissingHostFeature;
+  }
   OfxPropertySetHandle props = nullptr;
   if (s.effect->getPropertySet(effect, &props) != kOfxStatOK ||
       props == nullptr) {
@@ -664,6 +667,9 @@ bool DefineRgbaClip(const HostSuites& s, OfxImageEffectHandle effect,
 OfxStatus HandleDescribeInContext(PluginRole role, OfxImageEffectHandle effect,
                                   OfxPropertySetHandle in_args) {
   const HostSuites& s = MutableSuites(role);
+  if (s.effect == nullptr || s.prop == nullptr || s.param == nullptr) {
+    return kOfxStatErrMissingHostFeature;
+  }
   char* context = nullptr;
   if (in_args == nullptr ||
       s.prop->propGetString(in_args, kOfxImageEffectPropContext, 0, &context) !=
@@ -708,6 +714,9 @@ OfxStatus HandleDescribeInContext(PluginRole role, OfxImageEffectHandle effect,
 
 OfxStatus HandleCreateInstance(PluginRole role, OfxImageEffectHandle effect) {
   const HostSuites& s = MutableSuites(role);
+  if (s.effect == nullptr || s.prop == nullptr || s.param == nullptr) {
+    return kOfxStatErrMissingHostFeature;
+  }
   OfxPropertySetHandle props = nullptr;
   OfxParamSetHandle param_set = nullptr;
   if (s.effect->getPropertySet(effect, &props) != kOfxStatOK ||
@@ -718,8 +727,11 @@ OfxStatus HandleCreateInstance(PluginRole role, OfxImageEffectHandle effect) {
 
   auto inst = std::make_unique<PluginInstance>();
   inst->role = role;
-  s.effect->clipGetHandle(effect, kOfxImageEffectOutputClipName,
-                          &inst->output_clip, nullptr);
+  if (s.effect->clipGetHandle(effect, kOfxImageEffectOutputClipName,
+                              &inst->output_clip, nullptr) != kOfxStatOK ||
+      inst->output_clip == nullptr) {
+    return kOfxStatFailed;
+  }
   auto bind = [&](const char* name, OfxParamHandle* out) {
     s.param->paramGetHandle(param_set, name, out, nullptr);
   };
@@ -813,6 +825,9 @@ PluginInstance* GetInstance(const HostSuites& s, OfxImageEffectHandle effect) {
 
 OfxStatus HandleDestroyInstance(PluginRole role, OfxImageEffectHandle effect) {
   const HostSuites& s = MutableSuites(role);
+  if (s.effect == nullptr || s.prop == nullptr) {
+    return kOfxStatReplyDefault;
+  }
   OfxPropertySetHandle props = nullptr;
   if (s.effect->getPropertySet(effect, &props) != kOfxStatOK ||
       props == nullptr) {
@@ -884,9 +899,11 @@ OfxStatus HandleGetClipPreferences(PluginRole role, OfxImageEffectHandle effect,
                         "OfxImageClipPropComponents_SourceTo",
                         "OfxImageClipPropDepth_SourceTo"}};
   }
+  std::array<const char*, 2> clip_depths = {nullptr, nullptr};
   const char* depth = nullptr;
-  for (const InputClip& in : inputs) {
-    const char* d = PickPreferredDepth(s, in.handle);
+  for (std::size_t i = 0; i < inputs.size(); ++i) {
+    const char* d = PickPreferredDepth(s, inputs[i].handle);
+    clip_depths[i] = d;
     if (d != nullptr) {
       depth = (depth == nullptr || StrEq(depth, d)) ? d : kOfxBitDepthFloat;
     }
@@ -898,11 +915,11 @@ OfxStatus HandleGetClipPreferences(PluginRole role, OfxImageEffectHandle effect,
   s.prop->propSetString(out_args, "OfxImageClipPropComponents_Output", 0,
                         kOfxImageComponentRGBA);
   s.prop->propSetString(out_args, "OfxImageClipPropDepth_Output", 0, depth);
-  for (const InputClip& in : inputs) {
-    if (any_connected && PickPreferredDepth(s, in.handle) != nullptr) {
-      s.prop->propSetString(out_args, in.components_prop, 0,
+  for (std::size_t i = 0; i < inputs.size(); ++i) {
+    if (any_connected && clip_depths[i] != nullptr) {
+      s.prop->propSetString(out_args, inputs[i].components_prop, 0,
                             kOfxImageComponentRGBA);
-      s.prop->propSetString(out_args, in.depth_prop, 0, depth);
+      s.prop->propSetString(out_args, inputs[i].depth_prop, 0, depth);
     }
   }
   s.prop->propSetInt(out_args, kOfxImageEffectFrameVarying, 0, 1);
