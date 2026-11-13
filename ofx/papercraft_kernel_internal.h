@@ -42,9 +42,8 @@ struct ClipContentSummary {
 // feature". Writes min_v (q - v)^2 + input[v] to `output[q]`, or 1e20 for
 // every q when the line has no feature. Scratch: `v` needs n entries,
 // `z_num` and `z_den` n + 1.
-void DistanceTransform1D(const float* input, int n, int* v,
-                         std::int64_t* z_num, std::int64_t* z_den,
-                         float* output);
+void DistanceTransform1D(const float* input, int n, int* v, std::int64_t* z_num,
+                         std::int64_t* z_den, float* output);
 
 // In-place exact 2D squared Euclidean distance transform of a row-major
 // `width` x `height` binary grid: cells are 0 (feature) or >= 1e18

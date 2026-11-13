@@ -106,8 +106,8 @@ struct PaperFoldTransitionParams {
   int fold_stages = 4;    // Sequential folds, clamped to [2, 5].
   // Rotates the whole fold pattern, degrees.
   float direction_angle_deg = 0.0f;
-  float fold_depth = 0.55f;      // 3D perspective strength, 0 = flat.
-  float slide_distance = 0.6f;   // Packet slide in/out, x frame diagonal.
+  float fold_depth = 0.55f;     // 3D perspective strength, 0 = flat.
+  float slide_distance = 0.6f;  // Packet slide in/out, x frame diagonal.
   // Mirror the fold pattern and packet motion horizontally / vertically.
   bool mirror_h = false;
   bool mirror_v = false;

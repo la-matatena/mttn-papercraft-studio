@@ -127,8 +127,8 @@ Result Compare(F f, const A& a, const B& b, const char* expr_a,
 // C-string equality; two nullptrs are equal, one nullptr is not.
 inline Result StrEq(const char* a, const char* b, const char* expr_a,
                     const char* expr_b) {
-  const bool ok = (a == nullptr || b == nullptr) ? a == b
-                                                 : std::strcmp(a, b) == 0;
+  const bool ok =
+      (a == nullptr || b == nullptr) ? a == b : std::strcmp(a, b) == 0;
   if (ok) {
     return {};
   }
@@ -161,8 +161,8 @@ Bits BiasedBits(Bits bits) {
 // equal.
 template <typename Float>
 Result UlpEq(Float a, Float b, const char* expr_a, const char* expr_b) {
-  using Bits = std::conditional_t<sizeof(Float) == 4, std::uint32_t,
-                                  std::uint64_t>;
+  using Bits =
+      std::conditional_t<sizeof(Float) == 4, std::uint32_t, std::uint64_t>;
   bool ok = false;
   if (!std::isnan(a) && !std::isnan(b)) {
     Bits ba = 0;
@@ -316,6 +316,9 @@ using Test = ::gtest_lite::Test;
   case 0:                                  \
   default:
 
+// clang-format off: clang-format would glue `on_failure` to `::gtest_lite`,
+// which reads like a namespace qualifier although `on_failure` is `return`
+// or empty.
 #define GTEST_LITE_CHECK_(result_expr, on_failure, fatal)                  \
   GTEST_LITE_AMBIGUOUS_ELSE_BLOCKER_                                       \
   if (const ::gtest_lite::Result gtest_lite_r_ = (result_expr)) {          \
@@ -323,16 +326,15 @@ using Test = ::gtest_lite::Test;
     on_failure ::gtest_lite::FailureReporter{__FILE__, __LINE__,           \
                                              gtest_lite_r_.msg, fatal} =   \
         ::gtest_lite::Message()
+// clang-format on
 
-#define GTEST_LITE_EXPECT_(result_expr) \
-  GTEST_LITE_CHECK_(result_expr, , false)
+#define GTEST_LITE_EXPECT_(result_expr) GTEST_LITE_CHECK_(result_expr, , false)
 #define GTEST_LITE_ASSERT_(result_expr) \
   GTEST_LITE_CHECK_(result_expr, return, true)
 
-#define GTEST_LITE_CMP_(a, b, op)                                       \
-  ::gtest_lite::Compare(                                                \
-      [](const auto& x, const auto& y) { return x op y; }, (a), (b), #a, \
-      #b, #op)
+#define GTEST_LITE_CMP_(a, b, op)                                            \
+  ::gtest_lite::Compare([](const auto& x, const auto& y) { return x op y; }, \
+                        (a), (b), #a, #b, #op)
 
 #define EXPECT_TRUE(c) \
   GTEST_LITE_EXPECT_(::gtest_lite::Bool(static_cast<bool>(c), true, #c))
@@ -373,24 +375,24 @@ using Test = ::gtest_lite::Test;
 #define ASSERT_STREQ(a, b) \
   GTEST_LITE_ASSERT_(::gtest_lite::StrEq((a), (b), #a, #b))
 
-#define ASSERT_NO_FATAL_FAILURE(statement)                              \
-  GTEST_LITE_ASSERT_((::gtest_lite::Result{                             \
-      ::gtest_lite::RunWithoutNewFatalFailure([&]() { statement; }),    \
+#define ASSERT_NO_FATAL_FAILURE(statement)                           \
+  GTEST_LITE_ASSERT_((::gtest_lite::Result{                          \
+      ::gtest_lite::RunWithoutNewFatalFailure([&]() { statement; }), \
       "Expected: " #statement " doesn't generate new fatal failures"}))
 
 #define GTEST_LITE_CONCAT_INNER_(a, b) a##b
 #define GTEST_LITE_CONCAT_(a, b) GTEST_LITE_CONCAT_INNER_(a, b)
-#define SCOPED_TRACE(message)                                     \
-  const ::gtest_lite::ScopedTrace GTEST_LITE_CONCAT_(             \
+#define SCOPED_TRACE(message)                         \
+  const ::gtest_lite::ScopedTrace GTEST_LITE_CONCAT_( \
       gtest_lite_trace_, __LINE__)(__FILE__, __LINE__, (message))
 
-#define GTEST_LITE_TEST_(suite, name, parent)                             \
-  class suite##_##name##_Test : public parent {                           \
-   private:                                                               \
-    void TestBody() override;                                             \
-  };                                                                      \
-  static const ::gtest_lite::Registrar suite##_##name##_registrar_(       \
-      #suite "." #name, &::gtest_lite::RunTest<suite##_##name##_Test>);   \
+#define GTEST_LITE_TEST_(suite, name, parent)                           \
+  class suite##_##name##_Test : public parent {                         \
+   private:                                                             \
+    void TestBody() override;                                           \
+  };                                                                    \
+  static const ::gtest_lite::Registrar suite##_##name##_registrar_(     \
+      #suite "." #name, &::gtest_lite::RunTest<suite##_##name##_Test>); \
   void suite##_##name##_Test::TestBody()
 
 #define TEST(suite, name) GTEST_LITE_TEST_(suite, name, ::testing::Test)

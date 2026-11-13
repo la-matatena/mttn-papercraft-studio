@@ -151,6 +151,9 @@ filegroup(
 filegroup(
     name = "repo_source_files",
     srcs = [
+        ".clang-format",
+        ".clang-format-ignore",
+        ".pylintrc",
         "BUILD",
         "LICENSE",
         "build_papercraft_bundle.py",
@@ -159,8 +162,13 @@ filegroup(
         "fusion_templates.py",
         "ofx/papercraft_kernel_test.cc",
         "ofx/papercraft_ofx_test.cc",
+        "ofx/run_cpp_tests.sh",
+        "ofx/testing/gtest_lite/gtest/gtest.h",
+        "ofx/testing/gtest_lite/gtest_lite_main.cc",
         "papercraft_pro_test.py",
         "png_renderer.py",
+        "pyproject.toml",
+        "tools/lint.sh",
         ":docs_files",
         ":ofx_package_sources",
         ":paper_sfx_files",

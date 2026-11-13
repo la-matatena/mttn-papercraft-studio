@@ -1,0 +1,4 @@
+# Dev-only C++ formatter configuration, enforced by tools/lint.sh (see
+# docs/developer_guide.md, "Code style and documentation conventions").
+# Vendored OpenFX headers are excluded through .clang-format-ignore.
+BasedOnStyle: Google
