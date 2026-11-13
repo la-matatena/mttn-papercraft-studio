@@ -32,7 +32,11 @@ cc_library(
 cc_library(
     name = "papercraft_kernel",
     srcs = ["ofx/papercraft_kernel.cc"],
-    hdrs = ["ofx/papercraft_kernel.h"],
+    hdrs = [
+        "ofx/papercraft_kernel.h",
+        # Test-only internals; the plugin uses papercraft_kernel.h alone.
+        "ofx/papercraft_kernel_internal.h",
+    ],
     copts = ["-fvisibility=hidden"],
 )
 
@@ -56,7 +60,10 @@ cc_library(
         "ofx/papercraft_kernel.cc",
         "ofx/papercraft_ofx_plugin.cc",
     ],
-    hdrs = ["ofx/papercraft_kernel.h"],
+    hdrs = [
+        "ofx/papercraft_kernel.h",
+        "ofx/papercraft_kernel_internal.h",
+    ],
     copts = [
         "-fvisibility=hidden",
         "-Iexperimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx",
@@ -84,6 +91,15 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "papercraft_kernel_test",
+    srcs = ["ofx/papercraft_kernel_test.cc"],
+    deps = [
+        ":papercraft_kernel",
+        "//testing/base/public:gunit_main",
+    ],
+)
+
 filegroup(
     name = "ofx_package_sources",
     srcs = [
@@ -104,6 +120,7 @@ filegroup(
         "ofx/openfx_sym.lds",
         "ofx/papercraft_kernel.cc",
         "ofx/papercraft_kernel.h",
+        "ofx/papercraft_kernel_internal.h",
         "ofx/papercraft_ofx_plugin.cc",
     ],
 )
@@ -140,6 +157,7 @@ filegroup(
         "bundle_builder_lib.py",
         "drfx_validator.py",
         "fusion_templates.py",
+        "ofx/papercraft_kernel_test.cc",
         "ofx/papercraft_ofx_test.cc",
         "papercraft_pro_test.py",
         "png_renderer.py",

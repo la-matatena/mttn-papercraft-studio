@@ -55,6 +55,7 @@ _OFX_SOURCE_RELPATHS = (
     "Info.plist",
     "openfx_sym.lds",
     "papercraft_kernel.h",
+    "papercraft_kernel_internal.h",
     "papercraft_kernel.cc",
     "papercraft_ofx_plugin.cc",
     "openfx_include/LICENSE",
