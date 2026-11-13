@@ -149,6 +149,8 @@ With **Fold Action** set to **Auto (Unfold In / Fold Out)**, the transition read
 
 To force a behavior, set **Fold Action** to **Unfold Incoming Clip**, **Fold Outgoing Clip**, or **Fold Out, Then Unfold In**.
 
+**Fold Out, Then Unfold In** is a paper dip to black. The outgoing clip folds away during the first half, the frame is empty around the midpoint, and the incoming clip unfolds during the second half. Nothing is drawn behind the packet, so the gap is black on `V1` and shows the lower tracks on `V2` and above. Use **Unfold Incoming Clip** or **Fold Outgoing Clip** when the other clip should stay visible behind the paper.
+
 ### Unfold a logo over video
 
 1. Place a transparent PNG or title on Video Track 2 (`V2`) above your video.
