@@ -9,7 +9,10 @@
 //   - RenderPaperFoldTransition: folds one clip into a paper packet and/or
 //     unfolds the other, with flap lighting, crease marks, and cast shadows.
 //   - ComputeSteppedTransitionProgress: stop-motion quantized progress.
-// Everything else lives in the anonymous namespace.
+// Everything else lives in the anonymous namespace, except a few helpers in
+// papercraft::internal (papercraft_kernel_internal.h) that
+// papercraft_kernel_test.cc unit-tests directly. Both stay hidden in the
+// plugin binary (-fvisibility=hidden).
 //
 // Coordinate spaces and units:
 //   - Output px: OpenFX pixel coordinates at the current render scale.
@@ -43,8 +46,10 @@
 // no locking is needed.
 #if defined(PAPERCRAFT_STANDALONE_OFX)
 #include "papercraft_kernel.h"  // NOLINT(build/include)
+#include "papercraft_kernel_internal.h"  // NOLINT(build/include)
 #else
 #include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/papercraft_kernel.h"
+#include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/papercraft_kernel_internal.h"
 #endif
 
 #include <algorithm>
@@ -59,6 +64,14 @@
 
 namespace papercraft {
 namespace {
+
+// Helpers defined in papercraft::internal (declared in
+// papercraft_kernel_internal.h for unit tests), used unqualified below.
+using internal::ClipContentSummary;
+using internal::DistanceTransform1D;
+using internal::DistanceTransform2D;
+using internal::InspectClipContent;
+using internal::ResolveFoldAction;
 
 // ---------------------------------------------------------------------------
 // Scalar and color math
@@ -751,6 +764,12 @@ void ClearOutputRows(const ImageView& output, int x_begin, int x_end,
 // width target in BuildSubjectSignedDistanceField.
 constexpr int kMaxSdfDim = 960;
 
+}  // namespace
+
+// The two distance transforms live in papercraft::internal so
+// papercraft_kernel_test.cc can check them against a brute-force EDT.
+namespace internal {
+
 // Felzenszwalb-Huttenlocher linear-time 1D squared Euclidean distance
 // transform over integer-valued input.
 //
@@ -835,12 +854,13 @@ void DistanceTransform1D(const float* input, int n, int* v,
 // Threading: phase 1 hands each worker a block of kColBlock (64) columns;
 // its slice of `scratch` is block-major (block x0 starts at x0 * height), so
 // writes never overlap. Phase 2 hands each worker one grid row with stack
-// scratch. `scratch` lets callers reuse the int buffer across calls. Grids
+// scratch. `scratch` lets callers reuse the int buffer across calls (its
+// nullptr default is declared in papercraft_kernel_internal.h). Grids
 // larger than kMaxSdfDim on either side are left untouched.
 void DistanceTransform2D(int width, int height,
                          const ParallelRowsFn& parallel_for,
                          std::vector<float>* grid,
-                         std::vector<int>* scratch = nullptr) {
+                         std::vector<int>* scratch) {
   if (width <= 0 || height <= 0 || width > kMaxSdfDim || height > kMaxSdfDim) {
     return;
   }
@@ -902,6 +922,10 @@ void DistanceTransform2D(int width, int height,
                 static_cast<std::size_t>(width) * sizeof(float));
   });
 }
+
+}  // namespace internal
+
+namespace {
 
 // Coarse signed distance to the subject matte edge, in canonical px
 // (negative inside the matte). Read-only after construction, so workers may
@@ -1381,20 +1405,12 @@ RgbaColor ClipPixelAt(const ImageView& view, const PixelRect& canvas_bounds,
                                static_cast<float>(y) + 0.5f);
 }
 
-// What InspectClipContent learned about a clip (sampled, not exhaustive).
-struct ClipContentSummary {
-  // Some sample has alpha > 0.001.
-  bool has_visible_alpha = false;
-  // Some sample has r + g + b > 0.003.
-  bool has_nonblack_rgb = false;
-  // The buffer covers the RoD and every sample has alpha >= 0.995.
-  bool is_full_frame_opaque = false;
-  // Looks like Paper Cutout FX output: not opaque, has color, and at least two
-  // soft black shadow samples away from opaque black ink.
-  bool has_cutout_shadow = false;
-  // Strongest shadow sample alpha (about the cutout's Shadow Opacity).
-  float max_shadow_alpha = 0.0f;
-};
+// ClipContentSummary (what InspectClipContent learned about a clip) is
+// defined in papercraft_kernel_internal.h.
+
+}  // namespace
+
+namespace internal {
 
 // Scans a strided grid (about 360 rows) dense enough to catch small logos and
 // soft baked drop shadows (e.g. from Paper Cutout FX), while ignoring 1-2 px
@@ -1482,6 +1498,10 @@ ClipContentSummary InspectClipContent(const ImageView& view) {
       !opaque && out.has_nonblack_rgb && shadow_samples >= 2;
   return out;
 }
+
+}  // namespace internal
+
+namespace {
 
 // Recovers per-pixel un-shadowed alpha for a clip composited over a black drop
 // shadow `{0, 0, 0, sh_a}`. Since `CompositeOver(fg, {0, 0, 0, sh_a})` leaves
@@ -2868,6 +2888,31 @@ struct PacketMapper {
   }
 };
 
+// Builds the matte SDF of a transition clip: identity placement, so the
+// matte is the clip alpha in canonical px of `canvas_bounds`. With
+// `ignore_shadow`, a Paper Cutout FX clip's baked black drop shadow counts
+// as outside the matte. Shared by RenderPaperFoldTransition and
+// internal::BuildCleanCutoutAlphaForClip so the unit tests exercise the
+// exact render setup. Runs on the calling thread; fans out via parallel_for.
+CoarseSignedDistanceField BuildClipMatteSdf(const ImageView& clip,
+                                            const PixelRect& canvas_bounds,
+                                            const ParallelRowsFn& parallel_for,
+                                            bool ignore_shadow) {
+  CutoutParams matte_params;
+  matte_params.source_mode = 0;
+  matte_params.media_scale = 1.0f;
+  matte_params.enable_chroma_key = false;
+  const SubjectTransform identity =
+      BuildSubjectTransform(matte_params, clip, canvas_bounds);
+  return BuildSubjectSignedDistanceField(matte_params, identity, clip,
+                                         canvas_bounds, parallel_for,
+                                         ignore_shadow);
+}
+
+}  // namespace
+
+namespace internal {
+
 // Resolves Fold Action (clamped to [0, 3]). kAuto inspects both clips: fold
 // out when only the incoming side is empty (clip end), unfold in when the
 // outgoing side is empty or the incoming clip is opaque full-frame (it
@@ -2892,7 +2937,19 @@ FoldTransitionAction ResolveFoldAction(int requested,
   return FoldTransitionAction::kFoldAndUnfold;
 }
 
-}  // namespace
+// Test-only entry point (see papercraft_kernel_internal.h): the same matte
+// SDF and clean-alpha calls RenderPaperFoldTransition makes for a cutout
+// clip (`is_cutout` = true there).
+std::vector<float> BuildCleanCutoutAlphaForClip(
+    const ImageView& clip, const PixelRect& canvas_bounds,
+    const ParallelRowsFn& parallel_for, PixelRect* raw_alpha_box) {
+  const CoarseSignedDistanceField sdf = BuildClipMatteSdf(
+      clip, canvas_bounds, parallel_for, /*ignore_shadow=*/true);
+  return BuildCleanCutoutAlpha(clip, canvas_bounds, sdf, parallel_for,
+                               raw_alpha_box);
+}
+
+}  // namespace internal
 
 // ---------------------------------------------------------------------------
 // Public renderers (declared in papercraft_kernel.h)
@@ -3467,15 +3524,8 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     sheet = FullFrameSheet(canvas_bounds);
   } else {
     // Identity placement: the matte is the clip alpha in canonical px.
-    CutoutParams matte_params;
-    matte_params.source_mode = 0;
-    matte_params.media_scale = 1.0f;
-    matte_params.enable_chroma_key = false;
-    const SubjectTransform identity =
-        BuildSubjectTransform(matte_params, *active, canvas_bounds);
-    matte_sdf = BuildSubjectSignedDistanceField(
-        matte_params, identity, *active, canvas_bounds, parallel_for,
-        is_cutout);
+    matte_sdf = BuildClipMatteSdf(*active, canvas_bounds, parallel_for,
+                                  is_cutout);
     sheet = SheetFromSdf(matte_sdf,
                          is_cutout ? 0.0f : (full_border + full_tear));
     sdf_step = static_cast<float>(matte_sdf.step);

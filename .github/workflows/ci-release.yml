@@ -48,6 +48,15 @@ jobs:
             -o papercraft_ofx_test
           PAPERCRAFT_OFX_PATH="$PWD/PaperCraftStudioPro.ofx" ./papercraft_ofx_test
 
+      - name: Run C++ kernel unit tests
+        run: |
+          g++ -std=c++17 -O2 -DPAPERCRAFT_STANDALONE_OFX \
+            -Iofx -Iofx/openfx_include \
+            ofx/papercraft_kernel_test.cc ofx/papercraft_kernel.cc \
+            -lgtest -lgtest_main -lpthread \
+            -o papercraft_kernel_test
+          ./papercraft_kernel_test
+
       - name: Run Python .drfx, Foley WAV, and bundle tests
         run: python3 -B papercraft_pro_test.py -v
 

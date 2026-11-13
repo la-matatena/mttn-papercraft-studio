@@ -96,6 +96,17 @@ Replace the following:
 python3 -B papercraft_pro_test.py -v
 ```
 
+### C++ suites with one script
+
+`ofx/run_cpp_tests.sh` builds the plugin binary (the macOS installer with `--build-only`, or the CI `g++` flags on Linux), then compiles and runs both C++ suites: `ofx/papercraft_ofx_test.cc` (mock OpenFX host that loads the built plugin) and `ofx/papercraft_kernel_test.cc` (direct unit tests of the pixel kernels). It exits non-zero on any failure.
+
+```bash
+./ofx/run_cpp_tests.sh
+./ofx/run_cpp_tests.sh --lite
+```
+
+The script uses an installed GoogleTest when it finds one. Otherwise, or with `--lite`, it uses `ofx/testing/gtest_lite`, a tiny GoogleTest stand-in for local runs only. CI always uses real GoogleTest.
+
 ### C++ OpenFX host and rendering suite on Linux
 
 ```bash
@@ -105,6 +116,10 @@ g++ -std=c++17 -O2 -DPAPERCRAFT_STANDALONE_OFX \
   -lgtest -lgtest_main -ldl -lpthread \
   -o papercraft_ofx_test
 PAPERCRAFT_OFX_PATH="$PWD/PaperCraftStudioPro.ofx" ./papercraft_ofx_test
+g++ -std=c++17 -O2 -DPAPERCRAFT_STANDALONE_OFX -Iofx -Iofx/openfx_include \
+  ofx/papercraft_kernel_test.cc ofx/papercraft_kernel.cc \
+  -lgtest -lgtest_main -lpthread -o papercraft_kernel_test
+./papercraft_kernel_test
 ```
 
 ### C++ OpenFX host and rendering suite on macOS
