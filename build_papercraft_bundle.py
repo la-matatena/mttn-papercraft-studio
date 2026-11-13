@@ -1,10 +1,22 @@
-"""CLI binary to generate and validate the MTTN PaperCraft Studio bundle."""
+"""CLI binary to generate and validate the MTTN PaperCraft Studio bundle.
+
+Thin wrapper around `bundle_builder_lib.build_and_write_release`. Run from the
+repository root, for example:
+
+  python3 -B build_papercraft_bundle.py --output_dir=OUTPUT_DIR
+    --readme_path=README.md --linux_ofx_path=PaperCraftStudioPro.ofx
+
+Uses absl flags when `absl` is installed (internal builds) and falls back to
+an equivalent argparse CLI otherwise (plain checkouts and GitHub Actions).
+"""
 
 import argparse
 from collections.abc import Sequence
 import logging as std_logging
 
 try:
+  # Internal monorepo import path; falls back to the sibling module when run
+  # from a plain checkout.
   from google3.experimental.users.joseluiszapata.davinci_resolve_plugins.papercraft_pro import bundle_builder_lib
 except ImportError:
   import bundle_builder_lib  # type: ignore[no-redef]
@@ -18,6 +30,8 @@ try:
 except ImportError:
   _HAS_ABSL = False
 
+# Flags are only defined when absl is present; `_standalone_main` declares the
+# same options with argparse otherwise.
 if _HAS_ABSL:
   _OUTPUT_DIR = flags.DEFINE_string(
       "output_dir",
@@ -54,7 +68,18 @@ def _run_build(
     linux_ofx_path: str,
     ofx_source_dir: str,
 ) -> dict[str, str]:
-  """Reads optional README and executes bundle generation."""
+  """Reads optional README and executes bundle generation.
+
+  Args:
+    output_dir: Directory that receives all release artifacts.
+    export_unpacked: Whether to also write `Templates_Unpacked/`.
+    readme_path: README.md to embed in the release, or "" to use the default.
+    linux_ofx_path: Compiled Linux `.ofx` binary, or "" for the default.
+    ofx_source_dir: OpenFX source directory, or "" for the default `ofx/`.
+
+  Returns:
+    Mapping of artifact keys to written paths (see `build_and_write_release`).
+  """
   readme_text: str | None = None
   if readme_path:
     with open(readme_path, "r", encoding="utf-8") as f:
@@ -70,7 +95,17 @@ def _run_build(
 
 
 def main(argv: Sequence[str]) -> None:
-  """Builds and writes the MTTN PaperCraft Studio deliverables."""
+  """Builds and writes the MTTN PaperCraft Studio deliverables.
+
+  Entry point for `absl.app.run`; flag values come from the module-level
+  `flags.DEFINE_*` declarations.
+
+  Args:
+    argv: Command-line arguments remaining after absl flag parsing.
+
+  Raises:
+    app.UsageError: On positional arguments or an empty `--output_dir`.
+  """
   if len(argv) > 1:
     raise app.UsageError("Unexpected positional command-line arguments.")
   output_dir = _OUTPUT_DIR.value
@@ -88,6 +123,11 @@ def main(argv: Sequence[str]) -> None:
 
 
 def _standalone_main() -> None:
+  """Runs the CLI with argparse when absl is unavailable.
+
+  Mirrors the absl flags (same names and defaults) so the documented
+  commands work in both environments.
+  """
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--output_dir", required=True)
   parser.add_argument(

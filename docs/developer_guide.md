@@ -160,6 +160,17 @@ New patterns need no extra work for bounds pruning: `FoldSheetBounds` folds any 
 2. Register the relative path in `_PAPER_SFX_RELPATHS` inside `bundle_builder_lib.py`, `paper_sfx_files` in `BUILD`, and expected paths in `papercraft_pro_test.py`.
 3. Run `papercraft_pro_test.py` to verify RMS loudness, stereo channel separation, and click-free edge fades through `drfx_validator.validate_wav_bytes`.
 
+## Code style and documentation conventions
+
+Write code so a maintainer who has never seen it can follow every file and function without asking. Comments and docstrings are in English; user-facing strings keep their current language.
+
+- **C++** (`ofx/`): follow the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html). Document every public type and function in headers, and put a `//` comment block directly above every function definition in `.cc` files, including anonymous-namespace helpers. State inputs, outputs, units, and coordinate spaces, and say which OpenFX action or `parallel_for` worker runs the code.
+- **Python**: follow the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html) with the existing 2-space indent and 80-column limit. Every module, class, and function gets a docstring with `Args:`, `Returns:`, and `Raises:` sections when they apply. Test methods get a one-line docstring that states the verified behavior.
+- **Shell** (installers): follow the [Google Shell Style Guide](https://google.github.io/styleguide/shellguide.html). Start each script with a header covering purpose, usage, and flags, and add a function comment block (`Globals`, `Arguments`, `Outputs`, `Returns`) above every function.
+- **Comment content**: explain why, not what. Cover units (px, normalized 0..1, frames, degrees), invariants, magic numbers, host quirks, and how generated Fusion SimpleExpressions behave. Long files group code under section banners such as `# --- Section name ---`.
+- **Debt markers**: mark known shortcuts with a `shortcut:` comment and keep existing ones. They form the tracked debt ledger.
+- **Doc-only commits**: never change behavior. Don't rename identifiers, OpenFX parameter IDs, or JSON keys, and don't reorder logic. Use a `docs:` commit, and run `python3 -B papercraft_pro_test.py -v` before you commit.
+
 ## What's next
 
 - Read the [design document](design_doc.md) for rendering algorithms and architectural trade-offs.
