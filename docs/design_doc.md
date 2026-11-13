@@ -102,7 +102,7 @@ Each rendered frame of **Paper Cutout FX** flows sequentially from timing quanti
 flowchart TD
   A["Step 1: ComputeCutoutAnimState (Intro/Outro Overlap & Hold Stepping)"] --> B{"Animated Ease Alpha <= 0.0001?"}
   B -- Yes --> C["Clear Render Window to Transparent Black"]
-  B -- No --> D["Step 2: BuildSubjectSignedDistanceField (Parallel Coarse 2D EDT)"]
+  B -- No --> D["Step 2: BuildSubjectSignedDistanceField (When Border, Shadow, Choke, or Unfold Active)"]
   D --> E["Step 3: Scanline Render Loop (Inverse Map & Paper Shading)"]
   E --> F["MapOutputToPaperCanonical (3D Perspective + Crumple Warp)"]
   F --> G["Sample SDF Collar + Narrow-Band TearEdgeNoise"]
@@ -130,7 +130,7 @@ To reduce per-pixel ALU cost on 4K timelines, `RenderCutoutFrame` invokes `MapOu
 
 ### Narrow-band torn edge noise and paper textures
 
-The `TearEdgeNoise` function evaluates multi-octave periodic value noise around the subject perimeter. Because border roughness (`tear_amp_px`) influences alpha only close to the nominal cardstock rim (`base_edge_dist = dist_px - border_px`), the renderer skips `TearEdgeNoise` completely whenever `abs(base_edge_dist)` exceeds `tear_amp_px + 3.1f`. Cardstock fiber grain and fold crease shading are subsequently combined with foreground ink (`media_texture_overlay`) and composited over the drop shadow using `CompositeOver`.
+The `TearEdgeNoise` function evaluates multi-octave periodic value noise around the subject perimeter. Because border roughness (`tear_amp_px`) influences alpha only close to the nominal cardstock rim (`base_edge_dist = dist_px - border_px`), the renderer skips `TearEdgeNoise` completely whenever `abs(base_edge_dist)` exceeds `tear_amp_px + 3.1f`. The subject matte is evaluated first so opaque interior pixels (when `media_texture_overlay` is zero) and borderless untextured cutouts skip `PaperFiberGrain` and `PaperCreaseField`; otherwise cardstock fiber grain and fold crease shading are combined with foreground ink (`media_texture_overlay`) and composited over the drop shadow using `CompositeOver`.
 
 ### Short-clip timing and stop-motion stepping
 
@@ -165,11 +165,11 @@ Openness `q` runs from `0` (folded packet) to `1` (flat sheet). The packet slide
 
 `EvalFoldStack` walks the hinges from the outermost one down. A flap opened less than 90 degrees covers its own side of the hinge, so the pixel maps into the flap with `s = d / cos(phi)` and a tangential perspective gain from the lift height. A flap folded past 90 degrees lies over the stationary side, so the pixel can see two layers: the flap, seen from its back, and the paper beneath. The evaluator recurses into both and composites them front to back. A `back_side` parity flag tracks which face of the paper is visible after each flip, and it decides whether a valley or mountain flap lands in front of or behind the stationary layer. The recursion stops as soon as an opaque front layer covers the pixel.
 
-Visible faces get Lambert shading from a light opposite the **Shadow Angle**, plus ambient occlusion along each crease. Folded flaps cast a soft shadow onto the layer beneath, offset further while the flap is still high (`EvalFoldCoverage` supplies the flap's coverage). `EvalPaperLeaf` finally shades one flat point: the print over its torn cardstock collar on the front, or toned paper with faint bleed-through of the print on the back, both with fiber grain, crumple creases, and wobbly crease lines along every hinge.
+Visible faces get precomputed per-hinge Lambert shading (`ConfigureFoldLight`) from a light opposite the **Shadow Angle**, plus ambient occlusion along each crease. Folded flaps cast a soft shadow onto the layer beneath, offset further while the flap is still high (`EvalFoldCoverage` supplies the flap's coverage). `EvalPaperLeaf` finally shades one flat point: the print over its torn cardstock collar on the front, or toned paper with faint bleed-through of the print on the back, both with fiber grain, crumple creases, and wobbly crease lines along every hinge.
 
 ### Bounds pruning
 
-Without help, every folded-over hinge doubles the layers a pixel may see, and pixels far from a small packet still walk the whole hinge stack. Before the pixel loop, `FoldSheetBounds` folds the sheet's bounding rectangle forward through the hinges as convex polygons: each fold clips the pieces at the hinge and replaces the flap part with a box around its folded image, widened for the perspective stretch of either face. The bounds after each fold let `EvalFoldStack` and `EvalFoldCoverage` return early wherever no paper can be, and the final pieces, mapped to the canvas, give boxes outside of which the transition only copies the underlay. The bounds are conservative (grown by the collar, the torn edge, shadow softness, and the coarse matte's slack), so the output is bit-identical to the unpruned renderer. Pruning saves about 25% of a 1080p transition frame on average and halves **Paper Unfold (3D)** frames.
+Without help, every folded-over hinge doubles the layers a pixel may see, and pixels far from a small packet still walk the whole hinge stack. Before the pixel loop, `FoldSheetBounds` folds the sheet's bounding rectangle forward through the hinges as convex polygons: each fold clips the pieces at the hinge and replaces the flap part with a box around its folded image, widened for the perspective stretch of either face. The bounds after each fold let `EvalFoldStack` and `EvalFoldCoverage` return early wherever no paper can be, and the final pieces, mapped to the canvas via `BoundsOfPieces`, give boxes outside of which both `RenderPaperFoldTransition` and **Paper Unfold (3D)** skip stack/shadow evaluation altogether. The bounds are conservative (grown by the collar, the torn edge, shadow softness, and the coarse matte's slack), so the output is bit-identical to the unpruned renderer.
 
 ### Seamless transition endpoints and pre-cutout handoff
 

@@ -61,7 +61,6 @@ main() {
     exit 1
   fi
 
-  chmod 0755 "${src_bundle}/Contents/Linux-x86-64/PaperCraftStudioPro.ofx"
   local check_dir="${dest_dir}"
   while [[ ! -e "${check_dir}" && "${check_dir}" != "/" ]]; do
     check_dir="$(dirname "${check_dir}")"
@@ -70,11 +69,13 @@ main() {
     mkdir -p "${dest_dir}"
     rm -rf "${dest_dir}/${BUNDLE_NAME}"
     cp -a "${src_bundle}" "${dest_dir}/"
+    chmod 0755 "${dest_dir}/${BUNDLE_NAME}/Contents/Linux-x86-64/PaperCraftStudioPro.ofx"
   else
     echo "Installing to ${dest_dir} requires sudo..."
     sudo mkdir -p "${dest_dir}"
     sudo rm -rf "${dest_dir}/${BUNDLE_NAME}"
     sudo cp -a "${src_bundle}" "${dest_dir}/"
+    sudo chmod 0755 "${dest_dir}/${BUNDLE_NAME}/Contents/Linux-x86-64/PaperCraftStudioPro.ofx"
   fi
   echo "Installed ${BUNDLE_NAME} to ${dest_dir}/${BUNDLE_NAME}"
   echo "Restart DaVinci Resolve and open Effects > Open FX > MTTN PaperCraft Studio on the Edit tab."

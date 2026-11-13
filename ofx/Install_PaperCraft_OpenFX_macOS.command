@@ -80,11 +80,16 @@ main() {
   )
   local -a srcs=("${src_dir}/papercraft_kernel.cc" "${src_dir}/papercraft_ofx_plugin.cc")
   local bin_out="${bundle_dir}/Contents/MacOS/${BINARY_NAME}"
-  if clang++ "${common_flags[@]}" -arch x86_64 "${srcs[@]}" -o "${tmp_dir}/x86_64.ofx" 2>/dev/null && \
-     clang++ "${common_flags[@]}" -arch arm64 "${srcs[@]}" -o "${tmp_dir}/arm64.ofx" 2>/dev/null; then
+  local build_log="${tmp_dir}/universal_build.log"
+  if clang++ "${common_flags[@]}" -arch x86_64 "${srcs[@]}" -o "${tmp_dir}/x86_64.ofx" 2>"${build_log}" && \
+     clang++ "${common_flags[@]}" -arch arm64 "${srcs[@]}" -o "${tmp_dir}/arm64.ofx" 2>>"${build_log}"; then
     lipo -create -output "${bin_out}" "${tmp_dir}/x86_64.ofx" "${tmp_dir}/arm64.ofx"
   else
-    clang++ "${common_flags[@]}" "${srcs[@]}" -o "${bin_out}"
+    if ! clang++ "${common_flags[@]}" "${srcs[@]}" -o "${bin_out}"; then
+      echo "Universal build stderr:" >&2
+      cat "${build_log}" >&2
+      exit 1
+    fi
   fi
   chmod 0755 "${bin_out}"
   command -v xattr >/dev/null 2>&1 && xattr -cr "${bundle_dir}" || true

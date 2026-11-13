@@ -721,6 +721,21 @@ def _stepped_time_expr(macro_name: str) -> str:
   )
 
 
+def _trans_progress_exprs(macro_name: str) -> tuple[str, str]:
+  """Returns (in_prog, out_prog) Fusion SimpleExpressions in [0, 1]."""
+  in_prog = (
+      f"iif({macro_name}.IntroStyle > 0.5 and {macro_name}.IntroFrames > 0, "
+      "min(1, max(0, (time - comp.RenderStart) / "
+      f"max(1, {macro_name}.IntroFrames))), 1)"
+  )
+  out_prog = (
+      f"iif({macro_name}.OutroStyle > 0.5 and {macro_name}.OutroFrames > 0, "
+      "min(1, max(0, (comp.RenderEnd - time) / "
+      f"max(1, {macro_name}.OutroFrames))), 1)"
+  )
+  return in_prog, out_prog
+
+
 def _anim_progress_expr(macro_name: str) -> str:
   """Returns normalized 0..1 visibility multiplier for Intro/Outro transitions.
 
@@ -732,24 +747,16 @@ def _anim_progress_expr(macro_name: str) -> str:
   Returns:
     Fusion SimpleExpression string computing normalized 0..1 visibility.
   """
-  in_prog = (
-      f"iif({macro_name}.IntroStyle > 0.5 and {macro_name}.IntroFrames > 0, "
-      "min(1, max(0, (time - comp.RenderStart) / "
-      f"max(1, {macro_name}.IntroFrames))), 1)"
-  )
-  out_prog = (
-      f"iif({macro_name}.OutroStyle > 0.5 and {macro_name}.OutroFrames > 0, "
-      "min(1, max(0, (comp.RenderEnd - time) / "
-      f"max(1, {macro_name}.OutroFrames))), 1)"
-  )
+  in_prog, out_prog = _trans_progress_exprs(macro_name)
   return f"min({in_prog}, {out_prog})"
 
 
 def _active_trans_style_expr(macro_name: str) -> str:
-  """Selects IntroStyle during the intro window and OutroStyle otherwise."""
+  """Selects IntroStyle when intro dominates _anim_progress_expr, else OutroStyle."""
+  in_prog, out_prog = _trans_progress_exprs(macro_name)
   return (
-      f"iif((time - comp.RenderStart) <= max(1, {macro_name}.IntroFrames) and "
-      f"{macro_name}.IntroStyle > 0.5, "
+      f"iif({macro_name}.IntroStyle > 0.5 and {macro_name}.IntroFrames > 0 "
+      f"and ({in_prog}) <= ({out_prog}), "
       f"{macro_name}.IntroStyle, {macro_name}.OutroStyle)"
   )
 
