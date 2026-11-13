@@ -1361,8 +1361,14 @@ TEST(PaperCraftOfxTest, ShortClipIntroOutroOverlapAndMirrorBehaveSmoothly) {
                           pi.inst.param_set.params["enableStopMotion"].get()),
                       0);
     MockParamSetValue(reinterpret_cast<OfxParamHandle>(
+                          pi.inst.param_set.params["introStyle"].get()),
+                      2);
+    MockParamSetValue(reinterpret_cast<OfxParamHandle>(
                           pi.inst.param_set.params["introFrames"].get()),
                       14);
+    MockParamSetValue(reinterpret_cast<OfxParamHandle>(
+                          pi.inst.param_set.params["outroStyle"].get()),
+                      1);
     MockParamSetValue(reinterpret_cast<OfxParamHandle>(
                           pi.inst.param_set.params["outroFrames"].get()),
                       14);
@@ -1832,6 +1838,148 @@ TEST(PaperCraftOfxTest, FoldTransitionPatternsActionsAndByteDepthRender) {
     EXPECT_EQ(out8[(kH + 1) * kW * 4 + x], 0xA5);
   }
   EXPECT_EQ(host.active_leased_images, 0);
+}
+
+TEST(PaperCraftOfxTest,
+     CutoutEffectAndFoldTransitionCombineSeamlesslyOnSameClip) {
+  LoadedOfxBundle bundle(ResolvePluginBinaryPath());
+  ASSERT_NE(bundle.raw(), nullptr);
+  MockHost host;
+  host.ofx_host.host = ToPropHandle(&host.host_props);
+  host.ofx_host.fetchSuite = &MockHost::FetchSuite;
+
+  constexpr int kW = 192;
+  constexpr int kH = 128;
+  const double range[2] = {0.0, 48.0};
+
+  // 1. Default CutoutFX renders a resting cutout + drop shadow on frame 0
+  //    (Intro/Outro default to None so timeline transitions never collide).
+  std::vector<float> cutout_buf(static_cast<std::size_t>(kW) * kH * 4, 0.0f);
+  {
+    ScopedPluginInstance cutout_pi;
+    InitPluginInstance(&bundle, "com.papercraft.CutoutFX",
+                       kOfxImageEffectContextFilter, &host, &cutout_pi);
+    SetIntParam(&cutout_pi, "sourceMode", 1);  // Built-in Paper Sticker.
+    SetDoubleParam(&cutout_pi, "shadowDistance", 0.06);
+    SetDoubleParam(&cutout_pi, "shadowSoftness", 0.03);
+    MockPropertySet out_img;
+    ConfigureClipAndImage(&host, cutout_pi.inst.clips["Output"].get(), &out_img,
+                          cutout_buf.data(), kW, kH, kW * 16,
+                          kOfxBitDepthFloat, range);
+    ASSERT_EQ(RenderFrame(cutout_pi, 0.0), kOfxStatOK);
+  }
+  EXPECT_GT(MeanAlpha(cutout_buf), 0.08)
+      << "Default CutoutFX must not collapse frame 0 to transparent black";
+
+  // Count pure-black shadow pixels vs bright cream pixels in cutout_buf.
+  auto count_shadow_px = [](const std::vector<float>& buf) {
+    int n = 0;
+    for (std::size_t i = 0; i < buf.size(); i += 4) {
+      const float max_c = std::max({buf[i], buf[i + 1], buf[i + 2]});
+      if (buf[i + 3] >= 0.05f && buf[i + 3] <= 0.90f && max_c <= 0.01f) {
+        ++n;
+      }
+    }
+    return n;
+  };
+  const int resting_shadow_px = count_shadow_px(cutout_buf);
+  ASSERT_GT(resting_shadow_px, 40);
+
+  // 2. Feed CutoutFX output into PaperFoldTransition on the same clip:
+  //    - No second cream collar wraps around the drop shadow.
+  //    - Shadow stays alive at p = 0.96 instead of fading to 0 via settle.
+  //    - Endpoints p = 0 and p = 1 match empty and cutout_buf 1:1.
+  std::vector<float> empty(static_cast<std::size_t>(kW) * kH * 4, 0.0f);
+  {
+    ScopedPluginInstance fold_pi;
+    InitPluginInstance(&bundle, kFoldTransitionId,
+                       kOfxImageEffectContextTransition, &host, &fold_pi);
+    SetIntParam(&fold_pi, "enableStopMotion", 0);
+    SetDoubleParam(&fold_pi, "slideDistance", 0.0);
+    MockPropertySet from_img, to_img;
+    ConfigureClipAndImage(&host, fold_pi.inst.clips["SourceFrom"].get(),
+                          &from_img, empty.data(), kW, kH, kW * 16,
+                          kOfxBitDepthFloat, range);
+    ConfigureClipAndImage(&host, fold_pi.inst.clips["SourceTo"].get(), &to_img,
+                          cutout_buf.data(), kW, kH, kW * 16,
+                          kOfxBitDepthFloat, range);
+
+    EXPECT_EQ(RenderTransitionAt(&host, &fold_pi, kW, kH, 0.0), empty);
+    EXPECT_EQ(RenderTransitionAt(&host, &fold_pi, kW, kH, 1.0), cutout_buf);
+
+    // At p = 0.80, pixels where cutout_buf had ONLY pure-black shadow (far
+    // outside the sticker's stationary lower-right shadow skirt) must never be
+    // turned into opaque cream cardstock by a second border around the shadow.
+    const std::vector<float> near_open =
+        RenderTransitionAt(&host, &fold_pi, kW, kH, 0.82);
+    int cream_over_shadow_skirt = 0;
+    for (std::size_t i = 0; i < cutout_buf.size(); i += 4) {
+      const float c_max =
+          std::max({cutout_buf[i], cutout_buf[i + 1], cutout_buf[i + 2]});
+      if (cutout_buf[i + 3] >= 0.15f && cutout_buf[i + 3] <= 0.65f &&
+          c_max <= 1e-3f) {
+        if (near_open[i + 3] > 0.9f && near_open[i] > 0.7f) {
+          ++cream_over_shadow_skirt;
+        }
+      }
+    }
+    EXPECT_EQ(cream_over_shadow_skirt, 0)
+        << "Drop shadow must not be wrapped in a second cream paper border";
+
+    // At p = 0.96 (settle near 0), the cutout's shadow must remain present
+    // rather than vanishing before p = 1.0.
+    const std::vector<float> landing =
+        RenderTransitionAt(&host, &fold_pi, kW, kH, 0.96);
+    EXPECT_GT(count_shadow_px(landing), resting_shadow_px / 2)
+        << "Cutout shadow must hand off continuously instead of fading to 0";
+  }
+
+  // 3. A raw graphic with anti-aliased black strokes + color (and NO drop
+  //    shadow) must NOT be misclassified as a shadowed cutout: enabling the
+  //    transition border still wraps a temporary cardstock collar around it.
+  {
+    std::vector<float> raw_logo(static_cast<std::size_t>(kW) * kH * 4, 0.0f);
+    for (int y = 40; y < 88; ++y) {
+      for (int x = 56; x < 136; ++x) {
+        const std::size_t i =
+            (static_cast<std::size_t>(y) * kW + static_cast<std::size_t>(x)) *
+            4;
+        const bool edge = (x == 56 || x == 135 || y == 40 || y == 87);
+        const float a = edge ? 0.5f : 1.0f;
+        // Left half: pure black with 1-px AA edge; right half: purple.
+        if (x < 96) {
+          raw_logo[i + 3] = a;
+        } else {
+          raw_logo[i + 0] = 0.5f * a;
+          raw_logo[i + 1] = 0.3f * a;
+          raw_logo[i + 2] = 0.8f * a;
+          raw_logo[i + 3] = a;
+        }
+      }
+    }
+    ScopedPluginInstance fold_pi;
+    InitPluginInstance(&bundle, kFoldTransitionId,
+                       kOfxImageEffectContextTransition, &host, &fold_pi);
+    SetIntParam(&fold_pi, "enableStopMotion", 0);
+    SetDoubleParam(&fold_pi, "slideDistance", 0.0);
+    MockPropertySet from_img, to_img;
+    ConfigureClipAndImage(&host, fold_pi.inst.clips["SourceFrom"].get(),
+                          &from_img, empty.data(), kW, kH, kW * 16,
+                          kOfxBitDepthFloat, range);
+    ConfigureClipAndImage(&host, fold_pi.inst.clips["SourceTo"].get(), &to_img,
+                          raw_logo.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
+                          range);
+
+    SetIntParam(&fold_pi, "enableBorder", 1);
+    const std::vector<float> with_border =
+        RenderTransitionAt(&host, &fold_pi, kW, kH, 0.65);
+    SetIntParam(&fold_pi, "enableBorder", 0);
+    const std::vector<float> no_border =
+        RenderTransitionAt(&host, &fold_pi, kW, kH, 0.65);
+    EXPECT_GT(MeanAlpha(with_border), MeanAlpha(no_border) + 0.01)
+        << "Raw black+color logo without shadow must still get transition "
+           "collar";
+  }
 }
 
 }  // namespace

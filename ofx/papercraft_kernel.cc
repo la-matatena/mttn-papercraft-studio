@@ -683,7 +683,7 @@ struct CoarseSignedDistanceField {
 CoarseSignedDistanceField BuildSubjectSignedDistanceField(
     const CutoutParams& params, const SubjectTransform& subj_xf,
     const ImageView& source, const PixelRect& canvas_bounds,
-    const ParallelRowsFn& parallel_for) {
+    const ParallelRowsFn& parallel_for, bool ignore_shadow = false) {
   const int cw = std::max(1, canvas_bounds.x2 - canvas_bounds.x1);
   const int ch = std::max(1, canvas_bounds.y2 - canvas_bounds.y1);
   const int step = std::max(1, std::max((cw + 959) / 960, (ch + 539) / 540));
@@ -708,7 +708,10 @@ CoarseSignedDistanceField BuildSubjectSignedDistanceField(
       const RgbaColor sample =
           EvaluateSubjectAtCanonicalPx(params, subj_xf, source, px, py);
       const std::size_t idx = static_cast<std::size_t>(gy) * sdf.width + gx;
-      if (sample.a >= 0.45f) {
+      const bool is_shadow_px =
+          ignore_shadow && sample.a < 0.985f &&
+          std::max({sample.r, sample.g, sample.b}) <= 0.015f * sample.a;
+      if (!is_shadow_px && sample.a >= 0.45f) {
         outside_sq[idx] = 0.0f;
       } else {
         inside_sq[idx] = 0.0f;
@@ -1013,10 +1016,15 @@ struct ClipContentSummary {
   bool has_visible_alpha = false;
   bool has_nonblack_rgb = false;
   bool is_full_frame_opaque = false;
+  bool has_cutout_shadow = false;
+  float max_shadow_alpha = 0.0f;
 };
 
-// Scans a strided grid (about 360 rows) dense enough to catch small logos, so
-// the Auto action can tell real media from the empty side of a clip edge.
+// Scans a strided grid (about 360 rows) dense enough to catch small logos and
+// soft baked drop shadows (e.g. from Paper Cutout FX), while ignoring 1-2 px
+// anti-aliased edges of raw black text or logos.
+// shortcut: shadowless cutouts (Shadow Opacity = 0) look like raw clips; add a
+// manual clip-mode parameter if shadowless cutouts need single-border auto.
 ClipContentSummary InspectClipContent(const ImageView& view) {
   ClipContentSummary out;
   if (!IsValidRgbaView(view)) {
@@ -1028,6 +1036,25 @@ ClipContentSummary InspectClipContent(const ImageView& view) {
   const int w = view.bounds.x2 - view.bounds.x1;
   const int h = view.bounds.y2 - view.bounds.y1;
   const int stride = std::max(1, std::min(w, h) / 360);
+  int shadow_samples = 0;
+  auto touches_opaque_black = [&](int x, int y) {
+    constexpr int kNear[12][2] = {{-1, 0}, {1, 0},   {0, -1}, {0, 1},
+                                  {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
+                                  {-2, 0}, {2, 0},   {0, -2}, {0, 2}};
+    for (const auto& off : kNear) {
+      const int nx = x + off[0];
+      const int ny = y + off[1];
+      if (nx < view.bounds.x1 || nx >= view.bounds.x2 || ny < view.bounds.y1 ||
+          ny >= view.bounds.y2) {
+        continue;
+      }
+      const RgbaColor n = ReadPixel(view, nx, ny);
+      if (n.a >= 0.96f && std::max({n.r, n.g, n.b}) <= 0.03f) {
+        return true;
+      }
+    }
+    return false;
+  };
   for (int y = view.bounds.y1 + stride / 2; y < view.bounds.y2; y += stride) {
     for (int x = view.bounds.x1 + stride / 2; x < view.bounds.x2;
          x += stride) {
@@ -1040,14 +1067,208 @@ ClipContentSummary InspectClipContent(const ImageView& view) {
       }
       if (c.a < 0.995f) {
         opaque = false;
-      }
-      if (out.has_visible_alpha && out.has_nonblack_rgb && !opaque) {
-        return out;
+        if (c.a >= 0.04f && c.a <= 0.985f &&
+            std::max({c.r, c.g, c.b}) <= 0.015f * c.a &&
+            !touches_opaque_black(x, y)) {
+          ++shadow_samples;
+          out.max_shadow_alpha = std::max(out.max_shadow_alpha, c.a);
+        }
       }
     }
   }
   out.is_full_frame_opaque = opaque;
+  out.has_cutout_shadow =
+      !opaque && out.has_nonblack_rgb && shadow_samples >= 2;
   return out;
+}
+
+// Recovers per-pixel un-shadowed alpha for a clip composited over a black drop
+// shadow `{0, 0, 0, sh_a}`. Since `CompositeOver(fg, {0, 0, 0, sh_a})` leaves
+// `fg.rgb` unchanged and only raises alpha where `fg.a < 1`, replacing `c.a`
+// with `clean_alpha` restores `fg` at 1-px torn-fiber resolution.
+std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
+                                         const PixelRect& canvas_bounds,
+                                         const CoarseSignedDistanceField& sdf,
+                                         const ParallelRowsFn& parallel_for) {
+  if (!IsValidRgbaView(view)) {
+    return {};
+  }
+  const int bw = view.bounds.x2 - view.bounds.x1;
+  const int bh = view.bounds.y2 - view.bounds.y1;
+  if (bw <= 0 || bh <= 0 ||
+      static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh) >
+          67108864u) {
+    return {};
+  }
+  const PixelRect rod = EffectiveRod(view);
+  const float cw =
+      static_cast<float>(std::max(1, canvas_bounds.x2 - canvas_bounds.x1));
+  const float ch =
+      static_cast<float>(std::max(1, canvas_bounds.y2 - canvas_bounds.y1));
+  const float rod_w = static_cast<float>(std::max(1, rod.x2 - rod.x1));
+  const float rod_h = static_cast<float>(std::max(1, rod.y2 - rod.y1));
+  const float sdf_step = static_cast<float>(std::max(1, sdf.step));
+  std::vector<float> clean_alpha(
+      static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh), 0.0f);
+
+  RunScanlines(0, bh, parallel_for, [&](int ry) {
+    const int iy = view.bounds.y1 + ry;
+    const float uy =
+        static_cast<float>(canvas_bounds.y1) +
+        (static_cast<float>(iy) + 0.5f - static_cast<float>(rod.y1)) / rod_h *
+            ch;
+    float* out_row = clean_alpha.data() + static_cast<std::size_t>(ry) * bw;
+    for (int rx = 0; rx < bw; ++rx) {
+      const int ix = view.bounds.x1 + rx;
+      const RgbaColor c = ReadPixel(view, ix, iy);
+      if (c.a <= 1e-4f) {
+        out_row[rx] = 0.0f;
+        continue;
+      }
+      if (c.a >= 0.995f) {
+        out_row[rx] = c.a;
+        continue;
+      }
+      const float ux =
+          static_cast<float>(canvas_bounds.x1) +
+          (static_cast<float>(ix) + 0.5f - static_cast<float>(rod.x1)) / rod_w *
+              cw;
+      const float dist_px = sdf.SamplePx(ux, uy);
+      if (dist_px < -3.0f - sdf_step) {
+        out_row[rx] = c.a;
+        continue;
+      }
+      if (dist_px > 2.5f + sdf_step) {
+        out_row[rx] = 0.0f;
+        continue;
+      }
+      const float max_c = std::max({c.r, c.g, c.b});
+      float local_max = -1.0f;
+      constexpr int kNear[12][2] = {{-1, 0}, {1, 0},   {0, -1}, {0, 1},
+                                    {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
+                                    {-2, 0}, {2, 0},   {0, -2}, {0, 2}};
+      for (const auto& off : kNear) {
+        const int nx = ix + off[0];
+        const int ny = iy + off[1];
+        if (nx >= view.bounds.x1 && nx < view.bounds.x2 &&
+            ny >= view.bounds.y1 && ny < view.bounds.y2) {
+          const RgbaColor n = ReadPixel(view, nx, ny);
+          if (n.a >= 0.99f) {
+            local_max = std::max(local_max, std::max({n.r, n.g, n.b}));
+          }
+        }
+      }
+      if (local_max < 0.0f) {
+        for (const auto& off : {std::array<int, 2>{-3, 0},
+                                {3, 0},
+                                {0, -3},
+                                {0, 3}}) {
+          const int nx = ix + off[0];
+          const int ny = iy + off[1];
+          if (nx >= view.bounds.x1 && nx < view.bounds.x2 &&
+              ny >= view.bounds.y1 && ny < view.bounds.y2) {
+            const RgbaColor n = ReadPixel(view, nx, ny);
+            if (n.a >= 0.99f) {
+              local_max = std::max(local_max, std::max({n.r, n.g, n.b}));
+            }
+          }
+        }
+      }
+      if (local_max > 0.04f) {
+        out_row[rx] =
+            max_c <= 1e-3f ? 0.0f : Clamp(max_c / local_max, max_c, c.a);
+      } else if (max_c > 0.02f * c.a) {
+        out_row[rx] = c.a;
+      } else {
+        out_row[rx] = c.a * Smoothstep(1.0f, -0.8f, dist_px);
+      }
+    }
+  });
+  return clean_alpha;
+}
+
+RgbaColor SampleBilinearCleanAlpha(const ImageView& view,
+                                   const std::vector<float>& clean_alpha,
+                                   float px, float py) {
+  if (!IsValidRgbaView(view)) {
+    return {};
+  }
+  const float fx1 = static_cast<float>(view.bounds.x1);
+  const float fy1 = static_cast<float>(view.bounds.y1);
+  const float fx2 = static_cast<float>(view.bounds.x2);
+  const float fy2 = static_cast<float>(view.bounds.y2);
+  if (px < fx1 - 1.0f || px > fx2 + 1.0f || py < fy1 - 1.0f ||
+      py > fy2 + 1.0f) {
+    return {};
+  }
+  const int bw = view.bounds.x2 - view.bounds.x1;
+  auto read_safe = [&](int ix, int iy) -> RgbaColor {
+    if (ix < view.bounds.x1 || ix >= view.bounds.x2 || iy < view.bounds.y1 ||
+        iy >= view.bounds.y2) {
+      return {};
+    }
+    RgbaColor c = ReadPixel(view, ix, iy);
+    c.a = clean_alpha[static_cast<std::size_t>(iy - view.bounds.y1) * bw +
+                      (ix - view.bounds.x1)];
+    return c;
+  };
+  const float sx = px - 0.5f;
+  const float sy = py - 0.5f;
+  const int x0 = static_cast<int>(std::floor(sx));
+  const int y0 = static_cast<int>(std::floor(sy));
+  const float fx = sx - static_cast<float>(x0);
+  const float fy = sy - static_cast<float>(y0);
+  return LerpColor(
+      LerpColor(read_safe(x0, y0), read_safe(x0 + 1, y0), fx),
+      LerpColor(read_safe(x0, y0 + 1), read_safe(x0 + 1, y0 + 1), fx), fy);
+}
+
+RgbaColor SampleCleanClipCanonicalPx(const ImageView& view,
+                                     const std::vector<float>& clean_alpha,
+                                     const PixelRect& canvas_bounds, float px,
+                                     float py) {
+  if (!IsValidRgbaView(view)) {
+    return {};
+  }
+  const PixelRect rod = EffectiveRod(view);
+  if (rod.x1 == canvas_bounds.x1 && rod.x2 == canvas_bounds.x2 &&
+      rod.y1 == canvas_bounds.y1 && rod.y2 == canvas_bounds.y2) {
+    return SampleBilinearCleanAlpha(view, clean_alpha, px, py);
+  }
+  const float cw =
+      static_cast<float>(std::max(1, canvas_bounds.x2 - canvas_bounds.x1));
+  const float ch =
+      static_cast<float>(std::max(1, canvas_bounds.y2 - canvas_bounds.y1));
+  const float sx = static_cast<float>(rod.x1) +
+                   (px - static_cast<float>(canvas_bounds.x1)) / cw *
+                       static_cast<float>(rod.x2 - rod.x1);
+  const float sy = static_cast<float>(rod.y1) +
+                   (py - static_cast<float>(canvas_bounds.y1)) / ch *
+                       static_cast<float>(rod.y2 - rod.y1);
+  return SampleBilinearCleanAlpha(view, clean_alpha, sx, sy);
+}
+
+float CleanClipAlphaAt(const ImageView& view,
+                       const std::vector<float>& clean_alpha,
+                       const PixelRect& canvas_bounds, int x, int y) {
+  if (!IsValidRgbaView(view)) {
+    return 0.0f;
+  }
+  const PixelRect rod = EffectiveRod(view);
+  if (rod.x1 == canvas_bounds.x1 && rod.x2 == canvas_bounds.x2 &&
+      rod.y1 == canvas_bounds.y1 && rod.y2 == canvas_bounds.y2) {
+    if (x < view.bounds.x1 || x >= view.bounds.x2 || y < view.bounds.y1 ||
+        y >= view.bounds.y2) {
+      return 0.0f;
+    }
+    const int bw = view.bounds.x2 - view.bounds.x1;
+    return clean_alpha[static_cast<std::size_t>(y - view.bounds.y1) * bw +
+                       (x - view.bounds.x1)];
+  }
+  return SampleCleanClipCanonicalPx(view, clean_alpha, canvas_bounds,
+                                    static_cast<float>(x) + 0.5f,
+                                    static_cast<float>(y) + 0.5f)
+      .a;
 }
 
 // Shape of the paper sheet before folding, in canonical canvas pixels.
@@ -1493,6 +1714,8 @@ struct FoldShadeContext {
   float origin_x = 0.0f;  // Canvas origin and size for texture coordinates.
   float origin_y = 0.0f;
   float min_dim = 1.0f;
+  bool cutout_sheet = false;       // Input already carries its cutout border.
+  float cutout_sdf_slack_px = 5.0f;
   bool enable_border = true;
   float border_px = 0.0f;
   float tear_amp_px = 0.0f;
@@ -1690,6 +1913,45 @@ RgbaColor EvalPaperLeaf(const FoldShadeContext& ctx, float x, float y,
   const float ux = ctx.sheet->cx + x;
   const float uy = ctx.sheet->cy + y;
   const float dist_px = ctx.sheet->DistPx(ux, uy);
+  if (ctx.cutout_sheet) {
+    if (dist_px > ctx.cutout_sdf_slack_px) {
+      return {};
+    }
+    const RgbaColor ink = subject(ux, uy, dist_px);
+    if (ink.a <= 1e-4f) {
+      return {};
+    }
+    const float nu_x = (ux - ctx.origin_x) / ctx.min_dim;
+    const float nu_y = (uy - ctx.origin_y) / ctx.min_dim;
+    const float hinge_mul = HingeCreaseMarks(ctx, x, y, nu_x, nu_y);
+    if (back_side) {
+      const float sheet_alpha = Clamp01(ink.a);
+      const float grain =
+          ctx.grain_strength > 1e-3f
+              ? Lerp(1.0f,
+                     PaperFiberGrain(nu_x, nu_y, ctx.grain_scale, ctx.seed),
+                     Clamp01(ctx.grain_strength))
+              : 1.0f;
+      const float crease_val =
+          ctx.crease_strength > 1e-3f
+              ? PaperCreaseField(nu_x, nu_y, ctx.crease_scale, ctx.seed + 89u)
+              : 0.0f;
+      const float crease_mul =
+          (1.0f - 0.34f * Clamp01(ctx.crease_strength) * crease_val) *
+          hinge_mul;
+      const float luma =
+          (0.299f * ink.r + 0.587f * ink.g + 0.114f * ink.b) / ink.a;
+      const float bleed =
+          Lerp(1.0f, 0.86f + 0.14f * Clamp01(luma), 0.3f * Clamp01(ink.a));
+      const float s =
+          Clamp(0.93f * grain * crease_mul * shade * bleed, 0.2f, 1.12f);
+      return {Clamp01(ctx.paper_r * s) * sheet_alpha,
+              Clamp01(ctx.paper_g * 0.985f * s) * sheet_alpha,
+              Clamp01(ctx.paper_b * 0.95f * s) * sheet_alpha, sheet_alpha};
+    }
+    const float mul = hinge_mul * shade;
+    return {ink.r * mul, ink.g * mul, ink.b * mul, ink.a};
+  }
   const float base_edge = dist_px - ctx.border_px;
   if (base_edge > ctx.tear_amp_px + 1.3f) {
     return {};
@@ -2326,6 +2588,8 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
           ? std::max(0.0f, params.tear_roughness_norm * min_dim)
           : 0.0f;
 
+  const bool is_cutout =
+      !active_info->is_full_frame_opaque && active_info->has_cutout_shadow;
   CoarseSignedDistanceField matte_sdf;
   SheetGeometry sheet;
   float sdf_step = 0.0f;
@@ -2339,14 +2603,23 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     const SubjectTransform identity =
         BuildSubjectTransform(matte_params, *active, canvas_bounds);
     matte_sdf = BuildSubjectSignedDistanceField(
-        matte_params, identity, *active, canvas_bounds, parallel_for);
-    sheet = SheetFromSdf(matte_sdf, full_border + full_tear);
+        matte_params, identity, *active, canvas_bounds, parallel_for,
+        is_cutout);
+    sheet = SheetFromSdf(matte_sdf,
+                         is_cutout ? 0.0f : (full_border + full_tear));
     sdf_step = static_cast<float>(matte_sdf.step);
   }
   if (!sheet.valid) {
     fill_with_clip(under, under_weight);
     return;
   }
+  const std::vector<float> clean_alpha =
+      is_cutout
+          ? BuildCleanCutoutAlpha(*active, canvas_bounds, matte_sdf,
+                                  parallel_for)
+          : std::vector<float>{};
+  const bool use_clean = !clean_alpha.empty();
+  const float sdf_slack = 2.0f * sdf_step + 3.0f;
 
   const std::uint32_t seed =
       static_cast<std::uint32_t>(std::max(0, params.random_seed));
@@ -2362,9 +2635,11 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   ctx.origin_x = static_cast<float>(canvas_bounds.x1);
   ctx.origin_y = static_cast<float>(canvas_bounds.y1);
   ctx.min_dim = min_dim;
-  ctx.enable_border = params.enable_border;
-  ctx.border_px = full_border * settle;
-  ctx.tear_amp_px = full_tear * settle;
+  ctx.cutout_sheet = use_clean;
+  ctx.cutout_sdf_slack_px = sdf_slack;
+  ctx.enable_border = params.enable_border && !use_clean;
+  ctx.border_px = use_clean ? 0.0f : full_border * settle;
+  ctx.tear_amp_px = use_clean ? 0.0f : full_tear * settle;
   ctx.tear_frequency = params.tear_frequency;
   ctx.tear_detail = 5;
   ctx.seed = seed;
@@ -2376,7 +2651,8 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   ctx.grain_scale = 1.0f;
   ctx.crease_strength = params.crease_strength;
   ctx.crease_scale = 3.4f;
-  ctx.media_overlay = 0.30f * Clamp01(params.crease_strength) * settle;
+  ctx.media_overlay =
+      use_clean ? 0.0f : 0.30f * Clamp01(params.crease_strength) * settle;
   ctx.hinge_crease = settle;
   ctx.crease_band_px = std::max(2.5f, 0.0055f * min_dim);
   // Keep soft matte edges (and the coarse matte's slack) while the collar is
@@ -2387,7 +2663,9 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   ctx.flap_shadow_px = std::max(3.0f, 0.011f * min_dim);
   ctx.flap_shadow_soft_px = std::max(2.0f, 0.006f * min_dim);
 
-  // Drop shadow grows and softens while the packet is lifted.
+  // Drop shadow grows and softens while the packet is lifted. For pre-cutout
+  // clips, keep the 3D shadow alive and hand it off into the cutout's resting
+  // shadow instead of fading it out.
   const float lift_k = 1.0f + 2.5f * layout.lift;
   const float sh_dist = params.shadow_distance_norm * min_dim * lift_k;
   const float sh_dx = ctx.shadow_dir_x * sh_dist;
@@ -2395,12 +2673,17 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   const float sh_soft =
       std::max(1.2f, params.shadow_softness_norm * min_dim *
                          (1.0f + 1.5f * layout.lift));
+  const float rest_sh_target = active_info->max_shadow_alpha > 1e-3f
+                                   ? active_info->max_shadow_alpha
+                                   : params.shadow_opacity;
   const float sh_opacity =
-      params.shadow_opacity * settle * (1.0f - 0.35f * layout.lift);
+      use_clean ? Lerp(params.shadow_opacity * (1.0f - 0.35f * layout.lift),
+                       rest_sh_target, Smoothstep(0.65f, 0.95f, q))
+                : params.shadow_opacity * settle * (1.0f - 0.35f * layout.lift);
+  const float rest_shadow_blend = use_clean ? Smoothstep(0.90f, 1.0f, q) : 0.0f;
 
   // Conservative bounds of the paper (torn edge included) and of the soft
   // coverage used by shadows, per fold level; the coarse matte adds slack.
-  const float sdf_slack = 2.0f * sdf_step + 3.0f;
   const std::vector<FoldPolygon> paper_cover = FoldSheetBounds(
       sheet, layout, ctx.border_px + ctx.tear_amp_px + sdf_slack,
       &ctx.stack_bounds);
@@ -2418,7 +2701,8 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     const float step = std::floor(
         p * static_cast<float>(std::max(2, params.stop_motion_steps)));
     const float sf = step * 1.618f + static_cast<float>(seed) * 0.37f;
-    const float amp = Clamp01(params.jitter_amount) * settle;
+    const float amp = Clamp01(params.jitter_amount) *
+                      (use_clean ? Smoothstep(0.85f, 0.25f, q) : settle);
     jitter_x = 0.008f * amp * min_dim * std::sin(sf * 12.9898f);
     jitter_y = 0.008f * amp * min_dim * std::cos(sf * 78.233f);
     jitter_rot = 2.2f * amp * kDegToRad * std::sin(sf * 43.17f);
@@ -2433,7 +2717,9 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   packet.inv_scale = 1.0f / std::max(0.05f, layout.scale);
 
   auto sample_active = [&](float ux, float uy, float /*dist_px*/) {
-    return SampleClipCanonicalPx(*active, canvas_bounds, ux, uy);
+    return use_clean ? SampleCleanClipCanonicalPx(*active, clean_alpha,
+                                                  canvas_bounds, ux, uy)
+                     : SampleClipCanonicalPx(*active, canvas_bounds, ux, uy);
   };
   const bool has_under =
       under != nullptr && under_weight > 1e-4f && IsValidRgbaView(*under);
@@ -2476,16 +2762,27 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
               ? ScalePremult(ClipPixelAt(*under, canvas_bounds, x, y),
                              under_weight)
               : RgbaColor{};
+      float sh_a = 0.0f;
       if (row_shadow && px_out >= shadow_box.x1 && px_out <= shadow_box.x2) {
         float slx = 0.0f;
         float sly = 0.0f;
         packet.ToLocal(px_out - sh_dx, py_out - sh_dy, &slx, &sly);
-        const float a = sh_opacity * layout.alpha *
-                        EvalFoldCoverage(ctx, layout.count - 1, slx, sly,
-                                         false, sh_soft);
-        if (a > 1e-4f) {
-          bg = CompositeOver({0.0f, 0.0f, 0.0f, a}, bg);
+        sh_a = sh_opacity * layout.alpha *
+               EvalFoldCoverage(ctx, layout.count - 1, slx, sly, false,
+                                sh_soft);
+      }
+      if (use_clean && rest_shadow_blend > 1e-4f) {
+        const RgbaColor raw_c = ClipPixelAt(*active, canvas_bounds, x, y);
+        const float clean_a =
+            CleanClipAlphaAt(*active, clean_alpha, canvas_bounds, x, y);
+        if (clean_a < 0.99f) {
+          const float rest_sh_a =
+              Clamp01((raw_c.a - clean_a) / (1.0f - clean_a)) * layout.alpha;
+          sh_a = Lerp(sh_a, rest_sh_a, rest_shadow_blend);
         }
+      }
+      if (sh_a > 1e-4f) {
+        bg = CompositeOver({0.0f, 0.0f, 0.0f, sh_a}, bg);
       }
       WritePixel(output, x, y, CompositeOver(fg, bg));
     }

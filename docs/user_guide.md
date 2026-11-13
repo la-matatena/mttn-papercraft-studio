@@ -156,6 +156,13 @@ To force a behavior, set **Fold Action** to **Unfold Incoming Clip**, **Fold Out
 3. To unfold the logo in place instead of sliding it in, set **Packet Slide Distance** to `0`.
 4. Drag a second **Paper Fold & Unfold** onto the end of the PNG clip to fold the logo away.
 
+### Combine Paper Cutout FX and Paper Fold & Unfold on the same clip
+
+You can apply **Paper Cutout FX** to a clip and drag **Paper Fold & Unfold** onto its start, end, or cut without duplicate borders or folded shadows:
+
+- **Paper Cutout FX** defaults **Intro Style** and **Outro Style** to `None`, so its built-in entrance and exit animations stay off unless you choose one.
+- **Paper Fold & Unfold** automatically detects clips that already carry a cutout and drop shadow: it folds the existing cutout silhouette (keeping one constant torn border and matching ragged paper backsides) and hands its 3D packet shadow directly into the cutout's resting shadow when the transition finishes.
+
 > [!TIP]
 > Pair the transition with `01_Paper_Unfold.wav` from the Paper SFX library, and use **Stop-Motion Steps** to match the number of poses to your project frame rate (about one pose every two or three frames looks like classic stop-motion).
 
@@ -190,9 +197,9 @@ The tables that follow list all controls exposed in the DaVinci Resolve Inspecto
 | **4. Paper Grain & Fold Creases** | **Crease Scale** | Float (`0.2` to `30.0`) | `3.2` | Controls spacing of folded paper creases |
 | **4. Paper Grain & Fold Creases** | **Media Texture Overlay** | Float (`0.0` to `1.0`) | `0.22` | Blends subtle crease shading over subject ink |
 | **4. Paper Grain & Fold Creases** | **Texture Seed** | Integer (`0` to `1000`) | `7` | Varies deterministic tear, crease, and jitter patterns |
-| **5. Intro & Outro Paper Animations** | **Intro Style** | Choice (`None`, `Paper Unfold (3D)`, `Crumple Ball`, `Paper Airplane Glide`, `Flat Cutout Pop`) | `Crumple Ball` | Selects opening clip entrance animation |
+| **5. Intro & Outro Paper Animations** | **Intro Style** | Choice (`None`, `Paper Unfold (3D)`, `Crumple Ball`, `Paper Airplane Glide`, `Flat Cutout Pop`) | `None` | Selects opening clip entrance animation |
 | **5. Intro & Outro Paper Animations** | **Intro Duration (Frames)** | Integer (`0` to `240`) | `14` | Sets opening animation duration in frames |
-| **5. Intro & Outro Paper Animations** | **Outro Style** | Choice (same five styles as **Intro Style**) | `Paper Unfold (3D)` | Selects closing clip exit animation |
+| **5. Intro & Outro Paper Animations** | **Outro Style** | Choice (same five styles as **Intro Style**) | `None` | Selects closing clip exit animation |
 | **5. Intro & Outro Paper Animations** | **Outro Duration (Frames)** | Integer (`0` to `240`) | `14` | Sets closing animation duration in frames |
 | **5. Intro & Outro Paper Animations** | **Glide Angle** | Angle (`-360°` to `360°`) | `-22.0°` | Sets directional trajectory for glide moves and fold direction |
 | **5. Intro & Outro Paper Animations** | **Glide Distance** | Float (`0.0` to `3.0`) | `0.65` | Sets travel distance in normalized frame units |

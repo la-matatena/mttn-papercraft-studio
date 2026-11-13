@@ -157,9 +157,9 @@ struct CutoutParams {
   int random_seed = 7;
 
   // Intro & outro paper animations across the clip duration.
-  int intro_style = 2;
+  int intro_style = 0;
   int intro_frames = 14;
-  int outro_style = 1;
+  int outro_style = 0;
   int outro_frames = 14;
   float transition_angle_deg = -22.0f;
   float glide_distance = 0.65f;

@@ -106,7 +106,7 @@ The transition mimics a printed sheet unfolding in stop-motion: the clip arrives
 | Between two full-frame clips | The incoming clip unfolds over the outgoing one |
 | Between two clips with transparency (PNGs, titles) | The outgoing clip folds away, then the incoming clip unfolds |
 
-To force a behavior, choose **Unfold Incoming Clip**, **Fold Outgoing Clip**, or **Fold Out, Then Unfold In**. Upper tracks (`V2+`) keep their transparency, so a PNG logo can unfold over the video on the track below. The transition length on the timeline sets the speed, and **Stop-Motion Steps** sets how many distinct poses you see.
+To force a behavior, choose **Unfold Incoming Clip**, **Fold Outgoing Clip**, or **Fold Out, Then Unfold In**. Upper tracks (`V2+`) keep their transparency, so a PNG logo can unfold over the video on the track below. You can also apply **Paper Cutout FX** and **Paper Fold & Unfold** to the same clip: **Paper Cutout FX** defaults **Intro Style** and **Outro Style** to `None` so it won't fight timeline transitions, and **Paper Fold & Unfold** automatically detects the cutout to keep a single torn border and hand its 3D shadow directly into the cutout's resting shadow. The transition length on the timeline sets the speed, and **Stop-Motion Steps** sets how many distinct poses you see.
 
 > [!NOTE]
 > Version 3.0 removed the Paper Cutout FX generator and the **Paper Unfold**, **Paper Crumple**, and **Paper Rip Wipe** transitions. If an older project used them, DaVinci Resolve shows them as unavailable; remove them from the timeline. Version 3.1 adds **Paper Fold & Unfold** as a new transition (with a new identifier), and the **Paper Unfold (3D)** style of Paper Cutout FX now folds the cutout along real creases.

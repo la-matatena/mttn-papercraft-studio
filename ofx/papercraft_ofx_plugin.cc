@@ -397,13 +397,13 @@ void DefineCutoutParameters(const HostSuites& s, OfxParamSetHandle param_set) {
       "Flat Cutout Pop"};
   DefineChoiceParam(s, param_set, "introStyle", "Intro Style",
                     "TransitionGroup", "Opening paper animation at clip start.",
-                    2, kAnimStyles);
+                    0, kAnimStyles);
   DefineIntParam(s, param_set, "introFrames", "Intro Duration (Frames)",
                  "TransitionGroup", "Length of opening animation in frames.",
                  14, 0, 240, 0, 60);
   DefineChoiceParam(s, param_set, "outroStyle", "Outro Style",
                     "TransitionGroup",
-                    "Closing paper animation before clip end.", 1, kAnimStyles);
+                    "Closing paper animation before clip end.", 0, kAnimStyles);
   DefineIntParam(s, param_set, "outroFrames", "Outro Duration (Frames)",
                  "TransitionGroup", "Length of closing animation in frames.",
                  14, 0, 240, 0, 60);
@@ -1058,9 +1058,9 @@ CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
       ReadFloatParam(s, inst.media_texture_overlay, time, 0.22f);
   cp.random_seed = ReadIntParam(s, inst.random_seed, time, 7);
 
-  cp.intro_style = ReadIntParam(s, inst.intro_style, time, 2);
+  cp.intro_style = ReadIntParam(s, inst.intro_style, time, 0);
   cp.intro_frames = ReadIntParam(s, inst.intro_frames, time, 14);
-  cp.outro_style = ReadIntParam(s, inst.outro_style, time, 1);
+  cp.outro_style = ReadIntParam(s, inst.outro_style, time, 0);
   cp.outro_frames = ReadIntParam(s, inst.outro_frames, time, 14);
   cp.transition_angle_deg =
       ReadFloatParam(s, inst.transition_angle, time, -22.0f);
