@@ -206,6 +206,14 @@ RgbaColor ReadPixel(const ImageView& view, int x, int y) {
 // (keeps HDR values); 16-bit and 8-bit outputs clamp to [0, 1] and round to
 // nearest (+0.5 before truncation). The output is always written
 // premultiplied, regardless of the view's alpha_mode.
+//
+// Invariant: this is correct because the plugin always declares premultiplied
+// output. HandleGetClipPreferences in papercraft_ofx_plugin.cc sets
+// kOfxImageEffectPropPreMultiplication = kOfxImagePreMultiplied, so hosts
+// hand the render action a premultiplied output image and never request a
+// straight-alpha one. If that declaration ever changes (e.g. to honor an
+// input's kOfxImageUnPreMultiplied), un-premultiply here when
+// output.alpha_mode != kPremultiplied.
 inline void WritePixelPtr(std::uint8_t* ptr, PixelDepth depth,
                           const RgbaColor& color) {
   if (depth == PixelDepth::kFloat) {
@@ -227,11 +235,6 @@ inline void WritePixelPtr(std::uint8_t* ptr, PixelDepth depth,
   ptr[1] = static_cast<std::uint8_t>(Clamp01(color.g) * 255.0f + 0.5f);
   ptr[2] = static_cast<std::uint8_t>(Clamp01(color.b) * 255.0f + 0.5f);
   ptr[3] = static_cast<std::uint8_t>(Clamp01(color.a) * 255.0f + 0.5f);
-}
-
-// WritePixelPtr at absolute pixel (x, y); (x, y) must lie inside bounds.
-void WritePixel(const ImageView& view, int x, int y, const RgbaColor& color) {
-  WritePixelPtr(PixelMutPtr(view, x, y), view.depth, color);
 }
 
 // Bilinear sample of `view` at source px (px, py), treating everything
@@ -717,6 +720,23 @@ void RunScanlines(int y_begin, int y_end, const ParallelRowsFn& parallel_for,
   }
 }
 
+// Writes transparent black over output px [x_begin, x_end) x
+// [y_begin, y_end), which must lie inside `output.bounds`. Streams each row
+// through one pointer (WritePixelPtr) instead of recomputing the address
+// per pixel; rows run on parallel_for workers.
+void ClearOutputRows(const ImageView& output, int x_begin, int x_end,
+                     int y_begin, int y_end,
+                     const ParallelRowsFn& parallel_for) {
+  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+  const PixelDepth out_depth = output.depth;
+  RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
+    std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+    for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+      WritePixelPtr(out_px, out_depth, {});
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Signed distance field of the subject matte
 //
@@ -1079,14 +1099,21 @@ CutoutAnimState ComputeCutoutAnimState(const CutoutParams& params, float cw,
   const float min_dim = std::min(cw, ch);
 
   const float hold = static_cast<float>(std::max(1, params.hold_frames));
-  const double rel_frame = Clamp(
-      static_cast<float>(params.current_time - params.frame_start), 0.0f,
-      static_cast<float>(std::max(0.0, params.frame_end - params.frame_start)));
-  state.step_time =
+  // Timing math stays in double until the end: host frame numbers can be
+  // large (long timelines, timecode-based numbering ~86400+), where float
+  // spacing is 1/128 frame or coarser and float subtraction of two large
+  // frame numbers loses the fractional part. For ordinary frame numbers
+  // (integers below 2^24) every step is exact either way, so results are
+  // unchanged. NaN clamps to 0, like Clamp().
+  const double rel_frame =
+      std::min(std::max(0.0, params.frame_end - params.frame_start),
+               std::max(0.0, params.current_time - params.frame_start));
+  const double step_time =
       params.enable_stop_motion
-          ? static_cast<float>(params.frame_start) +
-                std::floor(static_cast<float>(rel_frame) / hold) * hold
-          : static_cast<float>(params.current_time);
+          ? params.frame_start + std::floor(rel_frame / hold) * hold
+          : params.current_time;
+  // Float copy for jitter phases and edge boil (pseudo-random inputs).
+  state.step_time = static_cast<float>(step_time);
 
   // Stop-motion hand-cut jitter.
   if (params.enable_stop_motion) {
@@ -1104,13 +1131,13 @@ CutoutAnimState ComputeCutoutAnimState(const CutoutParams& params, float cw,
   float t_in = 1.0f;
   const bool has_intro = (params.intro_style > 0 && params.intro_frames > 0);
   if (has_intro) {
-    t_in = Clamp01((state.step_time - static_cast<float>(params.frame_start)) /
+    t_in = Clamp01(static_cast<float>(step_time - params.frame_start) /
                    static_cast<float>(params.intro_frames));
   }
   float t_out = 1.0f;
   const bool has_outro = (params.outro_style > 0 && params.outro_frames > 0);
   if (has_outro) {
-    t_out = Clamp01((static_cast<float>(params.frame_end) - state.step_time) /
+    t_out = Clamp01(static_cast<float>(params.frame_end - step_time) /
                     static_cast<float>(params.outro_frames));
   }
 
@@ -1475,10 +1502,20 @@ ClipContentSummary InspectClipContent(const ImageView& view) {
 //   - no opaque neighbors: colored pixels keep alpha; black ones fade out
 //     with distance past the edge.
 // Rows run in parallel; each worker writes only its own row.
+//
+// `raw_alpha_box` (optional) receives the bounding box, in buffer px of
+// `view`, of every pixel whose decoded raw alpha is not exactly 0 (NaN
+// counts as non-zero); x2 <= x1 when there is none. It costs one compare per
+// pixel already being read, and lets RenderPaperFoldTransition skip the
+// resting-shadow work away from the clip (see ClipBoxToCanonical).
 std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
                                          const PixelRect& canvas_bounds,
                                          const CoarseSignedDistanceField& sdf,
-                                         const ParallelRowsFn& parallel_for) {
+                                         const ParallelRowsFn& parallel_for,
+                                         PixelRect* raw_alpha_box = nullptr) {
+  if (raw_alpha_box != nullptr) {
+    *raw_alpha_box = {};
+  }
   if (!IsValidRgbaView(view)) {
     return {};
   }
@@ -1502,6 +1539,14 @@ std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
   const std::ptrdiff_t px_bytes = PixelSizeBytes(view);
   const PixelDepth view_depth = view.depth;
   const AlphaMode view_alpha = view.alpha_mode;
+  // Per-row first/last column (buffer-relative) with non-zero raw alpha;
+  // each worker writes only its own row's entries. row_first = bw means none.
+  std::vector<int> row_first;
+  std::vector<int> row_last;
+  if (raw_alpha_box != nullptr) {
+    row_first.assign(static_cast<std::size_t>(bh), bw);
+    row_last.assign(static_cast<std::size_t>(bh), -1);
+  }
 
   RunScanlines(0, bh, parallel_for, [&](int ry) {
     const int iy = view.bounds.y1 + ry;
@@ -1511,9 +1556,15 @@ std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
             ch;
     float* out_row = clean_alpha.data() + static_cast<std::size_t>(ry) * bw;
     const std::uint8_t* in_px = PixelConstPtr(view, view.bounds.x1, iy);
+    int first = bw;
+    int last = -1;
     for (int rx = 0; rx < bw; ++rx, in_px += px_bytes) {
       const int ix = view.bounds.x1 + rx;
       const RgbaColor c = ReadPixelPtr(in_px, view_depth, view_alpha);
+      if (!(c.a == 0.0f)) {
+        first = std::min(first, rx);
+        last = rx;
+      }
       if (c.a <= 1e-4f) {
         out_row[rx] = 0.0f;
         continue;
@@ -1576,7 +1627,28 @@ std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
         out_row[rx] = c.a * Smoothstep(1.0f, -0.8f, dist_px);
       }
     }
+    if (raw_alpha_box != nullptr) {
+      row_first[static_cast<std::size_t>(ry)] = first;
+      row_last[static_cast<std::size_t>(ry)] = last;
+    }
   });
+  if (raw_alpha_box != nullptr) {
+    PixelRect box{bw, bh, -1, -1};  // Buffer-relative, inclusive maxima.
+    for (int ry = 0; ry < bh; ++ry) {
+      if (row_last[static_cast<std::size_t>(ry)] < 0) {
+        continue;
+      }
+      box.x1 = std::min(box.x1, row_first[static_cast<std::size_t>(ry)]);
+      box.x2 = std::max(box.x2, row_last[static_cast<std::size_t>(ry)]);
+      box.y1 = std::min(box.y1, ry);
+      box.y2 = ry;
+    }
+    if (box.y2 >= 0) {
+      *raw_alpha_box = {view.bounds.x1 + box.x1, view.bounds.y1 + box.y1,
+                        view.bounds.x1 + box.x2 + 1,
+                        view.bounds.y1 + box.y2 + 1};
+    }
+  }
   return clean_alpha;
 }
 
@@ -1694,6 +1766,61 @@ float CleanClipAlphaAt(const ImageView& view,
                                     static_cast<float>(x) + 0.5f,
                                     static_cast<float>(y) + 0.5f)
       .a;
+}
+
+// Maps `src_box` (buffer px of `view`, half-open) to a conservative
+// half-open box of integer canonical pixels: outside it, ClipPixelAt and
+// CleanClipAlphaAt read only buffer pixels outside `src_box` (or nothing),
+// so if `src_box` holds every non-zero alpha they return exactly 0 alpha.
+// Same-size clips read pixel (x, y) directly, so the box is unchanged.
+// Remapped clips sample bilinearly at s = rod.x1 + (x + 0.5 - canvas.x1) *
+// rod_w / cw; a tap inside [b1, b2) needs s in [b1 - 0.5, b2 + 0.5). That
+// interval is mapped back exactly in double and padded by 2 px plus one
+// source pixel's canonical width to absorb the float rounding of the
+// forward map. Returns an empty box (x2 <= x1) for an empty `src_box`.
+PixelRect ClipBoxToCanonical(const ImageView& view,
+                             const PixelRect& canvas_bounds,
+                             const PixelRect& src_box) {
+  if (src_box.x2 <= src_box.x1 || src_box.y2 <= src_box.y1) {
+    return {};
+  }
+  const PixelRect rod = EffectiveRod(view);
+  if (rod.x1 == canvas_bounds.x1 && rod.x2 == canvas_bounds.x2 &&
+      rod.y1 == canvas_bounds.y1 && rod.y2 == canvas_bounds.y2) {
+    return src_box;
+  }
+  // Same denominators as SampleClipCanonicalPx.
+  const double cw = std::max(1, canvas_bounds.x2 - canvas_bounds.x1);
+  const double ch = std::max(1, canvas_bounds.y2 - canvas_bounds.y1);
+  const double rod_w = rod.x2 - rod.x1;
+  const double rod_h = rod.y2 - rod.y1;
+  if (rod_w <= 0.0 || rod_h <= 0.0) {
+    return {};
+  }
+  // Canonical pixel index whose center maps to source coordinate s.
+  auto to_canvas = [](double s, double r1, double c1, double r_len,
+                      double c_len) {
+    return c1 + (s - r1) * c_len / r_len - 0.5;
+  };
+  const double pad_x = 2.0 + std::ceil(cw / rod_w);
+  const double pad_y = 2.0 + std::ceil(ch / rod_h);
+  const double x1 = std::floor(to_canvas(src_box.x1 - 0.5, rod.x1,
+                                         canvas_bounds.x1, rod_w, cw)) -
+                    pad_x;
+  const double x2 = std::ceil(to_canvas(src_box.x2 + 0.5, rod.x1,
+                                        canvas_bounds.x1, rod_w, cw)) +
+                    pad_x;
+  const double y1 = std::floor(to_canvas(src_box.y1 - 0.5, rod.y1,
+                                         canvas_bounds.y1, rod_h, ch)) -
+                    pad_y;
+  const double y2 = std::ceil(to_canvas(src_box.y2 + 0.5, rod.y1,
+                                        canvas_bounds.y1, rod_h, ch)) +
+                    pad_y;
+  // Clamp to a safe int range; callers compare against output pixels.
+  auto to_int = [](double v) {
+    return static_cast<int>(std::min(1e9, std::max(-1e9, v)));
+  };
+  return {to_int(x1), to_int(y1), to_int(x2), to_int(y2)};
 }
 
 // ---------------------------------------------------------------------------
@@ -2827,12 +2954,7 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
 
   // If collapsed below visibility threshold at transition endpoints, clear.
   if (anim.ease_p <= 1e-4f && anim.style != CutoutAnimStyle::kNone) {
-    RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
-      std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
-      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-        WritePixelPtr(out_px, out_depth, {});
-      }
-    });
+    ClearOutputRows(output, x_begin, x_end, y_begin, y_end, parallel_for);
     return;
   }
 
@@ -2876,11 +2998,7 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
   if (anim.style == CutoutAnimStyle::kPaperUnfold) {
     const SheetGeometry sheet = SheetFromSdf(sdf, border_px + tear_amp_px);
     if (!sheet.valid) {
-      RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
-        for (int x = x_begin; x < x_end; ++x) {
-          WritePixel(output, x, y, {});
-        }
-      });
+      ClearOutputRows(output, x_begin, x_end, y_begin, y_end, parallel_for);
       return;
     }
     const float q = anim.raw_p;
@@ -3233,17 +3351,23 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     }
   }
 
-  // Writes `weight` x `clip` (or transparency) over the render window.
+  // Writes `weight` x `clip` (or transparency) over the render window,
+  // streaming each output row through one pointer.
   auto fill_with_clip = [&](const ImageView* clip, float weight) {
     const bool use_clip =
         clip != nullptr && weight > 1e-4f && IsValidRgbaView(*clip);
+    if (!use_clip) {
+      ClearOutputRows(output, x_begin, x_end, y_begin, y_end, parallel_for);
+      return;
+    }
+    const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+    const PixelDepth out_depth = output.depth;
     RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
-      for (int x = x_begin; x < x_end; ++x) {
-        const RgbaColor c =
-            use_clip
-                ? ScalePremult(ClipPixelAt(*clip, canvas_bounds, x, y), weight)
-                : RgbaColor{};
-        WritePixel(output, x, y, c);
+      std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+        WritePixelPtr(
+            out_px, out_depth,
+            ScalePremult(ClipPixelAt(*clip, canvas_bounds, x, y), weight));
       }
     });
   };
@@ -3360,10 +3484,11 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     fill_with_clip(under, under_weight);
     return;
   }
+  PixelRect active_alpha_box;
   const std::vector<float> clean_alpha =
       is_cutout
           ? BuildCleanCutoutAlpha(*active, canvas_bounds, matte_sdf,
-                                  parallel_for)
+                                  parallel_for, &active_alpha_box)
           : std::vector<float>{};
   const bool use_clean = !clean_alpha.empty();
   // Coarse-SDF error margin: two cells plus 3 px.
@@ -3429,6 +3554,16 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
                        rest_sh_target, Smoothstep(0.65f, 0.95f, q))
                 : params.shadow_opacity * settle * (1.0f - 0.35f * layout.lift);
   const float rest_shadow_blend = use_clean ? Smoothstep(0.90f, 1.0f, q) : 0.0f;
+  const bool rest_blend_on = use_clean && rest_shadow_blend > 1e-4f;
+  // The resting-shadow blend reads the active clip at every pixel, but
+  // outside the clip's non-zero alpha its raw and clean alpha are both 0, so
+  // the blend reduces to sh_a = Lerp(sh_a, 0, blend). Pixels outside this
+  // box (output px == canonical px) skip the two clip reads, and rows
+  // outside it that miss the paper and shadow boxes take the fast path.
+  const PixelRect rest_box =
+      rest_blend_on
+          ? ClipBoxToCanonical(*active, canvas_bounds, active_alpha_box)
+          : PixelRect{};
 
   // Conservative bounds of the paper (torn edge included) and of the soft
   // coverage used by shadows, per fold level; the coarse matte adds slack.
@@ -3489,8 +3624,8 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
   const PixelDepth out_depth = output.depth;
   // Fast underlay copy: a same-size underlay covering the whole row span can
   // be streamed with pointer increments. ClipPixelAt would do the same direct
-  // reads, so this is bit-identical; weights >= 0.9999 skip the scale (exact
-  // for the usual weight 1, at most 0.01% off otherwise).
+  // reads, so this is bit-identical; only an exact weight of 1 skips the
+  // scale (c * 1.0f == c), so the copy matches ScalePremult bit for bit.
   bool under_direct_x = false;
   if (has_under) {
     const PixelRect under_rod = EffectiveRod(*under);
@@ -3509,10 +3644,10 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
     const bool row_shadow = sh_opacity > 1e-4f && py_out >= shadow_box.y1 &&
                             py_out <= shadow_box.y2;
     std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
-    // Rows that miss the paper and shadow boxes (and need no resting-shadow
-    // blend) are just the underlay.
-    if (!row_paper && !row_shadow &&
-        !(use_clean && rest_shadow_blend > 1e-4f)) {
+    const bool row_rest = rest_blend_on && y >= rest_box.y1 && y < rest_box.y2;
+    // Rows that miss the paper and shadow boxes (and the clip's resting
+    // shadow, see rest_box) are just the underlay.
+    if (!row_paper && !row_shadow && !row_rest) {
       if (!has_under) {
         for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
           WritePixelPtr(out_px, out_depth, {});
@@ -3522,7 +3657,7 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
         const std::uint8_t* under_px = PixelConstPtr(*under, x_begin, y);
         const PixelDepth under_depth = under->depth;
         const AlphaMode under_alpha = under->alpha_mode;
-        if (under_weight >= 0.9999f) {
+        if (under_weight == 1.0f) {
           for (int x = x_begin; x < x_end;
                ++x, out_px += out_pixel_bytes, under_px += under_pixel_bytes) {
             WritePixelPtr(out_px, out_depth,
@@ -3580,14 +3715,21 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
       // Near rest, blend toward the clip's own baked shadow, recovered by
       // inverting Over with a black shadow:
       // sh = (raw.a - clean.a) / (1 - clean.a).
-      if (use_clean && rest_shadow_blend > 1e-4f) {
-        const RgbaColor raw_c = ClipPixelAt(*active, canvas_bounds, x, y);
-        const float clean_a =
-            CleanClipAlphaAt(*active, clean_alpha, canvas_bounds, x, y);
-        if (clean_a < 0.99f) {
-          const float rest_sh_a =
-              Clamp01((raw_c.a - clean_a) / (1.0f - clean_a)) * layout.alpha;
-          sh_a = Lerp(sh_a, rest_sh_a, rest_shadow_blend);
+      // Outside rest_box both alphas are exactly 0, so rest_sh_a is 0 and
+      // the clip reads are skipped (same Lerp arguments, same result).
+      if (rest_blend_on) {
+        if (row_rest && x >= rest_box.x1 && x < rest_box.x2) {
+          const RgbaColor raw_c = ClipPixelAt(*active, canvas_bounds, x, y);
+          const float clean_a =
+              CleanClipAlphaAt(*active, clean_alpha, canvas_bounds, x, y);
+          if (clean_a < 0.99f) {
+            const float rest_sh_a =
+                Clamp01((raw_c.a - clean_a) / (1.0f - clean_a)) *
+                layout.alpha;
+            sh_a = Lerp(sh_a, rest_sh_a, rest_shadow_blend);
+          }
+        } else {
+          sh_a = Lerp(sh_a, 0.0f, rest_shadow_blend);
         }
       }
       if (sh_a > 1e-4f) {

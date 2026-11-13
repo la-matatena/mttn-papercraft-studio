@@ -17,6 +17,8 @@
 set -euo pipefail
 
 readonly BUNDLE_NAME="PaperCraftStudioPro.ofx.bundle"
+# Plugin binary inside the bundle's Contents/Linux-x86-64/ folder.
+readonly BINARY_NAME="PaperCraftStudioPro.ofx"
 
 #######################################
 # Prints the usage line.
@@ -33,6 +35,7 @@ usage() {
 # Parses flags and copies the bundle into the chosen OpenFX folder.
 # Globals:
 #   BUNDLE_NAME
+#   BINARY_NAME
 #   HOME
 # Arguments:
 #   Command-line flags (see file header).
@@ -100,17 +103,19 @@ main() {
   while [[ ! -e "${check_dir}" && "${check_dir}" != "/" ]]; do
     check_dir="$(dirname "${check_dir}")"
   done
+  # Installed plugin binary, spelled once so both branches chmod the same path.
+  local -r dest_binary="${dest_dir}/${BUNDLE_NAME}/Contents/Linux-x86-64/${BINARY_NAME}"
   if [[ -w "${check_dir}" ]]; then
     mkdir -p "${dest_dir}"
     rm -rf "${dest_dir}/${BUNDLE_NAME}"
     cp -a "${src_bundle}" "${dest_dir}/"
-    chmod 0755 "${dest_dir}/${BUNDLE_NAME}/Contents/Linux-x86-64/PaperCraftStudioPro.ofx"
+    chmod 0755 "${dest_binary}"
   else
     echo "Installing to ${dest_dir} requires sudo..."
     sudo mkdir -p "${dest_dir}"
     sudo rm -rf "${dest_dir}/${BUNDLE_NAME}"
     sudo cp -a "${src_bundle}" "${dest_dir}/"
-    sudo chmod 0755 "${dest_dir}/${BUNDLE_NAME}/Contents/Linux-x86-64/PaperCraftStudioPro.ofx"
+    sudo chmod 0755 "${dest_binary}"
   fi
   echo "Installed ${BUNDLE_NAME} to ${dest_dir}/${BUNDLE_NAME}"
   echo "Restart DaVinci Resolve and open Effects > Open FX > MTTN PaperCraft Studio on the Edit tab."

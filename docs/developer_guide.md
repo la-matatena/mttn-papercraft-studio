@@ -33,7 +33,7 @@ Cloning `la-matatena/mttn-papercraft-studio` provides every source file, test, h
 | `png_renderer.py` | Pure-Python PNG generator for the effect and transition thumbnails |
 | `fusion_templates.py` and `drfx_validator.py` | Legacy **Paper Cutout FX** and **Paper Fold & Unfold** `.setting` macro builders and structural validator |
 | `bundle_builder_lib.py` and `build_papercraft_bundle.py` | Deterministic bundle assembler writing `MTTN_PaperCraft_Studio.drfx`, `MTTN_PaperCraft_Studio_Full_Bundle.zip`, and `MTTN_PaperCraft_Studio_Complete_Repo.zip` |
-| `papercraft_pro_test.py` | Python verification suite for assets, `.drfx`, installers, Markdown links, and ZIP packages |
+| `papercraft_pro_test.py` | Python verification suite for assets, `.drfx`, installers, Markdown links and `#anchors` (including `AGENTS.md`), and ZIP packages |
 
 ## Compile the OpenFX bundle
 
@@ -158,7 +158,7 @@ New patterns need no extra work for bounds pruning: `FoldSheetBounds` folds any 
 
 1. Place a MIT-compatible (`CC0` or `Public Domain`) 48 kHz, 24-bit stereo WAV clip with peaks below `0.995` and smooth zero-crossing edge fades into `Paper_SFX/`, and document its source in `Paper_SFX/CREDITS.md`.
 2. Register the relative path in `_PAPER_SFX_RELPATHS` inside `bundle_builder_lib.py`, `paper_sfx_files` in `BUILD`, and expected paths in `papercraft_pro_test.py`.
-3. Run `papercraft_pro_test.py` to verify RMS loudness, stereo channel separation, and click-free edge fades through `drfx_validator.validate_wav_bytes`.
+3. Run `papercraft_pro_test.py` to verify RMS loudness, stereo channel separation, and click-free edge fades on every channel through `drfx_validator.validate_wav_bytes`.
 
 ## Code style and documentation conventions
 

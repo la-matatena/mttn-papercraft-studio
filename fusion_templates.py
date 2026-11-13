@@ -247,123 +247,59 @@ def _render_group_defaults(
 # --- Paper Cutout FX control groups ---
 
 
-def _core_cutout_control_groups(
-    include_source_group: bool,
-) -> list[tuple[str, str, list[ControlSpec]]]:
+def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
   """Builds the Inspector control groups for the Paper Cutout FX effect.
 
   Positions and offsets are in Fusion normalized frame space (0..1, origin
   bottom-left, 0.5 = center); sizes such as `BorderSize` are fractions of
-  frame width; angles are degrees; durations are frames.
-
-  Args:
-    include_source_group: True to add the `MediaSourceMode` combo (legacy
-      generator layout); False for the Edit effect, which always uses the
-      clip it is applied to.
+  frame width; angles are degrees; durations are frames. The Edit effect
+  always uses the clip it is applied to, so there is no media-source picker.
 
   Returns:
     Ordered `(group_id, group_title, controls)` tuples. Group IDs and control
     IDs are referenced by expressions and must stay stable.
   """
   groups: list[tuple[str, str, list[ControlSpec]]] = []
-  if include_source_group:
-    groups.append((
-        "MediaSourceGroup",
-        "1. Media Source and Placement",
-        [
-            ControlSpec(
-                control_id="MediaSourceMode",
-                label="Source Mode",
-                input_control="ComboControl",
-                default=0,
-                min_scale=0,
-                max_scale=2,
-                min_allowed=0,
-                max_allowed=2,
-                integer=True,
-                combo_options=(
-                    "Built-in Demo Sticker",
-                    "Media Pool Drop Zone",
-                    "File Browser (PNG or Clip)",
-                ),
-            ),
-            ControlSpec(
-                "ClipScale",
-                "Media Scale",
-                default=0.78,
-                min_scale=0.1,
-                max_scale=2.5,
-                min_allowed=0.05,
-                max_allowed=5.0,
-                center=1.0,
-            ),
-            ControlSpec(
-                "ClipCenterX",
-                "Media Offset X",
-                default=0.5,
-                min_scale=0.0,
-                max_scale=1.0,
-                center=0.5,
-            ),
-            ControlSpec(
-                "ClipCenterY",
-                "Media Offset Y",
-                default=0.5,
-                min_scale=0.0,
-                max_scale=1.0,
-                center=0.5,
-            ),
-            ControlSpec(
-                "ClipAngle",
-                "Media Rotation",
-                default=0.0,
-                min_scale=-180.0,
-                max_scale=180.0,
-                center=0.0,
-            ),
-        ],
-    ))
-  else:
-    groups.append((
-        "MediaSourceGroup",
-        "1. Media Placement",
-        [
-            ControlSpec(
-                "ClipScale",
-                "Media Scale",
-                default=0.88,
-                min_scale=0.1,
-                max_scale=2.5,
-                min_allowed=0.05,
-                max_allowed=5.0,
-                center=1.0,
-            ),
-            ControlSpec(
-                "ClipCenterX",
-                "Media Offset X",
-                default=0.5,
-                min_scale=0.0,
-                max_scale=1.0,
-                center=0.5,
-            ),
-            ControlSpec(
-                "ClipCenterY",
-                "Media Offset Y",
-                default=0.5,
-                min_scale=0.0,
-                max_scale=1.0,
-                center=0.5,
-            ),
-            ControlSpec(
-                "ClipAngle",
-                "Media Rotation",
-                default=0.0,
-                min_scale=-180.0,
-                max_scale=180.0,
-                center=0.0,
-            ),
-        ],
-    ))
+  groups.append((
+      "MediaSourceGroup",
+      "1. Media Placement",
+      [
+          ControlSpec(
+              "ClipScale",
+              "Media Scale",
+              default=0.88,
+              min_scale=0.1,
+              max_scale=2.5,
+              min_allowed=0.05,
+              max_allowed=5.0,
+              center=1.0,
+          ),
+          ControlSpec(
+              "ClipCenterX",
+              "Media Offset X",
+              default=0.5,
+              min_scale=0.0,
+              max_scale=1.0,
+              center=0.5,
+          ),
+          ControlSpec(
+              "ClipCenterY",
+              "Media Offset Y",
+              default=0.5,
+              min_scale=0.0,
+              max_scale=1.0,
+              center=0.5,
+          ),
+          ControlSpec(
+              "ClipAngle",
+              "Media Rotation",
+              default=0.0,
+              min_scale=-180.0,
+              max_scale=180.0,
+              center=0.0,
+          ),
+      ],
+  ))
 
   groups.extend([
       (
@@ -1539,7 +1475,7 @@ def build_effect_setting() -> str:
     Complete `.setting` file contents (UTF-8 text, trailing newline).
   """
   macro_name = "PaperCutoutFX"
-  groups = _core_cutout_control_groups(include_source_group=False)
+  groups = _core_cutout_control_groups()
   default_open = ("MediaSourceGroup", "PaperBorderGroup", "TransitionGroup")
   group_defaults = _render_group_defaults(groups, default_open)
   user_controls = _render_user_controls(groups, default_open)
@@ -1627,7 +1563,19 @@ def _expr(name: str, value: str, expression: str) -> str:
 
   Returns:
     One `<name> = Input { Value = ..., Expression = "...", },` row.
+
+  Raises:
+    ValueError: If `expression` is empty/blank or contains a double quote,
+      which would end the unescaped Lua string early and corrupt the
+      `.setting` file.
   """
+  if not expression.strip():
+    raise ValueError(f"Empty SimpleExpression for input {name!r}.")
+  if '"' in expression:
+    raise ValueError(
+        f"SimpleExpression for input {name!r} must not contain '\"': "
+        f"{expression}"
+    )
   return f'{name} = Input {{ Value = {value}, Expression = "{expression}", }},'
 
 

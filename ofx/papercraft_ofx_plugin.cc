@@ -54,6 +54,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -231,14 +232,23 @@ struct PluginInstance {
 // Threading: the context lives on the stack of the parallel_for lambda in
 // HandleRender(). multiThread() blocks until every worker returns, so the
 // pointer stays valid for the whole dispatch. Workers only modify `next_row`
-// (atomically); the other fields are read-only once dispatch starts.
+// (atomically) and their own claimed entries of `chunk_done`; the other
+// fields are read-only once dispatch starts.
 struct ParallelDispatchContext {
   // Next row not yet claimed by any worker.
   std::atomic<int> next_row{0};
+  // First row of the dispatch; chunk k covers rows
+  // [y_start + k * chunk, y_start + (k + 1) * chunk).
+  int y_start = 0;
   // Exclusive end row of the dispatch.
   int y_end = 0;
   // Rows claimed per fetch_add.
   int chunk = 1;
+  // One flag per chunk, set after every row of that chunk has run. If
+  // multiThread() fails midway, the serial fallback skips finished chunks
+  // and redoes the rest (including chunks a worker claimed but did not
+  // finish). Owned by the caller of parallel_for.
+  std::atomic<bool>* chunk_done = nullptr;
   // Per-row kernel callback. Must be safe to run concurrently for different
   // rows; it is owned by the caller of parallel_for.
   const std::function<void(int y)>* row_fn = nullptr;
@@ -246,10 +256,12 @@ struct ParallelDispatchContext {
 
 // OfxThreadFunctionV1 run on each thread spawned by the host's multiThread().
 // Repeatedly claims `chunk` rows and runs `row_fn` on them until all rows are
-// taken. `thread_index` is unused because work is pulled dynamically instead
-// of split into fixed slices. Relaxed ordering is enough: fetch_add only has
-// to hand out disjoint row ranges, and multiThread() joins all workers before
-// the caller reads the output image.
+// taken, marking each chunk in `chunk_done` once it is complete.
+// `thread_index` is unused because work is pulled dynamically instead of
+// split into fixed slices. Relaxed ordering is enough for fetch_add, which
+// only has to hand out disjoint row ranges; the release store on
+// `chunk_done` pairs with the fallback's acquire load (multiThread() also
+// joins all workers before the caller reads the output image).
 void ParallelThreadWorker(unsigned int /*thread_index*/,
                           unsigned int thread_max, void* custom_arg) {
   auto* ctx = static_cast<ParallelDispatchContext*>(custom_arg);
@@ -265,6 +277,10 @@ void ParallelThreadWorker(unsigned int /*thread_index*/,
     const int end = std::min(ctx->y_end, begin + ctx->chunk);
     for (int y = begin; y < end; ++y) {
       (*ctx->row_fn)(y);
+    }
+    if (ctx->chunk_done != nullptr) {
+      ctx->chunk_done[(begin - ctx->y_start) / ctx->chunk].store(
+          true, std::memory_order_release);
     }
   }
 }
@@ -1287,13 +1303,14 @@ void ReadRgbParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
 }
 
 // Builds the kernel's CutoutParams for frame `time`. The defaults passed to
-// each reader must match DefineCutoutParameters(). `render_scale_x` is the
-// host's proxy scale (1.0 = full resolution, 0.5 = half-res preview); it
-// converts pixel-unit parameters so the look matches across preview and final
-// renders. Also reads the clip's frame range, which the kernel needs to time
-// intro/outro animations.
+// each reader must match DefineCutoutParameters(). `render_scale_x` and
+// `render_scale_y` are the host's proxy scale per axis (1.0 = full
+// resolution, 0.5 = half-res preview); they convert pixel-unit parameters so
+// the look matches across preview and final renders. Also reads the clip's
+// frame range, which the kernel needs to time intro/outro animations.
 CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
-                              OfxTime time, double render_scale_x) {
+                              OfxTime time, double render_scale_x,
+                              double render_scale_y) {
   CutoutParams cp;
   cp.source_mode = ReadIntParam(s, inst.source_mode, time, 0);
   cp.source_is_premultiplied =
@@ -1309,9 +1326,15 @@ CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
   cp.key_gain = ReadFloatParam(s, inst.key_gain, time, 1.0f);
   cp.key_balance = ReadFloatParam(s, inst.key_balance, time, 0.5f);
   // Edge choke is entered in full-resolution pixels; scale it to the render
-  // resolution. The 0.05 floor guards against a zero or garbage scale.
+  // resolution. The choke is a single isotropic radius, so with a non-uniform
+  // render scale (X != Y) use the geometric mean of both axes: it keeps the
+  // eroded area proportional to the proxy's pixel area and equals the common
+  // scale when X == Y. Each axis gets a 0.05 floor first, which guards
+  // against a zero, negative or NaN scale (std::max returns 0.05 for NaN).
+  const double choke_scale = std::sqrt(std::max(0.05, render_scale_x) *
+                                       std::max(0.05, render_scale_y));
   cp.edge_choke_px = ReadFloatParam(s, inst.edge_choke_px, time, 0.0f) *
-                     static_cast<float>(std::max(0.05, render_scale_x));
+                     static_cast<float>(choke_scale);
 
   cp.enable_border = ReadBoolParam(s, inst.enable_border, time, true);
   cp.border_width_norm = ReadFloatParam(s, inst.border_width, time, 0.018f);
@@ -1628,8 +1651,9 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
   // instead when there is no thread suite, we are already on a thread the
   // host spawned (nested multiThread calls are not allowed), the job is
   // under 16 rows (thread start-up would cost more), or only one worker
-  // would be used. If multiThread() fails, all rows are re-run serially;
-  // row_fn only writes its own output row, so repeating rows is safe.
+  // would be used. If multiThread() fails (possibly after some workers ran),
+  // only chunks not marked complete are run serially; row_fn only writes its
+  // own output row, so redoing rows of a partly finished chunk is safe.
   ParallelRowsFn parallel_for = [&](int y_start, int y_end,
                                     const std::function<void(int y)>& row_fn) {
     const int total = y_end - y_start;
@@ -1655,15 +1679,27 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
     }
     ParallelDispatchContext ctx;
     ctx.next_row.store(y_start, std::memory_order_relaxed);
+    ctx.y_start = y_start;
     ctx.y_end = y_end;
     // About 8 chunks per worker: small enough to balance uneven rows, large
     // enough to keep atomic contention low.
     ctx.chunk = std::max(1, total / static_cast<int>(workers * 8));
+    const int num_chunks = (total + ctx.chunk - 1) / ctx.chunk;
+    // make_unique<T[]> value-initializes, so every flag starts false.
+    auto chunk_done = std::make_unique<std::atomic<bool>[]>(num_chunks);
+    ctx.chunk_done = chunk_done.get();
     ctx.row_fn = &row_fn;
     if (s.thread->multiThread(ParallelThreadWorker, workers, &ctx) !=
         kOfxStatOK) {
-      for (int y = y_start; y < y_end; ++y) {
-        row_fn(y);
+      for (int c = 0; c < num_chunks; ++c) {
+        if (chunk_done[c].load(std::memory_order_acquire)) {
+          continue;
+        }
+        const int begin = y_start + c * ctx.chunk;
+        const int end = std::min(y_end, begin + ctx.chunk);
+        for (int y = begin; y < end; ++y) {
+          row_fn(y);
+        }
       }
     }
   };
@@ -1709,7 +1745,8 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
     return kOfxStatOK;
   }
 
-  CutoutParams cp = ReadCutoutParams(s, *inst, time, render_scale[0]);
+  CutoutParams cp =
+      ReadCutoutParams(s, *inst, time, render_scale[0], render_scale[1]);
   ScopedOfxImage src_guard(s.effect);
   // Stays an empty view when there is no source image or in sticker mode
   // (source_mode 1); RenderCutoutFrame() accepts an empty source.
