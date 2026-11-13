@@ -26,6 +26,8 @@ Cloning `la-matatena/mttn-papercraft-studio` provides every source file, test, h
 | `ofx/papercraft_kernel.h` and `ofx/papercraft_kernel.cc` | Platform-independent C++17 paper cutout, SDF border, intro and outro animation, fold and unfold renderer, and compositing kernels |
 | `ofx/papercraft_ofx_plugin.cc` | OpenFX 1.4 registration of the filter and transition, parameters, suites, and multi-thread dispatch |
 | `ofx/papercraft_ofx_test.cc` | GoogleTest OpenFX mock host and `dlopen` dynamic plugin test suite |
+| `ofx/papercraft_kernel_internal.h` and `ofx/papercraft_kernel_test.cc` | Internal kernel helpers exposed for tests (hidden from the plugin exports) and the direct kernel unit test suite |
+| `ofx/run_cpp_tests.sh` and `ofx/testing/gtest_lite/` | One-command build and run of both C++ suites, with a minimal GoogleTest stand-in (`--lite`) for machines without GoogleTest |
 | `ofx/openfx_include/` | Vendored OpenFX 1.4 C headers and license |
 | `ofx/Info.plist` and `ofx/openfx_sym.lds` | macOS bundle metadata and Linux symbol export version script |
 | `ofx/Install_PaperCraft_OpenFX_macOS.command`, `ofx/Uninstall_PaperCraft_OpenFX_macOS.command`, and `ofx/install_linux_ofx.sh` | OS-specific installers and uninstaller for macOS and Linux x86-64 |

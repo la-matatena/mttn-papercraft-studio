@@ -611,6 +611,7 @@ class PapercraftReleaseTest(absltest.TestCase):
         names,
     )
     self.assertIn("OpenFX_Source/papercraft_ofx_plugin.cc", names)
+    self.assertIn("OpenFX_Source/papercraft_kernel_internal.h", names)
     self.assertIn("OpenFX_Source/openfx_include/ofxImageEffect.h", names)
 
   def test_full_zip_ships_four_wavs_and_credits(self):
@@ -659,6 +660,11 @@ class PapercraftReleaseTest(absltest.TestCase):
         "papercraft_pro/ofx/papercraft_kernel.cc",
         "papercraft_pro/ofx/papercraft_ofx_plugin.cc",
         "papercraft_pro/ofx/papercraft_ofx_test.cc",
+        "papercraft_pro/ofx/papercraft_kernel_internal.h",
+        "papercraft_pro/ofx/papercraft_kernel_test.cc",
+        "papercraft_pro/ofx/run_cpp_tests.sh",
+        "papercraft_pro/ofx/testing/gtest_lite/gtest/gtest.h",
+        "papercraft_pro/ofx/testing/gtest_lite/gtest_lite_main.cc",
         "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
         "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
         "papercraft_pro/ofx/install_linux_ofx.sh",
@@ -693,6 +699,7 @@ class PapercraftReleaseTest(absltest.TestCase):
           "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/ofx/install_linux_ofx.sh",
+          "papercraft_pro/ofx/run_cpp_tests.sh",
           "papercraft_pro/release/Install_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/release/Uninstall_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/release/install_linux_ofx.sh",

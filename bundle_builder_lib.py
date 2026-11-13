@@ -117,6 +117,10 @@ _REPO_EXTRA_OFX_FILES = (
     "Uninstall_PaperCraft_OpenFX_macOS.command",
     "install_linux_ofx.sh",
     "papercraft_ofx_test.cc",
+    "papercraft_kernel_test.cc",
+    "run_cpp_tests.sh",
+    "testing/gtest_lite/gtest/gtest.h",
+    "testing/gtest_lite/gtest_lite_main.cc",
 )
 
 
