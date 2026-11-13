@@ -98,10 +98,19 @@ main() {
   elif [[ "${mode}" == "user" ]]; then
     dest_dir="${HOME}/Library/OFX/Plugins"
   fi
+  # -bundle builds a loadable Mach-O bundle; hidden visibility plus the two
+  # -exported_symbol flags export only the OpenFX entry points, so internal
+  # C++ symbols cannot clash with Resolve's own libraries. Built before the
+  # dry-run exit so --dry-run prints exactly the flags a real build uses.
+  local -a common_flags=(
+    -std=c++17 -O3 -fPIC -bundle -fvisibility=hidden -mmacosx-version-min=11.0
+    -DPAPERCRAFT_STANDALONE_OFX "-I${src_dir}" "-I${src_dir}/openfx_include"
+    -Wl,-exported_symbol,_OfxGetNumberOfPlugins -Wl,-exported_symbol,_OfxGetPlugin
+  )
   if [[ "${dry_run}" == "true" ]]; then
     echo "[dry-run] Source directory: ${src_dir}"
     echo "[dry-run] Target OpenFX directory: ${dest_dir}/${BUNDLE_NAME}"
-    echo "[dry-run] Compiler flags: clang++ -std=c++17 -O3 -fPIC -bundle -fvisibility=hidden -DPAPERCRAFT_STANDALONE_OFX -Wl,-exported_symbol,_OfxGetNumberOfPlugins -Wl,-exported_symbol,_OfxGetPlugin"
+    echo "[dry-run] Compiler flags: clang++ ${common_flags[*]}"
     exit 0
   fi
   if ! command -v clang++ >/dev/null 2>&1; then
@@ -118,14 +127,6 @@ main() {
   cp "${src_dir}/Info.plist" "${bundle_dir}/Contents/Info.plist"
   cp "${src_dir}/openfx_include/LICENSE" "${bundle_dir}/Contents/Resources/LICENSE"
 
-  # -bundle builds a loadable Mach-O bundle; hidden visibility plus the two
-  # -exported_symbol flags export only the OpenFX entry points, so internal
-  # C++ symbols cannot clash with Resolve's own libraries.
-  local -a common_flags=(
-    -std=c++17 -O3 -fPIC -bundle -fvisibility=hidden -mmacosx-version-min=11.0
-    -DPAPERCRAFT_STANDALONE_OFX "-I${src_dir}" "-I${src_dir}/openfx_include"
-    -Wl,-exported_symbol,_OfxGetNumberOfPlugins -Wl,-exported_symbol,_OfxGetPlugin
-  )
   local -a srcs=("${src_dir}/papercraft_kernel.cc" "${src_dir}/papercraft_ofx_plugin.cc")
   local bin_out="${bundle_dir}/Contents/MacOS/${BINARY_NAME}"
   local build_log="${tmp_dir}/universal_build.log"
