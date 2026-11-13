@@ -477,10 +477,9 @@ void DefineCutoutParameters(const HostSuites& s, OfxParamSetHandle param_set) {
                    "1. Media Source & Placement", true);
   constexpr std::array<const char*, 2> kSourceModes = {
       "Timeline Clip", "Built-in Paper Sticker"};
-  DefineChoiceParam(s, param_set, "sourceMode", "Source Mode",
-                    "MediaSourceGroup",
-                    "Use the timeline clip or a procedural demo sticker.",
-                    0, kSourceModes);
+  DefineChoiceParam(
+      s, param_set, "sourceMode", "Source Mode", "MediaSourceGroup",
+      "Use the timeline clip or a procedural demo sticker.", 0, kSourceModes);
   DefineBoolParam(s, param_set, "sourcePremult", "Premultiplied Source Alpha",
                   "MediaSourceGroup",
                   "Disable only if footage has straight/unpremultiplied alpha.",
@@ -659,10 +658,9 @@ void DefineFoldTransitionParameters(const HostSuites& s,
   constexpr std::array<const char*, 4> kActions = {
       "Auto (Unfold In / Fold Out)", "Unfold Incoming Clip",
       "Fold Outgoing Clip", "Fold Out, Then Unfold In"};
-  DefineChoiceParam(
-      s, param_set, "foldAction", "Fold Action", "FoldGroup",
-      "Auto unfolds at the start of a clip and folds at its end.", 0,
-      kActions);
+  DefineChoiceParam(s, param_set, "foldAction", "Fold Action", "FoldGroup",
+                    "Auto unfolds at the start of a clip and folds at its end.",
+                    0, kActions);
   constexpr std::array<const char*, 4> kPatterns = {
       "Craft Flaps", "Map Grid", "Accordion", "Origami Corners"};
   DefineChoiceParam(s, param_set, "foldPattern", "Fold Pattern", "FoldGroup",
@@ -683,14 +681,13 @@ void DefineFoldTransitionParameters(const HostSuites& s,
       kOfxParamDoubleTypePlain, 0.6, 0.0, 2.0, 0.0, 1.5);
   DefineBoolParam(s, param_set, "mirrorTransH", "Mirror Horizontal",
                   "FoldGroup", "Mirror the fold layout left/right.", false);
-  DefineBoolParam(s, param_set, "mirrorTransV", "Mirror Vertical",
-                  "FoldGroup", "Mirror the fold layout top/bottom.", false);
+  DefineBoolParam(s, param_set, "mirrorTransV", "Mirror Vertical", "FoldGroup",
+                  "Mirror the fold layout top/bottom.", false);
 
   DefineGroupParam(s, param_set, "PaperGroup", "2. Paper Look", true);
-  DefineBoolParam(s, param_set, "enableBorder", "Torn Paper Border",
-                  "PaperGroup",
-                  "Torn cardstock collar shown while the sheet is folded.",
-                  true);
+  DefineBoolParam(
+      s, param_set, "enableBorder", "Torn Paper Border", "PaperGroup",
+      "Torn cardstock collar shown while the sheet is folded.", true);
   DefineDoubleParam(s, param_set, "borderWidth", "Border Width", "PaperGroup",
                     "Cardstock collar width around the clip.",
                     kOfxParamDoubleTypePlain, 0.018, 0.0, 0.15, 0.0, 0.06);
@@ -702,9 +699,9 @@ void DefineFoldTransitionParameters(const HostSuites& s,
                     kOfxParamDoubleTypePlain, 24.0, 1.0, 120.0, 2.0, 60.0);
   DefineRgbParam(s, param_set, "paperColor", "Paper Color", "PaperGroup",
                  "Color of the paper back and collar.", 0.965, 0.945, 0.895);
-  DefineDoubleParam(s, param_set, "grainStrength", "Paper Grain",
-                    "PaperGroup", "Cardstock fiber grain depth.",
-                    kOfxParamDoubleTypePlain, 0.38, 0.0, 1.0, 0.0, 1.0);
+  DefineDoubleParam(s, param_set, "grainStrength", "Paper Grain", "PaperGroup",
+                    "Cardstock fiber grain depth.", kOfxParamDoubleTypePlain,
+                    0.38, 0.0, 1.0, 0.0, 1.0);
   DefineDoubleParam(s, param_set, "creaseStrength", "Crease Strength",
                     "PaperGroup", "Crumple texture and fold-line creases.",
                     kOfxParamDoubleTypePlain, 0.52, 0.0, 1.0, 0.0, 1.0);
@@ -799,9 +796,9 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
   const bool is_transition = role == PluginRole::kFoldTransition;
   const char* label = is_transition ? "Paper Fold & Unfold" : "Paper Cutout FX";
   const char* short_label = is_transition ? "PaperFold" : "PaperCutout";
-  const char* long_label =
-      is_transition ? "MTTN PaperCraft Studio: Paper Fold & Unfold"
-                    : "MTTN PaperCraft Studio: Paper Cutout FX";
+  const char* long_label = is_transition
+                               ? "MTTN PaperCraft Studio: Paper Fold & Unfold"
+                               : "MTTN PaperCraft Studio: Paper Cutout FX";
   const char* desc =
       is_transition
           ? "Stop-motion paper transition: clips unfold from a folded packet "
@@ -1069,7 +1066,7 @@ OfxStatus HandleDestroyInstance(PluginRole role, OfxImageEffectHandle effect) {
 }
 
 // ---------------------------------------------------------------------------
-// Clip preferences and regions of interest.
+// Clip preferences.
 // ---------------------------------------------------------------------------
 
 // Returns the depth this plugin would like for input `clip`: the clip's
@@ -1131,12 +1128,12 @@ OfxStatus HandleGetClipPreferences(PluginRole role, OfxImageEffectHandle effect,
                 "OfxImageClipPropDepth_Source"},
       InputClip{nullptr, nullptr, nullptr}};
   if (role == PluginRole::kFoldTransition) {
-    inputs = {InputClip{inst->source_from_clip,
-                        "OfxImageClipPropComponents_SourceFrom",
-                        "OfxImageClipPropDepth_SourceFrom"},
-              InputClip{inst->source_to_clip,
-                        "OfxImageClipPropComponents_SourceTo",
-                        "OfxImageClipPropDepth_SourceTo"}};
+    inputs = {
+        InputClip{inst->source_from_clip,
+                  "OfxImageClipPropComponents_SourceFrom",
+                  "OfxImageClipPropDepth_SourceFrom"},
+        InputClip{inst->source_to_clip, "OfxImageClipPropComponents_SourceTo",
+                  "OfxImageClipPropDepth_SourceTo"}};
   }
   std::array<const char*, 2> clip_depths = {nullptr, nullptr};
   const char* depth = nullptr;
@@ -1168,64 +1165,15 @@ OfxStatus HandleGetClipPreferences(PluginRole role, OfxImageEffectHandle effect,
   return kOfxStatOK;
 }
 
-// kOfxImageEffectActionGetRegionsOfInterest: asks for the whole region of
-// definition of every input, because folds, torn collars, shadows and the
-// master transform can sample any source pixel for any output pixel. RoDs
-// (canonical coordinates) that look degenerate or unbounded are skipped:
-// empty, larger than 16384 per side, or beyond +/-1e7 (what hosts report for
-// infinite generators). If no clip gets a RoI, kOfxStatReplyDefault lets the
-// host use its default.
-OfxStatus HandleGetRegionsOfInterest(PluginRole role,
-                                     OfxImageEffectHandle effect,
-                                     OfxPropertySetHandle in_args,
-                                     OfxPropertySetHandle out_args) {
-  const HostSuites& s = MutableSuites(role);
-  PluginInstance* inst = GetInstance(s, effect);
-  if (inst == nullptr || in_args == nullptr || out_args == nullptr) {
-    return kOfxStatReplyDefault;
-  }
-
-  double time = 0.0;
-  s.prop->propGetDouble(in_args, kOfxPropTime, 0, &time);
-
-  bool set_any = false;
-  auto request_full_clip = [&](OfxImageClipHandle clip, const char* roi_prop) {
-    if (clip == nullptr) {
-      return;
-    }
-    OfxRectD rod = {0.0, 0.0, 0.0, 0.0};
-    if (s.effect->clipGetRegionOfDefinition(clip, time, &rod) != kOfxStatOK) {
-      return;
-    }
-    const double w = rod.x2 - rod.x1;
-    const double h = rod.y2 - rod.y1;
-    if (w > 0.0 && h > 0.0 && w <= 16384.0 && h <= 16384.0 && rod.x1 > -1e7 &&
-        rod.y1 > -1e7 && rod.x2 < 1e7 && rod.y2 < 1e7) {
-      const double vals[4] = {rod.x1, rod.y1, rod.x2, rod.y2};
-      if (s.prop->propSetDoubleN(out_args, roi_prop, 4, vals) == kOfxStatOK) {
-        set_any = true;
-      }
-    }
-  };
-
-  if (role == PluginRole::kFoldTransition) {
-    request_full_clip(inst->source_from_clip, "OfxImageClipPropRoI_SourceFrom");
-    request_full_clip(inst->source_to_clip, "OfxImageClipPropRoI_SourceTo");
-  } else {
-    request_full_clip(inst->source_clip, "OfxImageClipPropRoI_Source");
-  }
-  return set_any ? kOfxStatOK : kOfxStatReplyDefault;
-}
-
 // ---------------------------------------------------------------------------
 // Parameter readers.
 //
 // Each reader samples a parameter at host time `time` (frames) with
 // paramGetValueAtTime(), so keyframed values animate. They return the given
 // default when the handle is nullptr (parameter not bound) or the host call
-// fails, so render never sees uninitialized values. Called from render and
-// isIdentity, which may run on several host threads at once; the parameter
-// suite allows concurrent reads during render.
+// fails, so render never sees uninitialized values. Called from render,
+// isIdentity and getRegionsOfInterest, which may run on several host threads
+// at once; the parameter suite allows concurrent reads during render.
 // ---------------------------------------------------------------------------
 
 // Reads an integer, boolean or choice parameter (all are ints in OpenFX).
@@ -1439,11 +1387,10 @@ PaperFoldTransitionParams ReadFoldTransitionParams(const HostSuites& s,
 
   tp.enable_border = ReadBoolParam(s, inst.enable_border, time, true);
   tp.border_width_norm = ReadFloatParam(s, inst.border_width, time, 0.018f);
-  tp.tear_roughness_norm =
-      ReadFloatParam(s, inst.tear_roughness, time, 0.012f);
+  tp.tear_roughness_norm = ReadFloatParam(s, inst.tear_roughness, time, 0.012f);
   tp.tear_frequency = ReadFloatParam(s, inst.tear_frequency, time, 24.0f);
-  ReadRgbParam(s, inst.paper_color, time, &tp.paper_r, &tp.paper_g,
-               &tp.paper_b, 0.965f, 0.945f, 0.895f);
+  ReadRgbParam(s, inst.paper_color, time, &tp.paper_r, &tp.paper_g, &tp.paper_b,
+               0.965f, 0.945f, 0.895f);
   tp.grain_strength = ReadFloatParam(s, inst.grain_strength, time, 0.38f);
   tp.crease_strength = ReadFloatParam(s, inst.crease_strength, time, 0.52f);
   tp.random_seed = ReadIntParam(s, inst.random_seed, time, 7);
@@ -1460,6 +1407,141 @@ PaperFoldTransitionParams ReadFoldTransitionParams(const HostSuites& s,
   tp.shadow_softness_norm =
       ReadFloatParam(s, inst.shadow_softness, time, 0.020f);
   return tp;
+}
+
+// ---------------------------------------------------------------------------
+// Regions of interest.
+// ---------------------------------------------------------------------------
+
+// Returns whether the Cutout filter reads its Source clip for `source_mode`
+// (the "sourceMode" choice). Only Timeline Clip (0) samples the source; the
+// Built-in Paper Sticker (1) is fully procedural, including its SDF, because
+// the kernel's BuildSubjectTransform() switches to the demo sticker. Shared
+// by HandleGetRegionsOfInterest and HandleRender so the RoI never declares a
+// clip unused that render would still fetch.
+bool CutoutReadsSourceClip(int source_mode) { return source_mode == 0; }
+
+// Which transition inputs one frame reads.
+struct TransitionClipUse {
+  bool from = true;  // SourceFrom (outgoing clip).
+  bool to = true;    // SourceTo (incoming clip).
+};
+
+// Returns which inputs RenderPaperFoldTransition() can read for `tp` at
+// stepped progress `p` (from ComputeSteppedTransitionProgress(tp)). Mirrors
+// the kernel exactly:
+//   - p == 0 copies SourceFrom unchanged; p == 1 copies SourceTo.
+//   - A forced Fold & Unfold (Fold Action 3, clamped like the kernel) has no
+//     `under` clip: the first half (p < 0.5) folds SourceFrom away, the
+//     second half (p >= 0.5) unfolds SourceTo.
+//   - Auto inspects both clips to pick an action, and forced Unfold In /
+//     Fold Out draw the other clip underneath, so both are needed.
+// Shared by HandleGetRegionsOfInterest and HandleRender.
+TransitionClipUse TransitionClipsUsed(const PaperFoldTransitionParams& tp,
+                                      float p) {
+  TransitionClipUse use;
+  if (p <= 0.0f) {
+    use.to = false;
+  } else if (p >= 1.0f) {
+    use.from = false;
+  } else if (std::min(3, std::max(0, tp.fold_action)) ==
+             static_cast<int>(FoldTransitionAction::kFoldAndUnfold)) {
+    use.from = p < 0.5f;
+    use.to = !use.from;
+  }
+  return use;
+}
+
+// kOfxImageEffectActionGetRegionsOfInterest: asks for the whole region of
+// definition of every input the frame at kOfxPropTime will read, and an
+// empty RoI for inputs it will not read.
+//
+// Used inputs get their full frame, not a window around the render window:
+// the plugin declares kOfxImageEffectPropSupportsTiles = 0, so hosts always
+// render the whole output, and the kernel's algorithms are global anyway
+// (matte SDF, InspectClipContent, BuildCleanCutoutAlpha, and folds, torn
+// collars, shadows and the media/master transforms can sample any source
+// pixel for any output pixel). RoDs (canonical coordinates) that look
+// degenerate or unbounded are skipped: empty, larger than 16384 per side, or
+// beyond +/-1e7 (what hosts report for infinite generators).
+//
+// Unused inputs (Cutout in Built-in Paper Sticker mode; the hidden side of a
+// transition at p == 0 / p == 1 or in either half of a forced Fold &
+// Unfold) get a zero-area RoI (0, 0, 0, 0). The OpenFX headers do not define
+// a special "not needed" value, but an empty region is the convention hosts
+// use to skip fetching, decoding and rendering the upstream nodes of that
+// input. Render never fetches those clips (see CutoutReadsSourceClip and
+// TransitionClipsUsed), and it treats a missing image as transparent, so a
+// host that ignores the empty RoI is still handled. Parameters are read at
+// the action's time with the same readers HandleRender uses. If no clip
+// gets a RoI, kOfxStatReplyDefault lets the host use its default.
+OfxStatus HandleGetRegionsOfInterest(PluginRole role,
+                                     OfxImageEffectHandle effect,
+                                     OfxPropertySetHandle in_args,
+                                     OfxPropertySetHandle out_args) {
+  const HostSuites& s = MutableSuites(role);
+  PluginInstance* inst = GetInstance(s, effect);
+  if (inst == nullptr || in_args == nullptr || out_args == nullptr) {
+    return kOfxStatReplyDefault;
+  }
+
+  double time = 0.0;
+  s.prop->propGetDouble(in_args, kOfxPropTime, 0, &time);
+
+  bool set_any = false;
+  auto request_empty_clip = [&](OfxImageClipHandle clip, const char* roi_prop) {
+    if (clip == nullptr) {
+      return;
+    }
+    const double vals[4] = {0.0, 0.0, 0.0, 0.0};
+    if (s.prop->propSetDoubleN(out_args, roi_prop, 4, vals) == kOfxStatOK) {
+      set_any = true;
+    }
+  };
+  auto request_full_clip = [&](OfxImageClipHandle clip, const char* roi_prop) {
+    if (clip == nullptr) {
+      return;
+    }
+    OfxRectD rod = {0.0, 0.0, 0.0, 0.0};
+    if (s.effect->clipGetRegionOfDefinition(clip, time, &rod) != kOfxStatOK) {
+      return;
+    }
+    const double w = rod.x2 - rod.x1;
+    const double h = rod.y2 - rod.y1;
+    if (w > 0.0 && h > 0.0 && w <= 16384.0 && h <= 16384.0 && rod.x1 > -1e7 &&
+        rod.y1 > -1e7 && rod.x2 < 1e7 && rod.y2 < 1e7) {
+      const double vals[4] = {rod.x1, rod.y1, rod.x2, rod.y2};
+      if (s.prop->propSetDoubleN(out_args, roi_prop, 4, vals) == kOfxStatOK) {
+        set_any = true;
+      }
+    }
+  };
+
+  // Picks the full or the empty request for one input.
+  auto request_clip = [&](bool used, OfxImageClipHandle clip,
+                          const char* roi_prop) {
+    if (used) {
+      request_full_clip(clip, roi_prop);
+    } else {
+      request_empty_clip(clip, roi_prop);
+    }
+  };
+
+  if (role == PluginRole::kFoldTransition) {
+    const PaperFoldTransitionParams tp =
+        ReadFoldTransitionParams(s, *inst, time);
+    const TransitionClipUse use =
+        TransitionClipsUsed(tp, ComputeSteppedTransitionProgress(tp));
+    request_clip(use.from, inst->source_from_clip,
+                 "OfxImageClipPropRoI_SourceFrom");
+    request_clip(use.to, inst->source_to_clip, "OfxImageClipPropRoI_SourceTo");
+  } else {
+    // Same reader and default as ReadCutoutParams().
+    const int source_mode = ReadIntParam(s, inst->source_mode, time, 0);
+    request_clip(CutoutReadsSourceClip(source_mode), inst->source_clip,
+                 "OfxImageClipPropRoI_Source");
+  }
+  return set_any ? kOfxStatOK : kOfxStatReplyDefault;
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,9 +1795,9 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
     // Source Alpha" override for clips that are really straight alpha.
     auto fetch = [&](OfxImageClipHandle clip, ScopedOfxImage* guard,
                      ImageView* view) {
-      if (clip == nullptr || s.effect->clipGetImage(clip, time, nullptr,
-                                                    &guard->handle) !=
-                                 kOfxStatOK) {
+      if (clip == nullptr ||
+          s.effect->clipGetImage(clip, time, nullptr, &guard->handle) !=
+              kOfxStatOK) {
         return true;
       }
       bool wrong_fmt = false;
@@ -1733,11 +1815,12 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
     ScopedOfxImage to_guard(s.effect);
     ImageView from_view;
     ImageView to_view;
-    // Skip fetching a clip that the stepped progress fully hides
-    // (p == 1 hides SourceFrom, p == 0 hides SourceTo).
-    if ((p < 1.0f &&
-         !fetch(inst->source_from_clip, &from_guard, &from_view)) ||
-        (p > 0.0f && !fetch(inst->source_to_clip, &to_guard, &to_view))) {
+    // Skip fetching a clip the frame does not read (the hidden side at
+    // p == 0 / p == 1 or in either half of a forced Fold & Unfold); the RoI
+    // action already told the host it is not needed.
+    const TransitionClipUse use = TransitionClipsUsed(tp, p);
+    if ((use.from && !fetch(inst->source_from_clip, &from_guard, &from_view)) ||
+        (use.to && !fetch(inst->source_to_clip, &to_guard, &to_view))) {
       return kOfxStatErrImageFormat;
     }
     RenderPaperFoldTransition(tp, from_view, to_view, out_view, canvas_bounds,
@@ -1748,10 +1831,11 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
   CutoutParams cp =
       ReadCutoutParams(s, *inst, time, render_scale[0], render_scale[1]);
   ScopedOfxImage src_guard(s.effect);
-  // Stays an empty view when there is no source image or in sticker mode
-  // (source_mode 1); RenderCutoutFrame() accepts an empty source.
+  // Stays an empty view when there is no source image, when the image is
+  // unusable, or in sticker mode (see CutoutReadsSourceClip; its RoI was
+  // empty); RenderCutoutFrame() accepts an empty source.
   ImageView src_view;
-  if (inst->source_clip != nullptr && cp.source_mode == 0) {
+  if (inst->source_clip != nullptr && CutoutReadsSourceClip(cp.source_mode)) {
     if (s.effect->clipGetImage(inst->source_clip, time, nullptr,
                                &src_guard.handle) == kOfxStatOK) {
       bool src_wrong_fmt = false;
@@ -1763,6 +1847,9 @@ OfxStatus HandleRender(PluginRole role, OfxImageEffectHandle effect,
         }
       } else if (src_wrong_fmt) {
         return kOfxStatErrImageFormat;
+      } else {
+        // ExtractImageView() may have filled some fields before failing.
+        src_view = ImageView{};
       }
     }
   }
@@ -1845,8 +1932,7 @@ void SetHostFoldTransition(OfxHost* host) {
 OfxStatus MainEntryCutout(const char* action, const void* handle,
                           OfxPropertySetHandle in_args,
                           OfxPropertySetHandle out_args) {
-  return DispatchAction(PluginRole::kCutout, action, handle, in_args,
-                        out_args);
+  return DispatchAction(PluginRole::kCutout, action, handle, in_args, out_args);
 }
 
 OfxStatus MainEntryFoldTransition(const char* action, const void* handle,

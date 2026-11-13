@@ -5,9 +5,10 @@ Run from the repository root (also run by `.github/workflows/ci-release.yml`):
   python3 -B papercraft_pro_test.py -v
 
 Uses absltest when available and falls back to `unittest` with a small shim
-for the absltest-only helpers. The end-to-end test builds a full release in
-a temp directory and also checks that relative Markdown links in the shipped
-docs resolve inside the Complete Repo ZIP; a separate test checks those docs
+for the absltest-only helpers. `PapercraftReleaseTest` builds one full
+release per class in a temp directory and checks it in focused tests: output
+paths, ZIP members and file modes, relative Markdown links inside the Complete
+Repo ZIP, and the extracted Linux installer. A separate test checks those docs
 plus `AGENTS.md` on disk, including `#anchor` targets. The installer tests
 need `/bin/bash`.
 """
@@ -47,7 +48,9 @@ except ImportError:
       self.addCleanup(td.cleanup)
       return types.SimpleNamespace(full_path=td.name)
 
-  absltest = types.SimpleNamespace(TestCase=_FallbackTestCase, main=unittest.main)
+  absltest = types.SimpleNamespace(
+      TestCase=_FallbackTestCase, main=unittest.main
+  )
 
 try:
   # Internal monorepo import path; falls back to sibling modules when run
@@ -61,6 +64,68 @@ except ImportError:
   import drfx_validator  # type: ignore[no-redef]
   import fusion_templates  # type: ignore[no-redef]
   import png_renderer  # type: ignore[no-redef]
+
+
+def _eval_simple_expr(expr, macro, t, render_end, **ctrl_vals):
+  """Evaluates a Fusion SimpleExpression as Python at frame `t`.
+
+  The SimpleExpressions under test only use `iif`, `min`, `max`, `and`, and
+  attribute access, a subset Python can run once those names are provided.
+
+  Args:
+    expr: SimpleExpression string.
+    macro: Macro name the expression reads controls from.
+    t: Current frame (`time`).
+    render_end: `comp.RenderEnd`; `comp.RenderStart` is 0.
+    **ctrl_vals: Macro control values, e.g. `IntroFrames=10`.
+
+  Returns:
+    The evaluated value.
+  """
+  env = {
+      "__builtins__": {},
+      "iif": lambda c, a, b: a if c else b,
+      "min": min,
+      "max": max,
+      "comp": types.SimpleNamespace(RenderStart=0, RenderEnd=render_end),
+      "time": t,
+      macro: types.SimpleNamespace(**ctrl_vals),
+  }
+  return eval(expr, env)  # pylint: disable=eval-used
+
+
+def _github_slugs(md_text):
+  """Returns the set of GitHub heading anchors for Markdown text.
+
+  Mirrors GitHub's rules: lowercase, drop punctuation except `-` and `_`,
+  spaces become `-`, and repeated headings get `-1`, `-2`, ... suffixes.
+  Headings inside fenced code blocks are ignored.
+
+  Args:
+    md_text: Markdown source.
+
+  Returns:
+    Anchor slugs (without the leading `#`).
+  """
+  slugs = set()
+  seen: dict[str, int] = {}
+  in_fence = False
+  for line in md_text.splitlines():
+    if line.lstrip().startswith(("```", "~~~")):
+      in_fence = not in_fence
+      continue
+    if in_fence:
+      continue
+    match = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
+    if not match:
+      continue
+    # Keep only the visible text of inline links/images.
+    title = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", match.group(1))
+    slug = re.sub(r"[^\w\- ]", "", title.lower()).replace(" ", "-")
+    count = seen.get(slug, 0)
+    seen[slug] = count + 1
+    slugs.add(slug if count == 0 else f"{slug}-{count}")
+  return slugs
 
 
 class PapercraftProTest(absltest.TestCase):
@@ -93,8 +158,14 @@ class PapercraftProTest(absltest.TestCase):
     self.assertIn("PaperFoldTransition = MacroOperator", text)
     self.assertIn("MainInput2 = InstanceInput", text)
     # Each fold panel is masked, given a paper back, and swung on a DVE.
-    for node in ("LeftPanelMask", "LeftBack", "LeftSwing", "RightSwing",
-                 "PacketShadow", "ExactBoundaryClamp"):
+    for node in (
+        "LeftPanelMask",
+        "LeftBack",
+        "LeftSwing",
+        "RightSwing",
+        "PacketShadow",
+        "ExactBoundaryClamp",
+    ):
       self.assertIn(f"\t\t\t\t{node} = ", text)
     self.assertIn('Source = "Mask"', text)
     drfx_validator.validate_setting_syntax_and_graph(text, "transition")
@@ -120,8 +191,10 @@ class PapercraftProTest(absltest.TestCase):
             "Edit/Effects/MTTN PaperCraft Studio/Paper Cutout FX.png",
             "Edit/Effects/MTTN PaperCraft Studio/Paper Cutout FX.setting",
             "Edit/Transitions/MTTN PaperCraft Studio/Paper Fold & Unfold.png",
-            "Edit/Transitions/MTTN PaperCraft Studio/"
-            "Paper Fold & Unfold.setting",
+            (
+                "Edit/Transitions/MTTN PaperCraft Studio/"
+                "Paper Fold & Unfold.setting"
+            ),
         ],
     )
     drfx_bytes = bundle_builder_lib._write_deterministic_zip(entries)  # pylint: disable=protected-access
@@ -217,175 +290,6 @@ class PapercraftProTest(absltest.TestCase):
         or "Nothing to remove." in uninstall_proc.stdout
     )
 
-  def test_end_to_end_bundle_creation(self):
-    """A full release builds, has the right members, modes, and links.
-
-    Uses a mock Linux `.ofx` when no compiled binary exists, then also runs
-    the extracted Linux installer into a nested, not-yet-existing folder.
-    """
-    scratch_dir = self.create_tempdir().full_path
-    tmp_dir = os.path.join(scratch_dir, "out")
-    pkg_dir = os.path.dirname(os.path.abspath(__file__))
-    default_ofx = os.path.join(pkg_dir, "PaperCraftStudioPro.ofx")
-    linux_ofx_override = None
-    if not os.path.isfile(default_ofx):
-      linux_ofx_override = os.path.join(scratch_dir, "PaperCraftStudioPro.ofx")
-      with open(linux_ofx_override, "wb") as f:
-        f.write(b"\x7fELF-mock-ofx-binary")
-    out = bundle_builder_lib.build_and_write_release(
-        output_dir=tmp_dir,
-        export_unpacked=True,
-        linux_ofx_path=linux_ofx_override,
-    )
-    self.assertTrue(os.path.isfile(out["drfx"]))
-    self.assertTrue(os.path.isfile(out["full_zip"]))
-    self.assertTrue(os.path.isfile(out["repo_zip"]))
-    self.assertTrue(os.path.isdir(out["ofx_bundle"]))
-    self.assertTrue(os.path.isdir(out["docs_dir"]))
-    self.assertTrue(os.path.isfile(out["macos_installer"]))
-    self.assertTrue(os.path.isfile(out["linux_installer"]))
-
-    with open(out["drfx"], "rb") as f:
-      drfx_validator.validate_drfx_bytes(f.read())
-
-    with zipfile.ZipFile(out["full_zip"], "r") as zf:
-      names = set(zf.namelist())
-      self.assertIn("MTTN_PaperCraft_Studio.drfx", names)
-      self.assertIn("LICENSE", names)
-      self.assertIn("README.md", names)
-      self.assertIn("docs/design_doc.md", names)
-      self.assertIn("docs/user_guide.md", names)
-      self.assertIn("docs/developer_guide.md", names)
-      self.assertIn("docs/images/paper_fold_unfold.png", names)
-      self.assertTrue(
-          zf.read("docs/images/paper_fold_unfold.png").startswith(
-              b"\x89PNG\r\n\x1a\n"
-          )
-      )
-      self.assertIn("Install_PaperCraft_OpenFX_macOS.command", names)
-      self.assertIn("Uninstall_PaperCraft_OpenFX_macOS.command", names)
-      self.assertIn("install_linux_ofx.sh", names)
-      self.assertIn("PaperCraftStudioPro.ofx.bundle/Contents/Info.plist", names)
-      self.assertIn(
-          "PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
-          names,
-      )
-      self.assertIn("OpenFX_Source/papercraft_ofx_plugin.cc", names)
-      self.assertIn("OpenFX_Source/openfx_include/ofxImageEffect.h", names)
-      wav_members = [
-          n for n in names if n.startswith("Paper_SFX/") and n.endswith(".wav")
-      ]
-      self.assertLen(wav_members, 4)
-      self.assertIn("Paper_SFX/CREDITS.md", names)
-
-      for exe_member in (
-          "Install_PaperCraft_OpenFX_macOS.command",
-          "Uninstall_PaperCraft_OpenFX_macOS.command",
-          "install_linux_ofx.sh",
-          "PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
-      ):
-        mode = (zf.getinfo(exe_member).external_attr >> 16) & 0o777
-        self.assertEqual(mode, 0o755, msg=f"Bad permissions on {exe_member}")
-
-    with zipfile.ZipFile(out["repo_zip"], "r") as rzf:
-      rnames = set(rzf.namelist())
-      expected_repo_entries = (
-          "papercraft_pro/BUILD",
-          "papercraft_pro/LICENSE",
-          "papercraft_pro/README.md",
-          "papercraft_pro/docs/design_doc.md",
-          "papercraft_pro/docs/user_guide.md",
-          "papercraft_pro/docs/developer_guide.md",
-          "papercraft_pro/docs/images/paper_fold_unfold.png",
-          "papercraft_pro/build_papercraft_bundle.py",
-          "papercraft_pro/bundle_builder_lib.py",
-          "papercraft_pro/drfx_validator.py",
-          "papercraft_pro/fusion_templates.py",
-          "papercraft_pro/papercraft_pro_test.py",
-          "papercraft_pro/png_renderer.py",
-          "papercraft_pro/Paper_SFX/CREDITS.md",
-          "papercraft_pro/ofx/Info.plist",
-          "papercraft_pro/ofx/openfx_sym.lds",
-          "papercraft_pro/ofx/papercraft_kernel.h",
-          "papercraft_pro/ofx/papercraft_kernel.cc",
-          "papercraft_pro/ofx/papercraft_ofx_plugin.cc",
-          "papercraft_pro/ofx/papercraft_ofx_test.cc",
-          "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
-          "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
-          "papercraft_pro/ofx/install_linux_ofx.sh",
-          "papercraft_pro/ofx/openfx_include/ofxCore.h",
-          "papercraft_pro/release/MTTN_PaperCraft_Studio.drfx",
-          "papercraft_pro/release/PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
-      )
-      for member in expected_repo_entries:
-        self.assertIn(member, rnames)
-        self.assertNotEmpty(rzf.read(member), msg=f"Empty entry {member}")
-
-      release_wavs = [
-          n
-          for n in rnames
-          if n.startswith("papercraft_pro/release/Paper_SFX/")
-          and n.endswith(".wav")
-      ]
-      self.assertLen(release_wavs, 4)
-      self.assertIn("papercraft_pro/release/Paper_SFX/CREDITS.md", rnames)
-
-      for exe_member in (
-          "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
-          "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
-          "papercraft_pro/ofx/install_linux_ofx.sh",
-          "papercraft_pro/release/Install_PaperCraft_OpenFX_macOS.command",
-          "papercraft_pro/release/Uninstall_PaperCraft_OpenFX_macOS.command",
-          "papercraft_pro/release/install_linux_ofx.sh",
-          "papercraft_pro/release/PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
-      ):
-        mode = (rzf.getinfo(exe_member).external_attr >> 16) & 0o777
-        self.assertEqual(mode, 0o755, msg=f"Bad permissions on {exe_member}")
-
-      # Every relative Markdown link in shipped docs must point at a member
-      # of the repo ZIP. Only the path is checked here; `#anchor` parts are
-      # checked against headings by `test_markdown_links_and_anchors_resolve`.
-      for md_entry in (
-          "papercraft_pro/README.md",
-          "papercraft_pro/README.en.md",
-          "papercraft_pro/Paper_SFX/CREDITS.md",
-          "papercraft_pro/docs/design_doc.md",
-          "papercraft_pro/docs/user_guide.md",
-          "papercraft_pro/docs/developer_guide.md",
-      ):
-        md_text = rzf.read(md_entry).decode("utf-8")
-        md_dir = os.path.dirname(md_entry)
-        for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", md_text):
-          if target.startswith(("http://", "https://", "mailto:", "#")):
-            continue
-          clean_target = target.split("#", 1)[0]
-          resolved = os.path.normpath(os.path.join(md_dir, clean_target))
-          self.assertIn(
-              resolved,
-              rnames,
-              msg=f"Broken relative link {target!r} in {md_entry}",
-          )
-
-    nested_dest = os.path.join(
-        tmp_dir, "nested_missing_parent", "OFX", "Plugins"
-    )
-    # The installer must create missing parent directories for --dest.
-    subprocess.run(
-        ["/bin/bash", out["linux_installer"], "--dest", nested_dest],
-        check=True,
-    )
-    self.assertTrue(
-        os.path.isfile(
-            os.path.join(
-                nested_dest,
-                "PaperCraftStudioPro.ofx.bundle",
-                "Contents",
-                "Linux-x86-64",
-                "PaperCraftStudioPro.ofx",
-            )
-        )
-    )
-
   def test_validator_rejects_truncated_png_with_value_error(self):
     """Thumbnails shorter than the 24-byte IHDR header raise ValueError."""
     entries = bundle_builder_lib.build_drfx_entries()
@@ -398,65 +302,44 @@ class PapercraftProTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "Truncated PNG"):
           drfx_validator.validate_drfx_bytes(drfx_bytes)
 
-  def test_active_trans_style_matches_anim_progress(self):
-    """The chosen intro/outro style agrees with the progress ramp in use.
-
-    The SimpleExpressions are evaluated as Python: their syntax (`iif`,
-    `min`, `max`, `and`, attribute access) is a subset Python can run once
-    those names are provided.
-    """
+  def test_active_trans_style_ignores_zero_intro_frames(self):
+    """IntroFrames == 0 never selects IntroStyle, even at RenderStart."""
     macro = "PaperCutoutFX"
     prog_expr = fusion_templates._anim_progress_expr(macro)  # pylint: disable=protected-access
     style_expr = fusion_templates._active_trans_style_expr(macro)  # pylint: disable=protected-access
+    ctrls = dict(IntroStyle=2, IntroFrames=0, OutroStyle=3, OutroFrames=10)
+    for t, expected_prog in ((0, 1.0), (25, 0.5)):
+      with self.subTest(t=t):
+        self.assertEqual(
+            _eval_simple_expr(style_expr, macro, t, 30, **ctrls), 3
+        )
+        self.assertAlmostEqual(
+            _eval_simple_expr(prog_expr, macro, t, 30, **ctrls), expected_prog
+        )
 
-    def eval_expr(expr, t, render_end, **ctrl_vals):
-      """Evaluates `expr` at frame `t` on a comp spanning 0..render_end.
-
-      Args:
-        expr: SimpleExpression string.
-        t: Current frame (`time`).
-        render_end: `comp.RenderEnd`; `comp.RenderStart` is 0.
-        **ctrl_vals: Macro control values, e.g. `IntroFrames=10`.
-
-      Returns:
-        The evaluated value.
-      """
-      env = {
-          "__builtins__": {},
-          "iif": lambda c, a, b: a if c else b,
-          "min": min,
-          "max": max,
-          "comp": types.SimpleNamespace(RenderStart=0, RenderEnd=render_end),
-          "time": t,
-          macro: types.SimpleNamespace(**ctrl_vals),
-      }
-      return eval(expr, env)  # pylint: disable=eval-used
-
-    # IntroFrames == 0 must never select IntroStyle even at RenderStart.
-    for t in (0, 25):
-      ctrls = dict(IntroStyle=2, IntroFrames=0, OutroStyle=3, OutroFrames=10)
-      self.assertEqual(eval_expr(style_expr, t, 30, **ctrls), 3)
-      expected_prog = 1.0 if t == 0 else 0.5
-      self.assertAlmostEqual(
-          eval_expr(prog_expr, t, 30, **ctrls), expected_prog
-      )
-
+  def test_active_trans_style_matches_anim_progress(self):
+    """With overlapping windows the style follows the active progress ramp."""
+    macro = "PaperCutoutFX"
+    prog_expr = fusion_templates._anim_progress_expr(macro)  # pylint: disable=protected-access
+    style_expr = fusion_templates._active_trans_style_expr(macro)  # pylint: disable=protected-access
     # Overlapping intro/outro windows on a 10-frame comp.
     overlap_ctrls = dict(
         IntroStyle=1, IntroFrames=10, OutroStyle=4, OutroFrames=10
     )
-    self.assertAlmostEqual(
-        eval_expr(prog_expr, 2, 10, **overlap_ctrls), 0.2
-    )
-    self.assertEqual(eval_expr(style_expr, 2, 10, **overlap_ctrls), 1)
-    self.assertAlmostEqual(
-        eval_expr(prog_expr, 5, 10, **overlap_ctrls), 0.5
-    )
-    self.assertEqual(eval_expr(style_expr, 5, 10, **overlap_ctrls), 1)
-    self.assertAlmostEqual(
-        eval_expr(prog_expr, 8, 10, **overlap_ctrls), 0.2
-    )
-    self.assertEqual(eval_expr(style_expr, 8, 10, **overlap_ctrls), 4)
+    for t, expected_prog, expected_style in (
+        (2, 0.2, 1),
+        (5, 0.5, 1),
+        (8, 0.2, 4),
+    ):
+      with self.subTest(t=t):
+        self.assertAlmostEqual(
+            _eval_simple_expr(prog_expr, macro, t, 10, **overlap_ctrls),
+            expected_prog,
+        )
+        self.assertEqual(
+            _eval_simple_expr(style_expr, macro, t, 10, **overlap_ctrls),
+            expected_style,
+        )
 
   def test_deterministic_zip_pins_deflate_level(self):
     """Every ZIP entry is compressed with the pinned DEFLATE level 6."""
@@ -476,39 +359,6 @@ class PapercraftProTest(absltest.TestCase):
       )
     self.assertEqual(levels, [6, 6])
     self.assertEqual(bundle_builder_lib._ZIP_DEFLATE_LEVEL, 6)  # pylint: disable=protected-access
-
-  def test_release_lists_license_and_reads_docs_once(self):
-    """LICENSE is in the returned paths and docs/SFX are read only once."""
-    scratch_dir = self.create_tempdir().full_path
-    linux_ofx = os.path.join(scratch_dir, "PaperCraftStudioPro.ofx")
-    with open(linux_ofx, "wb") as f:
-      f.write(b"\x7fELF-mock-ofx-binary")
-    with mock.patch.object(
-        bundle_builder_lib,
-        "build_doc_entries",
-        wraps=bundle_builder_lib.build_doc_entries,
-    ) as doc_spy, mock.patch.object(
-        bundle_builder_lib,
-        "build_sfx_entries",
-        wraps=bundle_builder_lib.build_sfx_entries,
-    ) as sfx_spy:
-      out = bundle_builder_lib.build_and_write_release(
-          output_dir=os.path.join(scratch_dir, "out"),
-          linux_ofx_path=linux_ofx,
-      )
-    self.assertEqual(doc_spy.call_count, 1)
-    self.assertEqual(sfx_spy.call_count, 1)
-    self.assertIn("license", out)
-    pkg_dir = os.path.dirname(os.path.abspath(__file__))
-    with open(out["license"], "rb") as got, open(
-        os.path.join(pkg_dir, "LICENSE"), "rb"
-    ) as want:
-      self.assertEqual(got.read(), want.read())
-    # The repo ZIP still carries the docs and SFX that were read once.
-    with zipfile.ZipFile(out["repo_zip"], "r") as rzf:
-      rnames = set(rzf.namelist())
-    self.assertIn("papercraft_pro/docs/user_guide.md", rnames)
-    self.assertIn("papercraft_pro/Paper_SFX/01_Paper_Unfold.wav", rnames)
 
   def test_wav_validator_checks_every_channel_edge(self):
     """A click on the right channel only is rejected, as is short data."""
@@ -534,9 +384,7 @@ class PapercraftProTest(absltest.TestCase):
         if i == 0:
           right = first_right
         for val in (left, right):
-          frames += int(round(val * 8388607)).to_bytes(
-              3, "little", signed=True
-          )
+          frames += int(round(val * 8388607)).to_bytes(3, "little", signed=True)
       buf = io.BytesIO()
       with wave.open(buf, "wb") as wav_out:
         wav_out.setnchannels(2)
@@ -581,9 +429,7 @@ class PapercraftProTest(absltest.TestCase):
     )
     self.assertNotEqual(empty_expr, valid)
     with self.assertRaisesRegex(ValueError, "Empty SimpleExpression"):
-      drfx_validator.validate_setting_syntax_and_graph(
-          empty_expr, "transition"
-      )
+      drfx_validator.validate_setting_syntax_and_graph(empty_expr, "transition")
 
   def test_unknown_thumbnail_variant_raises(self):
     """An unknown thumbnail variant raises instead of drawing a blank card."""
@@ -596,40 +442,10 @@ class PapercraftProTest(absltest.TestCase):
     with self.assertRaisesRegex(ValueError, "Unsupported template_kind"):
       drfx_validator.validate_setting_syntax_and_graph(text, "generator")
 
-  def test_markdown_links_and_anchors_resolve(self):
-    """Relative links in docs and AGENTS.md hit real files and headings.
-
-    `#anchor` fragments must match a heading slug computed with GitHub's
-    rules: lowercase, drop punctuation except `-` and `_`, spaces become
-    `-`, and repeated headings get `-1`, `-2`, ... suffixes. Headings inside
-    fenced code blocks are ignored.
-    """
-
-    def github_slugs(md_text):
-      """Returns the set of GitHub heading anchors for Markdown text."""
-      slugs = set()
-      seen: dict[str, int] = {}
-      in_fence = False
-      for line in md_text.splitlines():
-        if line.lstrip().startswith(("```", "~~~")):
-          in_fence = not in_fence
-          continue
-        if in_fence:
-          continue
-        match = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
-        if not match:
-          continue
-        # Keep only the visible text of inline links/images.
-        title = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", match.group(1))
-        slug = re.sub(r"[^\w\- ]", "", title.lower()).replace(" ", "-")
-        count = seen.get(slug, 0)
-        seen[slug] = count + 1
-        slugs.add(slug if count == 0 else f"{slug}-{count}")
-      return slugs
-
-    # Slug rules on headings that exercise punctuation and backticks.
+  def test_github_slug_rules(self):
+    """Heading slugs drop punctuation, number repeats, and skip fences."""
     self.assertEqual(
-        github_slugs(
+        _github_slugs(
             "## What's next\n"
             "### Python `.drfx`, Foley WAV, installer, and link suite\n"
             "```\n# not a heading\n```\n"
@@ -642,9 +458,15 @@ class PapercraftProTest(absltest.TestCase):
         },
     )
 
+  def test_markdown_links_and_anchors_resolve(self):
+    """Relative links in docs and AGENTS.md hit real files and headings.
+
+    `#anchor` fragments must match a heading slug from `_github_slugs`
+    (rules covered by `test_github_slug_rules`). Each Markdown file is its
+    own subTest so a failure names the file.
+    """
     pkg_dir = os.path.dirname(os.path.abspath(__file__))
     slug_cache: dict[str, set[str]] = {}
-    broken = []
     for md_rel in (
         "AGENTS.md",
         "README.md",
@@ -654,33 +476,337 @@ class PapercraftProTest(absltest.TestCase):
         "docs/user_guide.md",
         "docs/developer_guide.md",
     ):
-      md_path = os.path.join(pkg_dir, md_rel)
-      with open(md_path, "r", encoding="utf-8") as f:
-        md_text = f.read()
-      for target in re.findall(r"\[[^\]]+\]\(([^)\s]+)[^)]*\)", md_text):
-        if target.startswith(("http://", "https://", "mailto:")):
-          continue
-        path_part, _, anchor = target.partition("#")
-        md_dir = os.path.dirname(md_path)
-        resolved = (
-            os.path.normpath(os.path.join(md_dir, path_part))
-            if path_part
-            else md_path
+      with self.subTest(md=md_rel):
+        broken = []
+        md_path = os.path.join(pkg_dir, md_rel)
+        with open(md_path, "r", encoding="utf-8") as f:
+          md_text = f.read()
+        for target in re.findall(r"\[[^\]]+\]\(([^)\s]+)[^)]*\)", md_text):
+          if target.startswith(("http://", "https://", "mailto:")):
+            continue
+          path_part, _, anchor = target.partition("#")
+          md_dir = os.path.dirname(md_path)
+          resolved = (
+              os.path.normpath(os.path.join(md_dir, path_part))
+              if path_part
+              else md_path
+          )
+          if not os.path.exists(resolved):
+            broken.append(f"{md_rel}: missing file in {target!r}")
+            continue
+          if not anchor:
+            continue
+          if not resolved.endswith(".md"):
+            broken.append(f"{md_rel}: anchor on non-Markdown {target!r}")
+            continue
+          if resolved not in slug_cache:
+            with open(resolved, "r", encoding="utf-8") as f:
+              slug_cache[resolved] = _github_slugs(f.read())
+          if anchor not in slug_cache[resolved]:
+            broken.append(f"{md_rel}: no heading for anchor in {target!r}")
+        self.assertEqual(broken, [])
+
+
+class PapercraftReleaseTest(absltest.TestCase):
+  """Focused checks on one full release, built once per class.
+
+  `setUpClass` builds the release into a class-wide temp directory (removed in
+  `tearDownClass`) with a mock Linux `.ofx` when no compiled binary exists.
+  The build runs with spies on `build_doc_entries` and `build_sfx_entries` so
+  the read-once check reuses it instead of building a second release. Tests
+  must treat the release as read-only; the installer test writes outside it.
+
+  Attributes:
+    scratch_dir: Class temp dir holding the release and installer targets.
+    out: Paths returned by `build_and_write_release`.
+    doc_reads: `build_doc_entries` call count during the build.
+    sfx_reads: `build_sfx_entries` call count during the build.
+  """
+
+  @classmethod
+  def setUpClass(cls):
+    """Builds the shared release; cleans up the temp dir if that fails."""
+    super().setUpClass()
+    # Class-level temp dir: absltest's create_tempdir and the fallback shim
+    # are per-test, so the shared build manages its own directory.
+    cls._tmp = tempfile.TemporaryDirectory()
+    try:
+      cls.scratch_dir = cls._tmp.name
+      pkg_dir = os.path.dirname(os.path.abspath(__file__))
+      linux_ofx_override = None
+      if not os.path.isfile(os.path.join(pkg_dir, "PaperCraftStudioPro.ofx")):
+        linux_ofx_override = os.path.join(
+            cls.scratch_dir, "PaperCraftStudioPro.ofx"
         )
-        if not os.path.exists(resolved):
-          broken.append(f"{md_rel}: missing file in {target!r}")
-          continue
-        if not anchor:
-          continue
-        if not resolved.endswith(".md"):
-          broken.append(f"{md_rel}: anchor on non-Markdown {target!r}")
-          continue
-        if resolved not in slug_cache:
-          with open(resolved, "r", encoding="utf-8") as f:
-            slug_cache[resolved] = github_slugs(f.read())
-        if anchor not in slug_cache[resolved]:
-          broken.append(f"{md_rel}: no heading for anchor in {target!r}")
-    self.assertEqual(broken, [])
+        with open(linux_ofx_override, "wb") as f:
+          f.write(b"\x7fELF-mock-ofx-binary")
+      with mock.patch.object(
+          bundle_builder_lib,
+          "build_doc_entries",
+          wraps=bundle_builder_lib.build_doc_entries,
+      ) as doc_spy, mock.patch.object(
+          bundle_builder_lib,
+          "build_sfx_entries",
+          wraps=bundle_builder_lib.build_sfx_entries,
+      ) as sfx_spy:
+        cls.out = bundle_builder_lib.build_and_write_release(
+            output_dir=os.path.join(cls.scratch_dir, "out"),
+            export_unpacked=True,
+            linux_ofx_path=linux_ofx_override,
+        )
+      cls.doc_reads = doc_spy.call_count
+      cls.sfx_reads = sfx_spy.call_count
+    except BaseException:
+      # tearDownClass does not run when setUpClass raises.
+      cls._tmp.cleanup()
+      raise
+
+  @classmethod
+  def tearDownClass(cls):
+    """Removes the shared release temp dir."""
+    cls._tmp.cleanup()
+    super().tearDownClass()
+
+  def test_release_writes_every_output_path(self):
+    """Every always-written output path exists with the right kind."""
+    for key, exists in (
+        ("drfx", os.path.isfile),
+        ("full_zip", os.path.isfile),
+        ("repo_zip", os.path.isfile),
+        ("ofx_bundle", os.path.isdir),
+        ("docs_dir", os.path.isdir),
+        ("macos_installer", os.path.isfile),
+        ("linux_installer", os.path.isfile),
+    ):
+      with self.subTest(key=key):
+        self.assertTrue(exists(self.out[key]))
+
+  def test_written_drfx_validates(self):
+    """The .drfx written to disk passes the structural validator."""
+    with open(self.out["drfx"], "rb") as f:
+      drfx_validator.validate_drfx_bytes(f.read())
+
+  def test_full_zip_ships_drfx_license_and_docs(self):
+    """The Full Bundle ZIP carries the .drfx, LICENSE, README, and docs."""
+    with zipfile.ZipFile(self.out["full_zip"], "r") as zf:
+      names = set(zf.namelist())
+    self.assertIn("MTTN_PaperCraft_Studio.drfx", names)
+    self.assertIn("LICENSE", names)
+    self.assertIn("README.md", names)
+    self.assertIn("docs/design_doc.md", names)
+    self.assertIn("docs/user_guide.md", names)
+    self.assertIn("docs/developer_guide.md", names)
+    self.assertIn("docs/images/paper_fold_unfold.png", names)
+
+  def test_full_zip_docs_image_is_png(self):
+    """The docs image inside the Full Bundle ZIP is a real PNG."""
+    with zipfile.ZipFile(self.out["full_zip"], "r") as zf:
+      self.assertTrue(
+          zf.read("docs/images/paper_fold_unfold.png").startswith(
+              b"\x89PNG\r\n\x1a\n"
+          )
+      )
+
+  def test_full_zip_ships_ofx_bundle_installers_and_source(self):
+    """The Full Bundle ZIP has the installers, OFX bundle, and source."""
+    with zipfile.ZipFile(self.out["full_zip"], "r") as zf:
+      names = set(zf.namelist())
+    self.assertIn("Install_PaperCraft_OpenFX_macOS.command", names)
+    self.assertIn("Uninstall_PaperCraft_OpenFX_macOS.command", names)
+    self.assertIn("install_linux_ofx.sh", names)
+    self.assertIn("PaperCraftStudioPro.ofx.bundle/Contents/Info.plist", names)
+    self.assertIn(
+        "PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
+        names,
+    )
+    self.assertIn("OpenFX_Source/papercraft_ofx_plugin.cc", names)
+    self.assertIn("OpenFX_Source/papercraft_kernel_internal.h", names)
+    self.assertIn("OpenFX_Source/openfx_include/ofxImageEffect.h", names)
+
+  def test_full_zip_ships_four_wavs_and_credits(self):
+    """The Full Bundle ZIP has the four Foley WAVs and their credits."""
+    with zipfile.ZipFile(self.out["full_zip"], "r") as zf:
+      names = set(zf.namelist())
+    wav_members = [
+        n for n in names if n.startswith("Paper_SFX/") and n.endswith(".wav")
+    ]
+    self.assertLen(wav_members, 4)
+    self.assertIn("Paper_SFX/CREDITS.md", names)
+
+  def test_full_zip_executables_are_0755(self):
+    """Installers and the OFX binary in the Full Bundle ZIP are 0o755."""
+    with zipfile.ZipFile(self.out["full_zip"], "r") as zf:
+      for exe_member in (
+          "Install_PaperCraft_OpenFX_macOS.command",
+          "Uninstall_PaperCraft_OpenFX_macOS.command",
+          "install_linux_ofx.sh",
+          "PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
+      ):
+        with self.subTest(member=exe_member):
+          mode = (zf.getinfo(exe_member).external_attr >> 16) & 0o777
+          self.assertEqual(mode, 0o755, msg=f"Bad permissions on {exe_member}")
+
+  def test_full_zip_omits_dev_lint_tooling(self):
+    """The user Full Bundle ZIP ships no lint configs or tools/lint.sh."""
+    dev_only = (
+        ".clang-format",
+        ".clang-format-ignore",
+        ".prettierignore",
+        ".prettierrc.json",
+        ".pylintrc",
+        "pyproject.toml",
+        "tools/lint.sh",
+    )
+    with zipfile.ZipFile(self.out["full_zip"], "r") as zf:
+      names = set(zf.namelist())
+    for member in dev_only:
+      with self.subTest(member=member):
+        self.assertNotIn(member, names)
+    self.assertFalse(any(n.startswith("tools/") for n in names))
+
+  def test_repo_zip_has_expected_nonempty_entries(self):
+    """The Complete Repo ZIP holds every source/release file, non-empty."""
+    expected_repo_entries = (
+        "papercraft_pro/BUILD",
+        "papercraft_pro/LICENSE",
+        "papercraft_pro/README.md",
+        "papercraft_pro/docs/design_doc.md",
+        "papercraft_pro/docs/user_guide.md",
+        "papercraft_pro/docs/developer_guide.md",
+        "papercraft_pro/docs/images/paper_fold_unfold.png",
+        "papercraft_pro/build_papercraft_bundle.py",
+        "papercraft_pro/bundle_builder_lib.py",
+        "papercraft_pro/drfx_validator.py",
+        "papercraft_pro/fusion_templates.py",
+        "papercraft_pro/papercraft_pro_test.py",
+        "papercraft_pro/png_renderer.py",
+        "papercraft_pro/Paper_SFX/CREDITS.md",
+        "papercraft_pro/ofx/Info.plist",
+        "papercraft_pro/ofx/openfx_sym.lds",
+        "papercraft_pro/ofx/papercraft_kernel.h",
+        "papercraft_pro/ofx/papercraft_kernel.cc",
+        "papercraft_pro/ofx/papercraft_ofx_plugin.cc",
+        "papercraft_pro/ofx/papercraft_ofx_test.cc",
+        "papercraft_pro/ofx/papercraft_kernel_internal.h",
+        "papercraft_pro/ofx/papercraft_kernel_test.cc",
+        "papercraft_pro/ofx/run_cpp_tests.sh",
+        "papercraft_pro/ofx/testing/gtest_lite/gtest/gtest.h",
+        "papercraft_pro/ofx/testing/gtest_lite/gtest_lite_main.cc",
+        "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
+        "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
+        "papercraft_pro/ofx/install_linux_ofx.sh",
+        "papercraft_pro/ofx/openfx_include/ofxCore.h",
+        "papercraft_pro/.clang-format",
+        "papercraft_pro/.clang-format-ignore",
+        "papercraft_pro/.pylintrc",
+        "papercraft_pro/pyproject.toml",
+        "papercraft_pro/tools/lint.sh",
+        "papercraft_pro/release/MTTN_PaperCraft_Studio.drfx",
+        "papercraft_pro/release/PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
+    )
+    with zipfile.ZipFile(self.out["repo_zip"], "r") as rzf:
+      rnames = set(rzf.namelist())
+      for member in expected_repo_entries:
+        with self.subTest(member=member):
+          self.assertIn(member, rnames)
+          self.assertNotEmpty(rzf.read(member), msg=f"Empty entry {member}")
+
+  def test_repo_zip_ships_release_wavs_and_credits(self):
+    """The Complete Repo ZIP release folder has four WAVs and credits."""
+    with zipfile.ZipFile(self.out["repo_zip"], "r") as rzf:
+      rnames = set(rzf.namelist())
+    release_wavs = [
+        n
+        for n in rnames
+        if n.startswith("papercraft_pro/release/Paper_SFX/")
+        and n.endswith(".wav")
+    ]
+    self.assertLen(release_wavs, 4)
+    self.assertIn("papercraft_pro/release/Paper_SFX/CREDITS.md", rnames)
+
+  def test_repo_zip_executables_are_0755(self):
+    """Installers and the OFX binary in the Complete Repo ZIP are 0o755."""
+    with zipfile.ZipFile(self.out["repo_zip"], "r") as rzf:
+      for exe_member in (
+          "papercraft_pro/ofx/Install_PaperCraft_OpenFX_macOS.command",
+          "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
+          "papercraft_pro/ofx/install_linux_ofx.sh",
+          "papercraft_pro/ofx/run_cpp_tests.sh",
+          "papercraft_pro/tools/lint.sh",
+          "papercraft_pro/release/Install_PaperCraft_OpenFX_macOS.command",
+          "papercraft_pro/release/Uninstall_PaperCraft_OpenFX_macOS.command",
+          "papercraft_pro/release/install_linux_ofx.sh",
+          "papercraft_pro/release/PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
+      ):
+        with self.subTest(member=exe_member):
+          mode = (rzf.getinfo(exe_member).external_attr >> 16) & 0o777
+          self.assertEqual(mode, 0o755, msg=f"Bad permissions on {exe_member}")
+
+  def test_repo_zip_markdown_links_resolve(self):
+    """Relative Markdown links in the Complete Repo ZIP hit ZIP members."""
+    with zipfile.ZipFile(self.out["repo_zip"], "r") as rzf:
+      rnames = set(rzf.namelist())
+      # Only the path is checked here; `#anchor` parts are checked against
+      # headings by `test_markdown_links_and_anchors_resolve`.
+      for md_entry in (
+          "papercraft_pro/README.md",
+          "papercraft_pro/README.en.md",
+          "papercraft_pro/Paper_SFX/CREDITS.md",
+          "papercraft_pro/docs/design_doc.md",
+          "papercraft_pro/docs/user_guide.md",
+          "papercraft_pro/docs/developer_guide.md",
+      ):
+        with self.subTest(md=md_entry):
+          md_text = rzf.read(md_entry).decode("utf-8")
+          md_dir = os.path.dirname(md_entry)
+          for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", md_text):
+            if target.startswith(("http://", "https://", "mailto:", "#")):
+              continue
+            clean_target = target.split("#", 1)[0]
+            resolved = os.path.normpath(os.path.join(md_dir, clean_target))
+            self.assertIn(
+                resolved,
+                rnames,
+                msg=f"Broken relative link {target!r} in {md_entry}",
+            )
+
+  def test_linux_installer_creates_missing_dest_parents(self):
+    """The extracted Linux installer creates missing `--dest` parents."""
+    # Installed outside the release dir so other tests see it unchanged.
+    nested_dest = os.path.join(
+        self.scratch_dir, "nested_missing_parent", "OFX", "Plugins"
+    )
+    subprocess.run(
+        ["/bin/bash", self.out["linux_installer"], "--dest", nested_dest],
+        check=True,
+    )
+    self.assertTrue(
+        os.path.isfile(
+            os.path.join(
+                nested_dest,
+                "PaperCraftStudioPro.ofx.bundle",
+                "Contents",
+                "Linux-x86-64",
+                "PaperCraftStudioPro.ofx",
+            )
+        )
+    )
+
+  def test_release_lists_license_and_reads_docs_once(self):
+    """LICENSE is in the returned paths and docs/SFX are read only once."""
+    self.assertEqual(self.doc_reads, 1)
+    self.assertEqual(self.sfx_reads, 1)
+    self.assertIn("license", self.out)
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    with open(self.out["license"], "rb") as got, open(
+        os.path.join(pkg_dir, "LICENSE"), "rb"
+    ) as want:
+      self.assertEqual(got.read(), want.read())
+    # The repo ZIP still carries the docs and SFX that were read once.
+    with zipfile.ZipFile(self.out["repo_zip"], "r") as rzf:
+      rnames = set(rzf.namelist())
+    self.assertIn("papercraft_pro/docs/user_guide.md", rnames)
+    self.assertIn("papercraft_pro/Paper_SFX/01_Paper_Unfold.wav", rnames)
 
 
 if __name__ == "__main__":

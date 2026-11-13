@@ -8,6 +8,10 @@ __pycache__/
 .venv/
 venv/
 
+# Dev-only lint tool installs used by tools/lint.sh
+.venv-dev/
+node_modules/
+
 # macOS Finder metadata
 .DS_Store
 ._*

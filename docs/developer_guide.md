@@ -8,6 +8,7 @@ Prepare the following toolchain on Linux or macOS:
 
 - **C++17 compiler**: `g++` on Linux x86-64 (plus `libgtest-dev` for C++ unit tests) or Xcode Command Line Tools `clang++` on macOS.
 - **Scripting and packaging**: Bash and Python 3.10 or later (standard library only; no external `pip` packages required).
+- **Optional lint tools** (development only): the pinned formatters and linters described in [Formatters and linters](#formatters-and-linters).
 
 ## Repository layout
 
@@ -26,6 +27,8 @@ Cloning `la-matatena/mttn-papercraft-studio` provides every source file, test, h
 | `ofx/papercraft_kernel.h` and `ofx/papercraft_kernel.cc` | Platform-independent C++17 paper cutout, SDF border, intro and outro animation, fold and unfold renderer, and compositing kernels |
 | `ofx/papercraft_ofx_plugin.cc` | OpenFX 1.4 registration of the filter and transition, parameters, suites, and multi-thread dispatch |
 | `ofx/papercraft_ofx_test.cc` | GoogleTest OpenFX mock host and `dlopen` dynamic plugin test suite |
+| `ofx/papercraft_kernel_internal.h` and `ofx/papercraft_kernel_test.cc` | Internal kernel helpers exposed for tests (hidden from the plugin exports) and the direct kernel unit test suite |
+| `ofx/run_cpp_tests.sh` and `ofx/testing/gtest_lite/` | One-command build and run of both C++ suites, with a minimal GoogleTest stand-in (`--lite`) for machines without GoogleTest |
 | `ofx/openfx_include/` | Vendored OpenFX 1.4 C headers and license |
 | `ofx/Info.plist` and `ofx/openfx_sym.lds` | macOS bundle metadata and Linux symbol export version script |
 | `ofx/Install_PaperCraft_OpenFX_macOS.command`, `ofx/Uninstall_PaperCraft_OpenFX_macOS.command`, and `ofx/install_linux_ofx.sh` | OS-specific installers and uninstaller for macOS and Linux x86-64 |
@@ -34,6 +37,8 @@ Cloning `la-matatena/mttn-papercraft-studio` provides every source file, test, h
 | `fusion_templates.py` and `drfx_validator.py` | Legacy **Paper Cutout FX** and **Paper Fold & Unfold** `.setting` macro builders and structural validator |
 | `bundle_builder_lib.py` and `build_papercraft_bundle.py` | Deterministic bundle assembler writing `MTTN_PaperCraft_Studio.drfx`, `MTTN_PaperCraft_Studio_Full_Bundle.zip`, and `MTTN_PaperCraft_Studio_Complete_Repo.zip` |
 | `papercraft_pro_test.py` | Python verification suite for assets, `.drfx`, installers, Markdown links and `#anchors` (including `AGENTS.md`), and ZIP packages |
+| `tools/lint.sh` | Dev-only formatter and linter runner (`--fix` applies the formatters). CI runs it in check mode. See [Formatters and linters](#formatters-and-linters) |
+| `pyproject.toml`, `.pylintrc`, `.clang-format`, `.clang-format-ignore`, `.prettierrc.json`, and `.prettierignore` | Formatter and linter configuration used by `tools/lint.sh` |
 
 ## Compile the OpenFX bundle
 
@@ -96,6 +101,17 @@ Replace the following:
 python3 -B papercraft_pro_test.py -v
 ```
 
+### C++ suites with one script
+
+`ofx/run_cpp_tests.sh` builds the plugin binary (the macOS installer with `--build-only`, or the CI `g++` flags on Linux), then compiles and runs both C++ suites: `ofx/papercraft_ofx_test.cc` (mock OpenFX host that loads the built plugin) and `ofx/papercraft_kernel_test.cc` (direct unit tests of the pixel kernels). It exits non-zero on any failure.
+
+```bash
+./ofx/run_cpp_tests.sh
+./ofx/run_cpp_tests.sh --lite
+```
+
+The script uses an installed GoogleTest when it finds one. Otherwise, or with `--lite`, it uses `ofx/testing/gtest_lite`, a tiny GoogleTest stand-in for local runs only. CI always uses real GoogleTest.
+
 ### C++ OpenFX host and rendering suite on Linux
 
 ```bash
@@ -105,6 +121,10 @@ g++ -std=c++17 -O2 -DPAPERCRAFT_STANDALONE_OFX \
   -lgtest -lgtest_main -ldl -lpthread \
   -o papercraft_ofx_test
 PAPERCRAFT_OFX_PATH="$PWD/PaperCraftStudioPro.ofx" ./papercraft_ofx_test
+g++ -std=c++17 -O2 -DPAPERCRAFT_STANDALONE_OFX -Iofx -Iofx/openfx_include \
+  ofx/papercraft_kernel_test.cc ofx/papercraft_kernel.cc \
+  -lgtest -lgtest_main -lpthread -o papercraft_kernel_test
+./papercraft_kernel_test
 ```
 
 ### C++ OpenFX host and rendering suite on macOS
@@ -170,6 +190,41 @@ Write code so a maintainer who has never seen it can follow every file and funct
 - **Comment content**: explain why, not what. Cover units (px, normalized 0..1, frames, degrees), invariants, magic numbers, host quirks, and how generated Fusion SimpleExpressions behave. Long files group code under section banners such as `# --- Section name ---`.
 - **Debt markers**: mark known shortcuts with a `shortcut:` comment and keep existing ones. They form the tracked debt ledger.
 - **Doc-only commits**: never change behavior. Don't rename identifiers, OpenFX parameter IDs, or JSON keys, and don't reorder logic. Use a `docs:` commit, and run `python3 -B papercraft_pro_test.py -v` before you commit.
+
+### Formatters and linters
+
+`tools/lint.sh` enforces the style above automatically. The `lint` job in `ci-release.yml` runs it in check mode on every push and pull request, so a formatting or lint error fails CI. The tools are for development only: the plugin, templates, and bundle builder still need nothing beyond the standard library.
+
+| Language | Tool (pinned version) | Configuration | Files checked |
+| :--- | :--- | :--- | :--- |
+| Python | `pyink` 26.5.1 (formatter) and `pylint` 4.1.3 | `pyproject.toml` (`[tool.pyink]`: 80 columns, 2-space indent, majority quotes) and `.pylintrc` (Google's pylintrc; local changes are marked `# local:`) | `*.py` |
+| C++ | `clang-format` 23.1.5 | `.clang-format` (`BasedOnStyle: Google`) and `.clang-format-ignore` (skips the vendored `ofx/openfx_include/`) | `ofx/*.cc`, `ofx/*.h`, `ofx/testing/` |
+| Shell | `shellcheck` 0.11.0 (from `shellcheck-py` 0.11.0.1) | Inline `# shellcheck disable=...` comments, each with a reason | `ofx/*.command`, `ofx/*.sh`, `tools/*.sh` |
+| CSS | `prettier` 3.10.1 | `.prettierrc.json` and `.prettierignore` | `site/*.css` |
+
+Install the pinned tools into the git-ignored `.venv-dev/` folder once. `tools/lint.sh` adds that folder to `PATH` on its own:
+
+```bash
+python3 -m venv .venv-dev
+.venv-dev/bin/pip install $(tools/lint.sh --pins pip)
+npm install --prefix .venv-dev/node --registry https://registry.npmjs.org/ $(tools/lint.sh --pins npm)
+```
+
+Run the checks, or apply the formatters (`pyink`, `clang-format`, and `prettier`) and then lint:
+
+```bash
+tools/lint.sh
+tools/lint.sh --fix
+```
+
+Keep these rules in mind:
+
+- `pylint` and `shellcheck` findings have no auto-fix. Fix them by hand. If a fix would change behavior, add a targeted inline disable comment (`# pylint: disable=...`, `# shellcheck disable=...`, or `// clang-format off` and `// clang-format on`) with a one-line reason.
+- `pyink` runs with `unstable = true` because its command line ignores `enable-unstable-feature`, and the existing code relies on the `hug_parens_with_braces_and_square_brackets` layout (`foo([` ... `])`). Pin the version, because unstable output can change between releases.
+- `fusion_templates.py` emits the Fusion `.setting` text verbatim from long template strings. The template block disables `line-too-long` because wrapping those lines would change the generated bytes.
+- The landing page HTML (`site/index.html` and `site/en/index.html`) is not auto-formatted. Prettier would reflow the text and add or remove whitespace text nodes, so the DOM would not stay provably identical. ESLint isn't configured because the repository has no JavaScript.
+- Markdown, YAML, `Info.plist`, `openfx_sym.lds`, and generated `.setting` output are not formatted.
+- The lint configs and `tools/lint.sh` ship in `MTTN_PaperCraft_Studio_Complete_Repo.zip`, but not in the user-facing `MTTN_PaperCraft_Studio_Full_Bundle.zip`.
 
 ## What's next
 

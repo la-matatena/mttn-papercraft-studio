@@ -107,6 +107,9 @@ main() {
   local -r dest_binary="${dest_dir}/${BUNDLE_NAME}/Contents/Linux-x86-64/${BINARY_NAME}"
   if [[ -w "${check_dir}" ]]; then
     mkdir -p "${dest_dir}"
+    # BUNDLE_NAME is a non-empty readonly constant, so the path always ends in
+    # the bundle folder and can never expand to "/".
+    # shellcheck disable=SC2115
     rm -rf "${dest_dir}/${BUNDLE_NAME}"
     cp -a "${src_bundle}" "${dest_dir}/"
     chmod 0755 "${dest_binary}"

@@ -102,6 +102,8 @@ main() {
   # -exported_symbol flags export only the OpenFX entry points, so internal
   # C++ symbols cannot clash with Resolve's own libraries. Built before the
   # dry-run exit so --dry-run prints exactly the flags a real build uses.
+  # The commas belong to the -Wl,... linker flags, not array separators.
+  # shellcheck disable=SC2054
   local -a common_flags=(
     -std=c++17 -O3 -fPIC -bundle -fvisibility=hidden -mmacosx-version-min=11.0
     -DPAPERCRAFT_STANDALONE_OFX "-I${src_dir}" "-I${src_dir}/openfx_include"
@@ -157,6 +159,9 @@ main() {
   done
   if [[ -w "${check_dir}" ]]; then
     mkdir -p "${dest_dir}"
+    # BUNDLE_NAME is a non-empty readonly constant, so the path always ends in
+    # the bundle folder and can never expand to "/".
+    # shellcheck disable=SC2115
     rm -rf "${dest_dir}/${BUNDLE_NAME}"
     cp -R "${bundle_dir}" "${dest_dir}/"
   else

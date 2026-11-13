@@ -55,6 +55,7 @@ _OFX_SOURCE_RELPATHS = (
     "Info.plist",
     "openfx_sym.lds",
     "papercraft_kernel.h",
+    "papercraft_kernel_internal.h",
     "papercraft_kernel.cc",
     "papercraft_ofx_plugin.cc",
     "openfx_include/LICENSE",
@@ -109,6 +110,18 @@ _REPO_ROOT_FILES = (
     "png_renderer.py",
 )
 
+# Dev-only style tooling (formatter/linter configs and `tools/lint.sh`) that
+# only the Complete Repo ZIP carries, so `tools/lint.sh` also works from an
+# unpacked repo snapshot. The Full Bundle ZIP never ships these. The Prettier
+# configs are left out because `site/` (the only CSS) is not in the repo ZIP.
+_REPO_DEV_TOOL_FILES = (
+    ".clang-format",
+    ".clang-format-ignore",
+    ".pylintrc",
+    "pyproject.toml",
+    "tools/lint.sh",
+)
+
 # Extra `ofx/` files that only the repo ZIP carries (C++ test, installers in
 # their source location), on top of `_OFX_SOURCE_RELPATHS`.
 _REPO_EXTRA_OFX_FILES = (
@@ -116,6 +129,10 @@ _REPO_EXTRA_OFX_FILES = (
     "Uninstall_PaperCraft_OpenFX_macOS.command",
     "install_linux_ofx.sh",
     "papercraft_ofx_test.cc",
+    "papercraft_kernel_test.cc",
+    "run_cpp_tests.sh",
+    "testing/gtest_lite/gtest/gtest.h",
+    "testing/gtest_lite/gtest_lite_main.cc",
 )
 
 
@@ -274,7 +291,7 @@ def build_ofx_package_entries(
       "PaperCraftStudioPro.ofx.bundle/Contents/Resources/LICENSE": _read_bytes(
           os.path.join(ofx_source_dir, "openfx_include/LICENSE")
       ),
-      "PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx": _read_bytes(
+      "PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx": _read_bytes(  # pylint: disable=line-too-long
           linux_ofx_path
       ),
   }
@@ -338,7 +355,7 @@ def build_repo_source_entries(
     doc_entries: Mapping[str, bytes] | None = None,
     sfx_entries: Mapping[str, bytes] | None = None,
 ) -> dict[str, bytes]:
-  """Collects source, test, build, and doc files for the complete repo ZIP.
+  """Collects source, test, build, lint-config, and doc files for the repo ZIP.
 
   Args:
     pkg_dir: Repository root directory.
@@ -359,7 +376,7 @@ def build_repo_source_entries(
     FileNotFoundError: If any listed repository file is missing.
   """
   entries: dict[str, bytes] = {}
-  for rel in _REPO_ROOT_FILES:
+  for rel in _REPO_ROOT_FILES + _REPO_DEV_TOOL_FILES:
     if rel == "README.md" and readme_override is not None:
       entries[rel] = readme_override.encode("utf-8")
       continue
@@ -489,7 +506,9 @@ def build_and_write_release(
     written_paths["readme_en"] = readme_en_out
 
   license_src = os.path.join(pkg_dir, "LICENSE")
-  license_bytes = _read_bytes(license_src) if os.path.isfile(license_src) else None
+  license_bytes = (
+      _read_bytes(license_src) if os.path.isfile(license_src) else None
+  )
   if license_bytes is not None:
     license_out = os.path.join(output_dir, "LICENSE")
     with open(license_out, "wb") as f:

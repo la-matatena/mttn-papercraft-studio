@@ -248,9 +248,7 @@ def validate_setting_syntax_and_graph(
   # `and`/`or` keywords, so `math.` or C-style operators break evaluation.
   # The pattern accepts empty strings and backslash escapes so an empty or
   # escaped-quote expression is inspected instead of silently skipped.
-  for expr in re.findall(
-      r'Expression\s*=\s*"((?:[^"\\]|\\.)*)"', setting_text
-  ):
+  for expr in re.findall(r'Expression\s*=\s*"((?:[^"\\]|\\.)*)"', setting_text):
     if not expr.strip():
       raise ValueError("Empty SimpleExpression in .setting file.")
     if "math." in expr:
@@ -441,8 +439,7 @@ def validate_wav_bytes(wav_bytes: bytes) -> None:
   peak = max(map(abs, samples)) * scale
   diff_energy = sum(map(abs, map(operator.sub, left, right))) * scale
   edge_levels = [
-      abs(s) * scale
-      for s in samples[:num_channels] + samples[-num_channels:]
+      abs(s) * scale for s in samples[:num_channels] + samples[-num_channels:]
   ]
 
   # Mean over channels and frames, matching the old per-frame 0.5 * (L² + R²).

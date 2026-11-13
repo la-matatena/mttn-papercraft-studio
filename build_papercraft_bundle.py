@@ -106,6 +106,9 @@ def main(argv: Sequence[str]) -> None:
   Raises:
     app.UsageError: On positional arguments or an empty `--output_dir`.
   """
+  # The `_*` flag globals are defined under `if _HAS_ABSL`, and this function
+  # only runs through `absl.app.run`, so they always exist here.
+  # pylint: disable=possibly-used-before-assignment
   if len(argv) > 1:
     raise app.UsageError("Unexpected positional command-line arguments.")
   output_dir = _OUTPUT_DIR.value

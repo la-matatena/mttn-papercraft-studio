@@ -1,0 +1,9 @@
+# Prettier formats only the site stylesheets (see tools/lint.sh and the
+# developer guide). Everything else is excluded on purpose:
+# - *.html: Prettier reflows text and adds/removes whitespace text nodes, so
+#   the DOM is not provably unchanged; the bilingual pages stay hand-formatted.
+# - Markdown, YAML, plist, generated .setting text: not formatted by policy.
+*
+!*/
+!*.css
+ofx/openfx_include/
