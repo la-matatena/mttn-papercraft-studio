@@ -740,8 +740,7 @@ class ScopedMultiThreadFailure {
     g_multithread_after_run_hook = nullptr;
   }
   ScopedMultiThreadFailure(const ScopedMultiThreadFailure&) = delete;
-  ScopedMultiThreadFailure& operator=(const ScopedMultiThreadFailure&) =
-      delete;
+  ScopedMultiThreadFailure& operator=(const ScopedMultiThreadFailure&) = delete;
 };
 
 // multiThread: runs `func` on min(n_threads, 4) real pthreads and joins them
@@ -1220,13 +1219,13 @@ struct RoiReply {
 // "OfxImageClipPropRoI_<clip>" in outArgs is set to that default region
 // before the call. An input the plugin does not touch therefore reads back
 // as the full render region, which is what a real host would fetch.
-RoiReply RequestRegionsOfInterest(const ScopedPluginInstance& pi,
-                                  OfxTime time, int w, int h) {
+RoiReply RequestRegionsOfInterest(const ScopedPluginInstance& pi, OfxTime time,
+                                  int w, int h) {
   MockPropertySet in_args, out_args;
   MockPropSetDouble(ToPropHandle(&in_args), kOfxPropTime, 0, time);
   const double rs[2] = {1.0, 1.0};
-  MockPropSetDoubleN(ToPropHandle(&in_args), kOfxImageEffectPropRenderScale,
-                     2, rs);
+  MockPropSetDoubleN(ToPropHandle(&in_args), kOfxImageEffectPropRenderScale, 2,
+                     rs);
   const double region[4] = {0.0, 0.0, static_cast<double>(w),
                             static_cast<double>(h)};
   MockPropSetDoubleN(ToPropHandle(&in_args),
@@ -1240,10 +1239,10 @@ RoiReply RequestRegionsOfInterest(const ScopedPluginInstance& pi,
     }
   }
   RoiReply reply;
-  reply.status = pi.plugin->mainEntry(
-      kOfxImageEffectActionGetRegionsOfInterest,
-      const_cast<MockEffectObject*>(&pi.inst), ToPropHandle(&in_args),
-      ToPropHandle(&out_args));
+  reply.status =
+      pi.plugin->mainEntry(kOfxImageEffectActionGetRegionsOfInterest,
+                           const_cast<MockEffectObject*>(&pi.inst),
+                           ToPropHandle(&in_args), ToPropHandle(&out_args));
   for (const std::string& name : inputs) {
     std::array<double, 4> roi = {0.0, 0.0, 0.0, 0.0};
     MockPropGetDoubleN(ToPropHandle(&out_args),
@@ -1490,8 +1489,8 @@ TEST_F(PaperCraftOfxTest,
 
   // 2) Only the Filter context is supported: Generator and Transition must be
   // rejected so Resolve does not list Paper Cutout FX under those categories.
-  for (const char* ctx : {kOfxImageEffectContextGenerator,
-                          kOfxImageEffectContextTransition}) {
+  for (const char* ctx :
+       {kOfxImageEffectContextGenerator, kOfxImageEffectContextTransition}) {
     MockEffectObject bad_desc;
     bad_desc.host = &host_;
     MockPropertySet ctx_in;
@@ -1792,8 +1791,7 @@ TEST_F(PaperCraftOfxTest, CroppedInputTileMapsViaRegionOfDefinition) {
 // ---------------------------------------------------------------------------
 
 // Returns a w x h premultiplied float RGBA buffer filled with (r, g, b, a).
-std::vector<float> SolidRgba(int w, int h, float r, float g, float b,
-                             float a) {
+std::vector<float> SolidRgba(int w, int h, float r, float g, float b, float a) {
   std::vector<float> buf(static_cast<std::size_t>(w) * h * 4);
   for (std::size_t i = 0; i < buf.size(); i += 4) {
     buf[i + 0] = r * a;
@@ -1848,9 +1846,9 @@ TEST_F(PaperCraftOfxTest, FoldTransitionDescribesTransitionContextOnly) {
                               kOfxImageEffectPluginPropGrouping, 0, &value),
             kOfxStatOK);
   EXPECT_STREQ(value, "MTTN PaperCraft Studio");
-  ASSERT_EQ(MockPropGetString(ToPropHandle(&desc.props), kOfxPropLabel, 0,
-                              &value),
-            kOfxStatOK);
+  ASSERT_EQ(
+      MockPropGetString(ToPropHandle(&desc.props), kOfxPropLabel, 0, &value),
+      kOfxStatOK);
   EXPECT_STREQ(value, "Paper Fold & Unfold");
   ASSERT_EQ(MockPropGetString(ToPropHandle(&desc.props),
                               kOfxImageEffectPropSupportedContexts, 0, &value),
@@ -1976,8 +1974,7 @@ TEST_F(PaperCraftOfxTest, FoldTransitionAutoUnfoldsAtClipStartAndFoldsAtEnd) {
                           kOfxBitDepthFloat, range);
     double prev = 1.0;
     for (double p : {0.2, 0.45, 0.7}) {
-      const double cov =
-          MeanAlpha(RenderTransitionAt(&host_, &pi, kW, kH, p));
+      const double cov = MeanAlpha(RenderTransitionAt(&host_, &pi, kW, kH, p));
       EXPECT_LT(cov, prev - 0.02) << "fold coverage must shrink at " << p;
       EXPECT_GT(cov, 0.0) << p;
       prev = cov;
@@ -2008,8 +2005,7 @@ TEST_F(PaperCraftOfxTest, FoldTransitionShowsPaperBacksideWhileFolded) {
   for (int border : {1, 0}) {
     SetIntParam(&pi, "enableBorder", border);
     // Early in the unfold the top half is still folded over, back side up.
-    const std::vector<float> out =
-        RenderTransitionAt(&host_, &pi, kW, kH, 0.3);
+    const std::vector<float> out = RenderTransitionAt(&host_, &pi, kW, kH, 0.3);
     int paper_pixels = 0;
     for (std::size_t i = 0; i < out.size(); i += 4) {
       if (out[i + 3] > 0.9f && out[i] > 0.45f && out[i + 1] > 0.45f &&
@@ -2501,7 +2497,7 @@ TEST_F(PaperCraftOfxTest, FoldTransitionRoiRequestsOnlyClipsTheFrameReads) {
     bool reads_to;
   };
   const Case cases[] = {
-      {0, 0.0, true, false},  {0, 1.0, false, true}, {0, 0.5, true, true},
+      {0, 0.0, true, false},  {0, 1.0, false, true},  {0, 0.5, true, true},
       {3, 0.25, true, false}, {3, 0.75, false, true}, {1, 0.25, true, true},
       {2, 0.75, true, true},
   };
@@ -2512,8 +2508,8 @@ TEST_F(PaperCraftOfxTest, FoldTransitionRoiRequestsOnlyClipsTheFrameReads) {
                               " p=" + std::to_string(c.progress);
     const RoiReply reply = RequestRegionsOfInterest(pi, 10.0, kW, kH);
     EXPECT_EQ(reply.status, kOfxStatOK) << label;
-    const std::pair<const char*, bool> inputs[] = {
-        {"SourceFrom", c.reads_from}, {"SourceTo", c.reads_to}};
+    const std::pair<const char*, bool> inputs[] = {{"SourceFrom", c.reads_from},
+                                                   {"SourceTo", c.reads_to}};
     for (const auto& [name, used] : inputs) {
       if (used) {
         EXPECT_EQ(reply.rois.at(name), full) << label << " " << name;

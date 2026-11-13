@@ -17,6 +17,10 @@ Contexto rápido para asistentes de código que trabajen en `la-matatena/mttn-pa
   ```bash
   python3 -B papercraft_pro_test.py -v
   ```
+- Ejecuta los formateadores y linters (`pyink`, `pylint`, `clang-format`, `shellcheck`, `prettier`; versiones fijadas e instalación en [`docs/developer_guide.md#formatters-and-linters`](docs/developer_guide.md#formatters-and-linters)); `--fix` aplica el formato:
+  ```bash
+  tools/lint.sh
+  ```
 - Si modificas `ofx/`, verifica la compilación del bundle OpenFX en macOS:
   ```bash
   ./ofx/Install_PaperCraft_OpenFX_macOS.command --build-only /tmp/papercraft_build

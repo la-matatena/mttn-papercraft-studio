@@ -48,7 +48,9 @@ except ImportError:
       self.addCleanup(td.cleanup)
       return types.SimpleNamespace(full_path=td.name)
 
-  absltest = types.SimpleNamespace(TestCase=_FallbackTestCase, main=unittest.main)
+  absltest = types.SimpleNamespace(
+      TestCase=_FallbackTestCase, main=unittest.main
+  )
 
 try:
   # Internal monorepo import path; falls back to sibling modules when run
@@ -156,8 +158,14 @@ class PapercraftProTest(absltest.TestCase):
     self.assertIn("PaperFoldTransition = MacroOperator", text)
     self.assertIn("MainInput2 = InstanceInput", text)
     # Each fold panel is masked, given a paper back, and swung on a DVE.
-    for node in ("LeftPanelMask", "LeftBack", "LeftSwing", "RightSwing",
-                 "PacketShadow", "ExactBoundaryClamp"):
+    for node in (
+        "LeftPanelMask",
+        "LeftBack",
+        "LeftSwing",
+        "RightSwing",
+        "PacketShadow",
+        "ExactBoundaryClamp",
+    ):
       self.assertIn(f"\t\t\t\t{node} = ", text)
     self.assertIn('Source = "Mask"', text)
     drfx_validator.validate_setting_syntax_and_graph(text, "transition")
@@ -183,8 +191,10 @@ class PapercraftProTest(absltest.TestCase):
             "Edit/Effects/MTTN PaperCraft Studio/Paper Cutout FX.png",
             "Edit/Effects/MTTN PaperCraft Studio/Paper Cutout FX.setting",
             "Edit/Transitions/MTTN PaperCraft Studio/Paper Fold & Unfold.png",
-            "Edit/Transitions/MTTN PaperCraft Studio/"
-            "Paper Fold & Unfold.setting",
+            (
+                "Edit/Transitions/MTTN PaperCraft Studio/"
+                "Paper Fold & Unfold.setting"
+            ),
         ],
     )
     drfx_bytes = bundle_builder_lib._write_deterministic_zip(entries)  # pylint: disable=protected-access
@@ -316,8 +326,11 @@ class PapercraftProTest(absltest.TestCase):
     overlap_ctrls = dict(
         IntroStyle=1, IntroFrames=10, OutroStyle=4, OutroFrames=10
     )
-    for t, expected_prog, expected_style in ((2, 0.2, 1), (5, 0.5, 1),
-                                             (8, 0.2, 4)):
+    for t, expected_prog, expected_style in (
+        (2, 0.2, 1),
+        (5, 0.5, 1),
+        (8, 0.2, 4),
+    ):
       with self.subTest(t=t):
         self.assertAlmostEqual(
             _eval_simple_expr(prog_expr, macro, t, 10, **overlap_ctrls),
@@ -371,9 +384,7 @@ class PapercraftProTest(absltest.TestCase):
         if i == 0:
           right = first_right
         for val in (left, right):
-          frames += int(round(val * 8388607)).to_bytes(
-              3, "little", signed=True
-          )
+          frames += int(round(val * 8388607)).to_bytes(3, "little", signed=True)
       buf = io.BytesIO()
       with wave.open(buf, "wb") as wav_out:
         wav_out.setnchannels(2)
@@ -418,9 +429,7 @@ class PapercraftProTest(absltest.TestCase):
     )
     self.assertNotEqual(empty_expr, valid)
     with self.assertRaisesRegex(ValueError, "Empty SimpleExpression"):
-      drfx_validator.validate_setting_syntax_and_graph(
-          empty_expr, "transition"
-      )
+      drfx_validator.validate_setting_syntax_and_graph(empty_expr, "transition")
 
   def test_unknown_thumbnail_variant_raises(self):
     """An unknown thumbnail variant raises instead of drawing a blank card."""
@@ -637,6 +646,24 @@ class PapercraftReleaseTest(absltest.TestCase):
           mode = (zf.getinfo(exe_member).external_attr >> 16) & 0o777
           self.assertEqual(mode, 0o755, msg=f"Bad permissions on {exe_member}")
 
+  def test_full_zip_omits_dev_lint_tooling(self):
+    """The user Full Bundle ZIP ships no lint configs or tools/lint.sh."""
+    dev_only = (
+        ".clang-format",
+        ".clang-format-ignore",
+        ".prettierignore",
+        ".prettierrc.json",
+        ".pylintrc",
+        "pyproject.toml",
+        "tools/lint.sh",
+    )
+    with zipfile.ZipFile(self.out["full_zip"], "r") as zf:
+      names = set(zf.namelist())
+    for member in dev_only:
+      with self.subTest(member=member):
+        self.assertNotIn(member, names)
+    self.assertFalse(any(n.startswith("tools/") for n in names))
+
   def test_repo_zip_has_expected_nonempty_entries(self):
     """The Complete Repo ZIP holds every source/release file, non-empty."""
     expected_repo_entries = (
@@ -669,6 +696,11 @@ class PapercraftReleaseTest(absltest.TestCase):
         "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
         "papercraft_pro/ofx/install_linux_ofx.sh",
         "papercraft_pro/ofx/openfx_include/ofxCore.h",
+        "papercraft_pro/.clang-format",
+        "papercraft_pro/.clang-format-ignore",
+        "papercraft_pro/.pylintrc",
+        "papercraft_pro/pyproject.toml",
+        "papercraft_pro/tools/lint.sh",
         "papercraft_pro/release/MTTN_PaperCraft_Studio.drfx",
         "papercraft_pro/release/PaperCraftStudioPro.ofx.bundle/Contents/Linux-x86-64/PaperCraftStudioPro.ofx",
     )
@@ -700,6 +732,7 @@ class PapercraftReleaseTest(absltest.TestCase):
           "papercraft_pro/ofx/Uninstall_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/ofx/install_linux_ofx.sh",
           "papercraft_pro/ofx/run_cpp_tests.sh",
+          "papercraft_pro/tools/lint.sh",
           "papercraft_pro/release/Install_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/release/Uninstall_PaperCraft_OpenFX_macOS.command",
           "papercraft_pro/release/install_linux_ofx.sh",

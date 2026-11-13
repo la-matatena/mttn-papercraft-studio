@@ -1,0 +1,2 @@
+# Vendored OpenFX SDK headers keep their upstream formatting.
+ofx/openfx_include/*

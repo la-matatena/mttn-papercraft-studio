@@ -18,6 +18,34 @@ permissions:
   contents: write
 
 jobs:
+  # Style gate (formatters + linters, see tools/lint.sh). It runs in parallel
+  # with build-test-package and is not a dependency of it, so a lint failure
+  # marks the workflow red without blocking packaging or a tag release.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned lint tools
+        run: |
+          python -m pip install --disable-pip-version-check $(tools/lint.sh --pins pip)
+          npm install --no-save --prefix .venv-dev/node \
+            --registry https://registry.npmjs.org/ $(tools/lint.sh --pins npm)
+
+      - name: Run formatters and linters (check mode)
+        run: tools/lint.sh
+
   build-test-package:
     runs-on: ubuntu-latest
     steps:

@@ -113,11 +113,11 @@ ImageView MakeView(void* base, int width, int height, PixelDepth depth,
                    AlphaMode mode, bool bottom_up) {
   const int channel_bytes =
       depth == PixelDepth::kFloat ? 4 : (depth == PixelDepth::kShort ? 2 : 1);
-  const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(width) * 4 *
-                             channel_bytes;
+  const std::ptrdiff_t row =
+      static_cast<std::ptrdiff_t>(width) * 4 * channel_bytes;
   ImageView view;
-  view.data = static_cast<std::uint8_t*>(base) +
-              (bottom_up ? row * (height - 1) : 0);
+  view.data =
+      static_cast<std::uint8_t*>(base) + (bottom_up ? row * (height - 1) : 0);
   view.bounds = {0, 0, width, height};
   view.rod = view.bounds;
   view.row_bytes = bottom_up ? -row : row;
@@ -234,8 +234,8 @@ TEST(DistanceTransformTest, OneDimensionalMatchesBruteForce) {
   std::bernoulli_distribution missing(0.6);
   for (int n : {1, 2, 3, 7, 31, 64, 200}) {
     for (int trial = 0; trial < 20; ++trial) {
-      SCOPED_TRACE("n=" + std::to_string(n) + " trial=" +
-                   std::to_string(trial));
+      SCOPED_TRACE("n=" + std::to_string(n) +
+                   " trial=" + std::to_string(trial));
       std::vector<float> input(n);
       for (float& v : input) {
         // Squared integers (exact in float) or "no feature".
@@ -250,8 +250,8 @@ TEST(DistanceTransformTest, OneDimensionalMatchesBruteForce) {
       std::vector<std::int64_t> z_num(n + 1);
       std::vector<std::int64_t> z_den(n + 1);
       std::vector<float> output(n, -1.0f);
-      DistanceTransform1D(input.data(), n, v.data(), z_num.data(),
-                          z_den.data(), output.data());
+      DistanceTransform1D(input.data(), n, v.data(), z_num.data(), z_den.data(),
+                          output.data());
       for (int q = 0; q < n; ++q) {
         float expected = kNoFeature;
         bool found = false;
@@ -278,7 +278,7 @@ TEST(DistanceTransformTest, TwoDimensionalMatchesBruteForce) {
     int h;
   };
   // Includes 1xN / Nx1 lines and widths that span several 64-column blocks.
-  const Size sizes[] = {{1, 1},  {1, 23}, {23, 1}, {8, 8},
+  const Size sizes[] = {{1, 1},   {1, 23}, {23, 1},  {8, 8},
                         {33, 20}, {70, 5}, {130, 9}, {65, 31}};
   std::vector<int> scratch;  // Reused across calls, like the SDF builder.
   for (const Size& size : sizes) {
@@ -286,8 +286,7 @@ TEST(DistanceTransformTest, TwoDimensionalMatchesBruteForce) {
       SCOPED_TRACE(std::to_string(size.w) + "x" + std::to_string(size.h) +
                    " density=" + std::to_string(density));
       std::vector<float> grid = RandomBinaryGrid(size.w, size.h, density, &rng);
-      const std::vector<float> expected =
-          BruteForceEdt(grid, size.w, size.h);
+      const std::vector<float> expected = BruteForceEdt(grid, size.w, size.h);
       std::vector<float> serial = grid;
       DistanceTransform2D(size.w, size.h, SerialRows, &serial, &scratch);
       std::vector<float> reversed = grid;
@@ -417,9 +416,9 @@ ClipContentSummary Cutout() {
 TEST(ResolveFoldActionTest, ExplicitActionsAreKeptAndClamped) {
   const ClipContentSummary empty = TransparentEmpty();
   const ClipContentSummary video = FullFrameVideo();
-  for (const auto& [from, to] : {std::make_pair(empty, video),
-                                 std::make_pair(video, empty),
-                                 std::make_pair(video, video)}) {
+  for (const auto& [from, to] :
+       {std::make_pair(empty, video), std::make_pair(video, empty),
+        std::make_pair(video, video)}) {
     EXPECT_EQ(ResolveFoldAction(1, from, to), FoldTransitionAction::kUnfoldIn);
     EXPECT_EQ(ResolveFoldAction(2, from, to), FoldTransitionAction::kFoldOut);
     EXPECT_EQ(ResolveFoldAction(3, from, to),
@@ -697,17 +696,17 @@ TEST(RenderPaperFoldTransitionTest, EndpointsCopyTheClipsExactly) {
         MakeView(out.data(), kCanvasW, kCanvasH, PixelDepth::kFloat,
                  AlphaMode::kPremultiplied, false);
     params.progress = 0.0f;
-    RenderPaperFoldTransition(params, from.View(), to.View(), out_view,
-                              kCanvas, kCanvas, SerialRows);
+    RenderPaperFoldTransition(params, from.View(), to.View(), out_view, kCanvas,
+                              kCanvas, SerialRows);
     EXPECT_TRUE(out == from.px);
     params.progress = 1.0f;
-    RenderPaperFoldTransition(params, from.View(), to.View(), out_view,
-                              kCanvas, kCanvas, SerialRows);
+    RenderPaperFoldTransition(params, from.View(), to.View(), out_view, kCanvas,
+                              kCanvas, SerialRows);
     EXPECT_TRUE(out == to.px);
     // Mid-transition differs from both clips and stays well-formed.
     params.progress = 0.45f;
-    RenderPaperFoldTransition(params, from.View(), to.View(), out_view,
-                              kCanvas, kCanvas, SerialRows);
+    RenderPaperFoldTransition(params, from.View(), to.View(), out_view, kCanvas,
+                              kCanvas, SerialRows);
     EXPECT_FALSE(out == from.px);
     EXPECT_FALSE(out == to.px);
     ASSERT_NO_FATAL_FAILURE(ExpectSanePremultiplied(out));
@@ -716,8 +715,8 @@ TEST(RenderPaperFoldTransitionTest, EndpointsCopyTheClipsExactly) {
 
 TEST(RenderPaperFoldTransitionTest, RenderWindowMatchesFullRender) {
   std::vector<float> fg_alpha;
-  const FloatImage from = MakeCutoutWithShadow(kCanvasW, kCanvasH, 0.6f,
-                                               &fg_alpha);
+  const FloatImage from =
+      MakeCutoutWithShadow(kCanvasW, kCanvasH, 0.6f, &fg_alpha);
   const FloatImage to = MakeVideoFrame(kCanvasW, kCanvasH, 0.7f);
   PaperFoldTransitionParams params;
   params.progress = 0.4f;
@@ -776,8 +775,8 @@ std::vector<float> RenderFoldRows(const FloatImage& from, const FloatImage& to,
 
 TEST(RenderPaperFoldTransitionTest, NegativeRowBytesOutputIsFlippedCopy) {
   std::vector<float> fg_alpha;
-  const FloatImage cutout = MakeCutoutWithShadow(kCanvasW, kCanvasH, 0.6f,
-                                                 &fg_alpha);
+  const FloatImage cutout =
+      MakeCutoutWithShadow(kCanvasW, kCanvasH, 0.6f, &fg_alpha);
   const FloatImage video = MakeVideoFrame(kCanvasW, kCanvasH, 0.4f);
   for (int action = 0; action <= 3; ++action) {
     for (float p : {0.0f, 0.3f, 0.7f, 1.0f}) {
@@ -828,8 +827,8 @@ TEST(RenderPaperFoldTransitionTest, BottomUpInputsRenderLikeTopDownInputs) {
 TEST(RenderPaperFoldTransitionTest, ByteAndShortOutputsQuantizeFloatOutput) {
   const FloatImage from = MakeVideoFrame(kCanvasW, kCanvasH, 0.6f);
   std::vector<float> fg_alpha;
-  const FloatImage to = MakeCutoutWithShadow(kCanvasW, kCanvasH, 0.6f,
-                                             &fg_alpha);
+  const FloatImage to =
+      MakeCutoutWithShadow(kCanvasW, kCanvasH, 0.6f, &fg_alpha);
   const std::size_t n = static_cast<std::size_t>(kCanvasW) * kCanvasH * 4;
   for (float p : {0.25f, 0.6f}) {
     SCOPED_TRACE("p=" + std::to_string(p));
@@ -857,8 +856,7 @@ TEST(RenderPaperFoldTransitionTest, ByteAndShortOutputsQuantizeFloatOutput) {
       const float f = std::clamp(out_f[i], 0.0f, 1.0f);
       ASSERT_NEAR(out_s[i] / 65535.0f, f, 0.5f / 65535.0f + 1e-6f)
           << "value " << i;
-      ASSERT_NEAR(out_b[i] / 255.0f, f, 0.5f / 255.0f + 1e-6f)
-          << "value " << i;
+      ASSERT_NEAR(out_b[i] / 255.0f, f, 0.5f / 255.0f + 1e-6f) << "value " << i;
     }
   }
 }
@@ -918,9 +916,8 @@ TEST(RenderCutoutFrameTest, RendersPaperCutoutOverTransparency) {
   params.current_time = 60.0;  // Mid-clip: no intro or outro.
   std::vector<float> out = MakeOutput(-1.0f);
   RenderCutoutFrame(params, source.View(AlphaMode::kOpaque),
-                    MakeView(out.data(), kCanvasW, kCanvasH,
-                             PixelDepth::kFloat, AlphaMode::kPremultiplied,
-                             false),
+                    MakeView(out.data(), kCanvasW, kCanvasH, PixelDepth::kFloat,
+                             AlphaMode::kPremultiplied, false),
                     kCanvas, kCanvas, SerialRows);
   ASSERT_NO_FATAL_FAILURE(ExpectSanePremultiplied(out));
   auto alpha_at = [&](int x, int y) {
@@ -938,9 +935,8 @@ TEST(RenderCutoutFrameTest, BuiltInStickerRendersWithoutSource) {
   params.current_time = 60.0;
   std::vector<float> out = MakeOutput(-1.0f);
   RenderCutoutFrame(params, ImageView{},
-                    MakeView(out.data(), kCanvasW, kCanvasH,
-                             PixelDepth::kFloat, AlphaMode::kPremultiplied,
-                             false),
+                    MakeView(out.data(), kCanvasW, kCanvasH, PixelDepth::kFloat,
+                             AlphaMode::kPremultiplied, false),
                     kCanvas, kCanvas, SerialRows);
   ASSERT_NO_FATAL_FAILURE(ExpectSanePremultiplied(out));
   float max_alpha = 0.0f;
@@ -958,33 +954,33 @@ TEST(RenderCutoutFrameTest, NegativeRowBytesAndRenderWindowAreConsistent) {
     params.intro_style = intro;
     params.current_time = 5.0;  // Inside the 14-frame intro.
     std::vector<float> top_down = MakeOutput(0.0f);
-    RenderCutoutFrame(params, source.View(),
-                      MakeView(top_down.data(), kCanvasW, kCanvasH,
-                               PixelDepth::kFloat, AlphaMode::kPremultiplied,
-                               false),
-                      kCanvas, kCanvas, SerialRows);
+    RenderCutoutFrame(
+        params, source.View(),
+        MakeView(top_down.data(), kCanvasW, kCanvasH, PixelDepth::kFloat,
+                 AlphaMode::kPremultiplied, false),
+        kCanvas, kCanvas, SerialRows);
     std::vector<float> bottom_up = MakeOutput(0.0f);
-    RenderCutoutFrame(params, source.View(),
-                      MakeView(bottom_up.data(), kCanvasW, kCanvasH,
-                               PixelDepth::kFloat, AlphaMode::kPremultiplied,
-                               true),
-                      kCanvas, kCanvas, ReverseRows);
+    RenderCutoutFrame(
+        params, source.View(),
+        MakeView(bottom_up.data(), kCanvasW, kCanvasH, PixelDepth::kFloat,
+                 AlphaMode::kPremultiplied, true),
+        kCanvas, kCanvas, ReverseRows);
     const std::size_t row = static_cast<std::size_t>(kCanvasW) * 4;
     for (int y = 0; y < kCanvasH; ++y) {
-      ASSERT_EQ(std::memcmp(&top_down[y * row],
-                            &bottom_up[(kCanvasH - 1 - y) * row],
-                            row * sizeof(float)),
-                0)
+      ASSERT_EQ(
+          std::memcmp(&top_down[y * row], &bottom_up[(kCanvasH - 1 - y) * row],
+                      row * sizeof(float)),
+          0)
           << "row " << y;
     }
     // A render window writes only its rows/columns, with the same values.
     const PixelRect window{10, 15, 90, 60};
     std::vector<float> tile = MakeOutput(-3.0f);
-    RenderCutoutFrame(params, source.View(),
-                      MakeView(tile.data(), kCanvasW, kCanvasH,
-                               PixelDepth::kFloat, AlphaMode::kPremultiplied,
-                               false),
-                      kCanvas, window, SerialRows);
+    RenderCutoutFrame(
+        params, source.View(),
+        MakeView(tile.data(), kCanvasW, kCanvasH, PixelDepth::kFloat,
+                 AlphaMode::kPremultiplied, false),
+        kCanvas, window, SerialRows);
     for (int y = 0; y < kCanvasH; ++y) {
       for (int x = 0; x < kCanvasW; ++x) {
         const bool inside =
@@ -1009,8 +1005,8 @@ TEST(RenderCutoutFrameTest, InvalidOutputIsANoOp) {
   fold.progress = 0.5f;
   RenderPaperFoldTransition(fold, source.View(), source.View(), bad, kCanvas,
                             kCanvas, SerialRows);
-  EXPECT_TRUE(std::all_of(out.begin(), out.end(),
-                          [](float v) { return v == -5.0f; }));
+  EXPECT_TRUE(
+      std::all_of(out.begin(), out.end(), [](float v) { return v == -5.0f; }));
 }
 
 }  // namespace
