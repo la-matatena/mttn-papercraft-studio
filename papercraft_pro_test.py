@@ -7,10 +7,14 @@ Run from the repository root (also run by `.github/workflows/ci-release.yml`):
 Uses absltest when available and falls back to `unittest` with a small shim
 for the absltest-only helpers. The end-to-end test builds a full release in
 a temp directory and also checks that relative Markdown links in the shipped
-docs resolve inside the Complete Repo ZIP. The installer tests need
-`/bin/bash`.
+docs resolve inside the Complete Repo ZIP; a separate test checks those docs
+plus `AGENTS.md` on disk, including `#anchor` targets. The installer tests
+need `/bin/bash`.
 """
 
+import array
+import io
+import math
 import os
 import re
 import struct
@@ -18,6 +22,8 @@ import subprocess
 import tempfile
 import types
 import unittest
+from unittest import mock
+import wave
 import zipfile
 
 try:
@@ -337,7 +343,8 @@ class PapercraftProTest(absltest.TestCase):
         self.assertEqual(mode, 0o755, msg=f"Bad permissions on {exe_member}")
 
       # Every relative Markdown link in shipped docs must point at a member
-      # of the repo ZIP. Only the path is checked; `#anchor` parts are not.
+      # of the repo ZIP. Only the path is checked here; `#anchor` parts are
+      # checked against headings by `test_markdown_links_and_anchors_resolve`.
       for md_entry in (
           "papercraft_pro/README.md",
           "papercraft_pro/README.en.md",
@@ -450,6 +457,230 @@ class PapercraftProTest(absltest.TestCase):
         eval_expr(prog_expr, 8, 10, **overlap_ctrls), 0.2
     )
     self.assertEqual(eval_expr(style_expr, 8, 10, **overlap_ctrls), 4)
+
+  def test_deterministic_zip_pins_deflate_level(self):
+    """Every ZIP entry is compressed with the pinned DEFLATE level 6."""
+    real_get_compressor = zipfile._get_compressor  # pylint: disable=protected-access
+    levels = []
+
+    def recording_get_compressor(compress_type, compresslevel=None):
+      """Records the level zipfile requests, then defers to the real one."""
+      levels.append(compresslevel)
+      return real_get_compressor(compress_type, compresslevel)
+
+    with mock.patch.object(
+        zipfile, "_get_compressor", side_effect=recording_get_compressor
+    ):
+      bundle_builder_lib._write_deterministic_zip(  # pylint: disable=protected-access
+          {"b.txt": b"bbbb" * 64, "a.sh": b"#!/bin/sh\n"}
+      )
+    self.assertEqual(levels, [6, 6])
+    self.assertEqual(bundle_builder_lib._ZIP_DEFLATE_LEVEL, 6)  # pylint: disable=protected-access
+
+  def test_release_lists_license_and_reads_docs_once(self):
+    """LICENSE is in the returned paths and docs/SFX are read only once."""
+    scratch_dir = self.create_tempdir().full_path
+    linux_ofx = os.path.join(scratch_dir, "PaperCraftStudioPro.ofx")
+    with open(linux_ofx, "wb") as f:
+      f.write(b"\x7fELF-mock-ofx-binary")
+    with mock.patch.object(
+        bundle_builder_lib,
+        "build_doc_entries",
+        wraps=bundle_builder_lib.build_doc_entries,
+    ) as doc_spy, mock.patch.object(
+        bundle_builder_lib,
+        "build_sfx_entries",
+        wraps=bundle_builder_lib.build_sfx_entries,
+    ) as sfx_spy:
+      out = bundle_builder_lib.build_and_write_release(
+          output_dir=os.path.join(scratch_dir, "out"),
+          linux_ofx_path=linux_ofx,
+      )
+    self.assertEqual(doc_spy.call_count, 1)
+    self.assertEqual(sfx_spy.call_count, 1)
+    self.assertIn("license", out)
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    with open(out["license"], "rb") as got, open(
+        os.path.join(pkg_dir, "LICENSE"), "rb"
+    ) as want:
+      self.assertEqual(got.read(), want.read())
+    # The repo ZIP still carries the docs and SFX that were read once.
+    with zipfile.ZipFile(out["repo_zip"], "r") as rzf:
+      rnames = set(rzf.namelist())
+    self.assertIn("papercraft_pro/docs/user_guide.md", rnames)
+    self.assertIn("papercraft_pro/Paper_SFX/01_Paper_Unfold.wav", rnames)
+
+  def test_wav_validator_checks_every_channel_edge(self):
+    """A click on the right channel only is rejected, as is short data."""
+
+    def make_wav(first_right=0.0, truncate=0):
+      """Builds a valid 0.5 s 48 kHz 24-bit stereo WAV, optionally broken.
+
+      Args:
+        first_right: Value (full-scale units) forced on the first right
+          sample; nonzero simulates a click on the right channel only.
+        truncate: Number of trailing PCM bytes to drop after writing.
+
+      Returns:
+        RIFF WAV bytes.
+      """
+      num_frames = 24000
+      frames = bytearray()
+      for i in range(num_frames):
+        # Sine fade envelope: exactly 0 at the first and last frame.
+        env = math.sin(math.pi * i / (num_frames - 1))
+        left = 0.3 * env * math.sin(i * 0.05)
+        right = 0.3 * env * math.sin(i * 0.07 + 1.0)
+        if i == 0:
+          right = first_right
+        for val in (left, right):
+          frames += int(round(val * 8388607)).to_bytes(
+              3, "little", signed=True
+          )
+      buf = io.BytesIO()
+      with wave.open(buf, "wb") as wav_out:
+        wav_out.setnchannels(2)
+        wav_out.setsampwidth(3)
+        wav_out.setframerate(48000)
+        wav_out.writeframes(bytes(frames))
+      data = buf.getvalue()
+      return data[: len(data) - truncate] if truncate else data
+
+    drfx_validator.validate_wav_bytes(make_wav())
+    with self.assertRaisesRegex(ValueError, "zero-crossing fade"):
+      drfx_validator.validate_wav_bytes(make_wav(first_right=0.2))
+    with self.assertRaisesRegex(ValueError, "Truncated"):
+      drfx_validator.validate_wav_bytes(make_wav(truncate=6))
+
+  def test_pcm24_decoder_matches_reference(self):
+    """The vectorized 24-bit decoder equals int.from_bytes per sample."""
+    values = [0, 1, -1, 8388607, -8388608, 123456, -654321]
+    raw = b"".join(v.to_bytes(3, "little", signed=True) for v in values)
+    decoded = drfx_validator._decode_pcm24_frames(raw)  # pylint: disable=protected-access
+    self.assertIsInstance(decoded, array.array)
+    self.assertEqual([s >> 8 for s in decoded], values)
+    with self.assertRaisesRegex(ValueError, "Truncated"):
+      drfx_validator._decode_pcm24_frames(raw[:-1])  # pylint: disable=protected-access
+
+  def test_expression_quoting_guards(self):
+    """`_expr` rejects quotes/empty input; the validator flags empty ones."""
+    with self.assertRaisesRegex(ValueError, "must not contain"):
+      fusion_templates._expr("Mix", "0", 'iif(x > 0, "a", 1)')  # pylint: disable=protected-access
+    for blank in ("", "   "):
+      with self.subTest(blank=blank):
+        with self.assertRaisesRegex(ValueError, "Empty SimpleExpression"):
+          fusion_templates._expr("Mix", "0", blank)  # pylint: disable=protected-access
+    self.assertEqual(
+        fusion_templates._expr("Mix", "0", "time"),  # pylint: disable=protected-access
+        'Mix = Input { Value = 0, Expression = "time", },',
+    )
+
+    valid = fusion_templates.build_fold_transition_setting()
+    empty_expr = re.sub(
+        r'Expression = "[^"]+"', 'Expression = ""', valid, count=1
+    )
+    self.assertNotEqual(empty_expr, valid)
+    with self.assertRaisesRegex(ValueError, "Empty SimpleExpression"):
+      drfx_validator.validate_setting_syntax_and_graph(
+          empty_expr, "transition"
+      )
+
+  def test_unknown_thumbnail_variant_raises(self):
+    """An unknown thumbnail variant raises instead of drawing a blank card."""
+    with self.assertRaisesRegex(ValueError, "Unknown thumbnail variant"):
+      png_renderer.render_thumbnail_png((1, 2, 3), "efect")
+
+  def test_validator_rejects_removed_generator_kind(self):
+    """The removed 'generator' template kind is no longer accepted."""
+    text = fusion_templates.build_effect_setting()
+    with self.assertRaisesRegex(ValueError, "Unsupported template_kind"):
+      drfx_validator.validate_setting_syntax_and_graph(text, "generator")
+
+  def test_markdown_links_and_anchors_resolve(self):
+    """Relative links in docs and AGENTS.md hit real files and headings.
+
+    `#anchor` fragments must match a heading slug computed with GitHub's
+    rules: lowercase, drop punctuation except `-` and `_`, spaces become
+    `-`, and repeated headings get `-1`, `-2`, ... suffixes. Headings inside
+    fenced code blocks are ignored.
+    """
+
+    def github_slugs(md_text):
+      """Returns the set of GitHub heading anchors for Markdown text."""
+      slugs = set()
+      seen: dict[str, int] = {}
+      in_fence = False
+      for line in md_text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+          in_fence = not in_fence
+          continue
+        if in_fence:
+          continue
+        match = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
+        if not match:
+          continue
+        # Keep only the visible text of inline links/images.
+        title = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", match.group(1))
+        slug = re.sub(r"[^\w\- ]", "", title.lower()).replace(" ", "-")
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        slugs.add(slug if count == 0 else f"{slug}-{count}")
+      return slugs
+
+    # Slug rules on headings that exercise punctuation and backticks.
+    self.assertEqual(
+        github_slugs(
+            "## What's next\n"
+            "### Python `.drfx`, Foley WAV, installer, and link suite\n"
+            "```\n# not a heading\n```\n"
+            "## What's next\n"
+        ),
+        {
+            "whats-next",
+            "python-drfx-foley-wav-installer-and-link-suite",
+            "whats-next-1",
+        },
+    )
+
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    slug_cache: dict[str, set[str]] = {}
+    broken = []
+    for md_rel in (
+        "AGENTS.md",
+        "README.md",
+        "README.en.md",
+        "Paper_SFX/CREDITS.md",
+        "docs/design_doc.md",
+        "docs/user_guide.md",
+        "docs/developer_guide.md",
+    ):
+      md_path = os.path.join(pkg_dir, md_rel)
+      with open(md_path, "r", encoding="utf-8") as f:
+        md_text = f.read()
+      for target in re.findall(r"\[[^\]]+\]\(([^)\s]+)[^)]*\)", md_text):
+        if target.startswith(("http://", "https://", "mailto:")):
+          continue
+        path_part, _, anchor = target.partition("#")
+        md_dir = os.path.dirname(md_path)
+        resolved = (
+            os.path.normpath(os.path.join(md_dir, path_part))
+            if path_part
+            else md_path
+        )
+        if not os.path.exists(resolved):
+          broken.append(f"{md_rel}: missing file in {target!r}")
+          continue
+        if not anchor:
+          continue
+        if not resolved.endswith(".md"):
+          broken.append(f"{md_rel}: anchor on non-Markdown {target!r}")
+          continue
+        if resolved not in slug_cache:
+          with open(resolved, "r", encoding="utf-8") as f:
+            slug_cache[resolved] = github_slugs(f.read())
+        if anchor not in slug_cache[resolved]:
+          broken.append(f"{md_rel}: no heading for anchor in {target!r}")
+    self.assertEqual(broken, [])
 
 
 if __name__ == "__main__":

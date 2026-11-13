@@ -26,6 +26,9 @@ import zlib
 THUMBNAIL_WIDTH = 104
 THUMBNAIL_HEIGHT = 58
 
+# Motif keys accepted by `render_thumbnail_png` / `_draw_variant_motif`.
+_MOTIF_VARIANTS = ("effect", "fold")
+
 
 def _png_chunk(chunk_type: bytes, data_bytes: bytes) -> bytes:
   """Builds a single PNG chunk with length, type, payload, and CRC32.
@@ -192,8 +195,17 @@ def _draw_variant_motif(
     accent_rgb: Motif color, 0..255 per channel.
     variant: `"effect"` draws a four-point diamond star (|dx| + |dy| < 10.5
       px, anti-aliased over ~1.7 px); `"fold"` draws a square sheet with a
-      folded corner. Unknown variants draw nothing.
+      folded corner.
+
+  Raises:
+    ValueError: If `variant` is not one of `_MOTIF_VARIANTS`; a typo would
+      otherwise ship a thumbnail with an empty card.
   """
+  if variant not in _MOTIF_VARIANTS:
+    raise ValueError(
+        f"Unknown thumbnail variant {variant!r}; expected one of "
+        f"{_MOTIF_VARIANTS}."
+    )
   cx = width * 0.5
   cy = height * 0.5
   xs, ys = _bbox_ranges(cx, cy, 10.5, 10.5, width, height)
@@ -237,6 +249,9 @@ def render_thumbnail_png(
 
   Returns:
     PNG file bytes at 104x58 resolution.
+
+  Raises:
+    ValueError: If `variant` is not 'effect' or 'fold'.
   """
   width = THUMBNAIL_WIDTH
   height = THUMBNAIL_HEIGHT

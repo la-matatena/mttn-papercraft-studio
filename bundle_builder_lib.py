@@ -16,10 +16,11 @@ Release artifacts written to the output directory:
 
 Deterministic ZIP rules (so rebuilding the same inputs yields identical
 bytes and stable checksums): entries are written in sorted path order, every
-entry gets the fixed `_ZIP_TIMESTAMP`, `create_system` is UNIX, and file
-modes are normalized to 0o644, or 0o755 for executables (see
-`_is_executable_entry`). Byte-for-byte output still assumes the same zlib
-version, because DEFLATE output can differ across zlib releases.
+entry gets the fixed `_ZIP_TIMESTAMP` and DEFLATE level `_ZIP_DEFLATE_LEVEL`,
+`create_system` is UNIX, and file modes are normalized to 0o644, or 0o755
+for executables (see `_is_executable_entry`). Byte-for-byte output still
+assumes the same zlib version, because DEFLATE output can differ across zlib
+releases.
 """
 
 from collections.abc import Mapping
@@ -42,6 +43,11 @@ except ImportError:
 # Fixed mtime for every ZIP entry. ZIP stores local time with 2-second
 # resolution and no time zone, so a constant keeps archives reproducible.
 _ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
+
+# DEFLATE level for every ZIP entry. 6 is what zlib uses for
+# Z_DEFAULT_COMPRESSION (-1), the level zipfile picked implicitly before it
+# was pinned, so pinning it keeps previously published bytes unchanged.
+_ZIP_DEFLATE_LEVEL = 6
 
 # OpenFX sources copied into `OpenFX_Source/` (release) and `ofx/` (repo
 # ZIP), relative to the `ofx/` source directory.
@@ -126,7 +132,12 @@ def _write_deterministic_zip(files: Mapping[str, bytes]) -> bytes:
   """Packages relative archive paths into a deterministic ZIP byte buffer.
 
   See the module docstring for the determinism rules (sorted order, fixed
-  timestamp, UNIX create_system, normalized modes).
+  timestamp, UNIX create_system, normalized modes). The DEFLATE level is
+  pinned to `_ZIP_DEFLATE_LEVEL` on every entry instead of relying on the
+  zipfile default, so a Python change cannot silently alter the output.
+  Caveat: identical bytes still require the same zlib version, because
+  zlib releases may emit different (equally valid) DEFLATE streams for the
+  same level.
 
   Args:
     files: Mapping of forward-slash archive paths to file contents.
@@ -135,7 +146,12 @@ def _write_deterministic_zip(files: Mapping[str, bytes]) -> bytes:
     Complete ZIP archive bytes.
   """
   out = io.BytesIO()
-  with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+  with zipfile.ZipFile(
+      out,
+      "w",
+      compression=zipfile.ZIP_DEFLATED,
+      compresslevel=_ZIP_DEFLATE_LEVEL,
+  ) as zf:
     for rel_path in sorted(files):
       info = zipfile.ZipInfo(filename=rel_path, date_time=_ZIP_TIMESTAMP)
       info.compress_type = zipfile.ZIP_DEFLATED
@@ -150,7 +166,9 @@ def _write_deterministic_zip(files: Mapping[str, bytes]) -> bytes:
       # The high 16 bits of external_attr hold the UNIX st_mode (file type +
       # permission bits); unzip tools read them back when create_system == 3.
       info.external_attr = mode << 16
-      zf.writestr(info, files[rel_path])
+      # A caller-built ZipInfo does not inherit the archive compresslevel,
+      # so the level must also be passed per entry.
+      zf.writestr(info, files[rel_path], compresslevel=_ZIP_DEFLATE_LEVEL)
   return out.getvalue()
 
 
@@ -316,6 +334,9 @@ def build_repo_source_entries(
     pkg_dir: str,
     ofx_source_dir: str,
     readme_override: str | None = None,
+    *,
+    doc_entries: Mapping[str, bytes] | None = None,
+    sfx_entries: Mapping[str, bytes] | None = None,
 ) -> dict[str, bytes]:
   """Collects source, test, build, and doc files for the complete repo ZIP.
 
@@ -324,6 +345,11 @@ def build_repo_source_entries(
     ofx_source_dir: OpenFX source directory; files land under `ofx/`.
     readme_override: Replacement contents for `README.md`, or None to read
       the file from disk.
+    doc_entries: Already-read `build_doc_entries(pkg_dir)` result, or None
+      to read the docs here. Lets `build_and_write_release` reuse its copy
+      instead of reading every doc twice.
+    sfx_entries: Already-read `build_sfx_entries(pkg_dir)` result, or None
+      to read the SFX files here (same reason as `doc_entries`).
 
   Returns:
     Mapping of repo-relative paths to file bytes (prefixed with
@@ -342,8 +368,12 @@ def build_repo_source_entries(
       raise FileNotFoundError(f"Repository file not found at {src_path}")
     entries[rel] = _read_bytes(src_path)
 
-  entries.update(build_doc_entries(pkg_dir))
-  entries.update(build_sfx_entries(pkg_dir))
+  entries.update(
+      build_doc_entries(pkg_dir) if doc_entries is None else doc_entries
+  )
+  entries.update(
+      build_sfx_entries(pkg_dir) if sfx_entries is None else sfx_entries
+  )
 
   for rel in _OFX_SOURCE_RELPATHS + _REPO_EXTRA_OFX_FILES:
     src_path = os.path.join(ofx_source_dir, rel)
@@ -374,7 +404,10 @@ def build_and_write_release(
     ofx_source_dir: Directory containing OpenFX source and installer scripts.
 
   Returns:
-    Mapping of logical artifact keys to output file paths.
+    Mapping of logical artifact keys to output file paths: always `drfx`,
+    `ofx_bundle`, `macos_installer`, `linux_installer`, `docs_dir`,
+    `full_zip`, and `repo_zip`; plus `readme`, `readme_en`, and `license`
+    when those files were written.
 
   Raises:
     ValueError: If the `.drfx` or a WAV fails validation.
@@ -461,6 +494,7 @@ def build_and_write_release(
     license_out = os.path.join(output_dir, "LICENSE")
     with open(license_out, "wb") as f:
       f.write(license_bytes)
+    written_paths["license"] = license_out
 
   # --- Full Bundle ZIP: the same release tree as one archive ---
   full_zip_map: dict[str, bytes] = {
@@ -488,8 +522,13 @@ def build_and_write_release(
   written_paths["full_zip"] = full_zip_path
 
   # --- Complete Repo ZIP: sources under papercraft_pro/, release nested ---
+  # Reuse the docs/SFX already read above so each file is read only once.
   repo_source_entries = build_repo_source_entries(
-      pkg_dir, resolved_ofx_dir, resolved_readme
+      pkg_dir,
+      resolved_ofx_dir,
+      resolved_readme,
+      doc_entries=doc_entries,
+      sfx_entries=sfx_entries,
   )
   repo_zip_map: dict[str, bytes] = {
       f"papercraft_pro/{rel}": payload
