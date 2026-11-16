@@ -73,15 +73,6 @@ struct ImageView {
 using ParallelRowsFn = std::function<void(
     int y_start, int y_end, const std::function<void(int y)>& row_fn)>;
 
-// Intro and outro paper entrance/exit presets for Paper Cutout FX.
-enum class CutoutAnimStyle {
-  kNone = 0,
-  kPaperUnfold = 1,
-  kCrumpleBall = 2,
-  kAirplaneGlide = 3,
-  kFlatPop = 4,
-};
-
 // What the Paper Fold & Unfold transition does with its two clips.
 enum class FoldTransitionAction {
   kAuto = 0,           // Unfold at a clip start, fold at a clip end.
@@ -198,19 +189,6 @@ struct CutoutParams {
   float media_texture_overlay = 0.22f;
   int random_seed = 7;
 
-  // Intro & outro paper animations across the clip duration.
-  // Styles are CutoutAnimStyle values; durations in frames. Glide angle in
-  // degrees (also turns the Paper Unfold fold direction); glide distance as a
-  // fraction of the canvas size.
-  int intro_style = 0;
-  int intro_frames = 14;
-  int outro_style = 0;
-  int outro_frames = 14;
-  float transition_angle_deg = -22.0f;
-  float glide_distance = 0.65f;
-  bool mirror_transition_h = false;
-  bool mirror_transition_v = false;
-
   // 3D drop shadow.
   // Opacity 0..1, angle in degrees, distance and softness as fractions of the
   // min frame side.
@@ -221,11 +199,11 @@ struct CutoutParams {
 
   // Stop-motion stepping & master transform.
   bool enable_stop_motion = true;
-  // Frames per stop-motion pose; jitter offset (fraction of the min frame
-  // side) and rotation (degrees) per pose.
-  int hold_frames = 3;
-  float jitter_pos_norm = 0.0025f;
-  float jitter_rot_deg = 0.75f;
+  // Frames per stop-motion pose (6 = a 4 fps look at 24 fps); jitter offset
+  // (fraction of the min frame side) and rotation (degrees) per pose.
+  int hold_frames = 6;
+  float jitter_pos_norm = 0.001f;
+  float jitter_rot_deg = 0.3f;
   // Master transform: position in canvas fractions, scale, degrees, flips.
   float master_pos_x = 0.5f;
   float master_pos_y = 0.5f;
@@ -234,7 +212,8 @@ struct CutoutParams {
   bool flip_h = false;
   bool flip_v = false;
 
-  // Host frame coordinates for intro/outro and stop-motion timing.
+  // Host frame coordinates for stop-motion timing: poses step every
+  // hold_frames from frame_start; frame_end clamps the step time.
   double current_time = 0.0;
   double frame_start = 0.0;
   double frame_end = 120.0;
