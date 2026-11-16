@@ -159,8 +159,9 @@ When modifying or extending the plugin, update matching code and tests across ea
 
 1. Add the parameter field and default value to `CutoutParams` (filter) or `PaperFoldTransitionParams` (transition) in `ofx/papercraft_kernel.h`.
 2. Read and apply the field in `RenderCutoutFrame` or `RenderPaperFoldTransition` in `ofx/papercraft_kernel.cc`.
-3. Define the Inspector control inside `DefineCutoutParameters` or `DefineFoldTransitionParameters`, add its `OfxParamHandle` slot in `PluginInstance`, bind it in `HandleCreateInstance` for the matching `PluginRole`, and populate it in `ReadCutoutParams` or `ReadFoldTransitionParams` inside `ofx/papercraft_ofx_plugin.cc`. Both plugins share identifiers such as `paperColor` and `shadowOpacity`, so a shared control binds once.
-4. Add a targeted GoogleTest regression test in `ofx/papercraft_ofx_test.cc`.
+3. Add one entry to `kCutoutParamSpecs` or `kFoldTransitionParamSpecs` in `ofx/papercraft_ofx_plugin.cc` (ID, label, group, hint, default, limits, and the kernel field it fills). Defining, binding, and reading the control all come from that table, and a `static_assert` rejects duplicate IDs or defaults outside the limits. Both plugins share identifiers such as `paperColor` and `shadowOpacity`; never rename an existing ID.
+4. Add the parameter's kernel default to `CutoutKernelDefaults()` or `FoldTransitionKernelDefaults()` in `ofx/papercraft_ofx_test.cc`, so `DescribedParameterDefaultsMatchKernelStructs` catches drift between the Inspector default and the kernel struct.
+5. Add a targeted GoogleTest regression test in `ofx/papercraft_ofx_test.cc`.
 
 > [!NOTE]
 > Keep existing parameter identifiers stable, even when their names no longer match their purpose. For example, the intro and outro group is still named `TransitionGroup` and the **Glide Angle** control is still `transitionAngle`, so projects saved with earlier versions keep their values.

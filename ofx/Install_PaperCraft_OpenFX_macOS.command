@@ -159,15 +159,14 @@ main() {
   done
   if [[ -w "${check_dir}" ]]; then
     mkdir -p "${dest_dir}"
-    # BUNDLE_NAME is a non-empty readonly constant, so the path always ends in
-    # the bundle folder and can never expand to "/".
-    # shellcheck disable=SC2115
-    rm -rf "${dest_dir}/${BUNDLE_NAME}"
+    # ${var:?} aborts the script if either part is empty, so the path can
+    # never collapse to "/PaperCraftStudioPro.ofx.bundle" or "/".
+    rm -rf "${dest_dir:?empty target directory}/${BUNDLE_NAME:?}"
     cp -R "${bundle_dir}" "${dest_dir}/"
   else
     echo "Installing to ${dest_dir} requires administrator privileges..."
     sudo mkdir -p "${dest_dir}"
-    sudo rm -rf "${dest_dir}/${BUNDLE_NAME}"
+    sudo rm -rf "${dest_dir:?empty target directory}/${BUNDLE_NAME:?}"
     sudo cp -R "${bundle_dir}" "${dest_dir}/"
   fi
   echo "Installed ${BUNDLE_NAME} to ${dest_dir}/${BUNDLE_NAME}"

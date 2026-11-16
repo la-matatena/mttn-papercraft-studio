@@ -107,16 +107,15 @@ main() {
   local -r dest_binary="${dest_dir}/${BUNDLE_NAME}/Contents/Linux-x86-64/${BINARY_NAME}"
   if [[ -w "${check_dir}" ]]; then
     mkdir -p "${dest_dir}"
-    # BUNDLE_NAME is a non-empty readonly constant, so the path always ends in
-    # the bundle folder and can never expand to "/".
-    # shellcheck disable=SC2115
-    rm -rf "${dest_dir}/${BUNDLE_NAME}"
+    # ${var:?} aborts the script if either part is empty, so the path can
+    # never collapse to "/PaperCraftStudioPro.ofx.bundle" or "/".
+    rm -rf "${dest_dir:?empty target directory}/${BUNDLE_NAME:?}"
     cp -a "${src_bundle}" "${dest_dir}/"
     chmod 0755 "${dest_binary}"
   else
     echo "Installing to ${dest_dir} requires sudo..."
     sudo mkdir -p "${dest_dir}"
-    sudo rm -rf "${dest_dir}/${BUNDLE_NAME}"
+    sudo rm -rf "${dest_dir:?empty target directory}/${BUNDLE_NAME:?}"
     sudo cp -a "${src_bundle}" "${dest_dir}/"
     sudo chmod 0755 "${dest_binary}"
   fi
