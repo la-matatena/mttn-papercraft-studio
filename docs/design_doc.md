@@ -192,6 +192,7 @@ For existing `.drfx` workflows, `fusion_templates.py` builds two `.setting` scri
 - Top-level nodes declare `MacroOperator` paired with `ViewInfo = OperatorInfo` instead of `GroupOperator` or `GroupInfo`.
 - Every `LBLC_DropDownButton` group count matches the exact number of nested child controls declared in `LBLC_NumInputs`.
 - Every `SimpleExpression` omits Lua `math.` prefixes and C-style `&&` or `||` operators, and every macro control reference exists in `UserControls`.
+- Every macro `Inputs` default row matches a declared `UserControls` entry, so a leftover row from a removed control (for example the retired `IntroStyle`) is rejected.
 
 ## Design decisions and trade-offs
 
