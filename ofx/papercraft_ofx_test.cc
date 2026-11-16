@@ -432,9 +432,11 @@ struct MockParam {
 // All parameters of one descriptor or instance, keyed by parameter ID.
 // `looked_up` records every ID paramGetHandle() resolved successfully, so
 // tests can check that CreateInstance binds every parameter it describes.
+// `define_order` lists IDs in first paramDefine() order (= Inspector order).
 struct MockParamSet {
   MockPropertySet owner_props;
   std::map<std::string, std::unique_ptr<MockParam>> params;
+  std::vector<std::string> define_order;
   PthreadMutex looked_up_mu;
   std::set<std::string> looked_up;
 };
@@ -452,6 +454,9 @@ OfxStatus MockParamDefine(OfxParamSetHandle param_set, const char* param_type,
   param->name = name;
   if (prop_set != nullptr) {
     *prop_set = ToPropHandle(&param->props);
+  }
+  if (ps->params.count(name) == 0) {
+    ps->define_order.push_back(name);
   }
   ps->params[name] = std::move(param);
   return kOfxStatOK;
@@ -1264,6 +1269,41 @@ bool IsEmptyRoi(const std::array<double, 4>& roi) {
   return roi[2] <= roi[0] || roi[3] <= roi[1];
 }
 
+// Returns string property `name` of a described parameter (for example its
+// label or parent group ID), or "" when the plugin did not set it.
+std::string ParamStringProp(const MockParam& param, const char* name) {
+  const auto it = param.props.map.find(name);
+  if (it == param.props.map.end() ||
+      it->second.kind != PropValue::Kind::kString ||
+      it->second.strings.empty()) {
+    return "";
+  }
+  return it->second.strings[0];
+}
+
+// Returns integer property `name` of a described parameter, or `fallback`
+// when the plugin did not set it.
+int ParamIntProp(const MockParam& param, const char* name, int fallback) {
+  const auto it = param.props.map.find(name);
+  if (it == param.props.map.end() || it->second.kind != PropValue::Kind::kInt ||
+      it->second.ints.empty()) {
+    return fallback;
+  }
+  return it->second.ints[0];
+}
+
+// Returns whether the plugin hid `param` (kOfxParamPropSecret = 1).
+bool IsSecretParam(const MockParam& param) {
+  return ParamIntProp(param, kOfxParamPropSecret, 0) != 0;
+}
+
+// Retired Paper Cutout FX "Intro & Outro Paper Animations" parameter IDs.
+// They stay defined (hidden) so old projects open, but are never read.
+constexpr const char* kLegacyCutoutParamIds[] = {
+    "introStyle",      "introFrames",   "outroStyle",   "outroFrames",
+    "transitionAngle", "glideDistance", "mirrorTransH", "mirrorTransV",
+};
+
 // ---------------------------------------------------------------------------
 // Test fixture.
 // ---------------------------------------------------------------------------
@@ -1433,9 +1473,8 @@ TEST_F(PaperCraftOfxTest,
                           out_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
                           range);
 
-    // Enable ChromaKey, disable intro collapse, hold resting pose cleanly.
+    // Enable ChromaKey and hold the resting pose cleanly.
     SetIntParam(&inst, "enableChromaKey", 1);
-    SetIntParam(&inst, "introStyle", 0);
     SetDoubleParam(&inst, "mediaScale", 1.0);
     SetDoubleParam(&inst, "shadowOpacity", 0.0);
     SetDoubleParam(&inst, "borderWidth", 0.06);
@@ -1536,7 +1575,6 @@ TEST_F(PaperCraftOfxTest,
     ConfigureClipAndImage(&host_, inst.clips.at("Output").get(), &out_img,
                           out_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
                           range);
-    SetIntParam(&inst, "introStyle", 0);
     SetIntParam(&inst, "sourceMode", 1);
 
     MockPropertySet render_in;
@@ -1599,7 +1637,6 @@ TEST_F(PaperCraftOfxTest,
   ASSERT_EQ(
       cutout->mainEntry(kOfxActionCreateInstance, &c_inst, nullptr, nullptr),
       kOfxStatOK);
-  SetIntParam(&c_inst, "introStyle", 0);
   SetIntParam(&c_inst, "sourceMode", 1);
 
   std::vector<std::uint8_t> c_pos(kH * kStride, 0);
@@ -1673,7 +1710,6 @@ TEST_F(PaperCraftOfxTest, OpaqueInputClipRendersCleanly) {
                           out_buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
                           range);
     SetIntParam(&pi, "enableChromaKey", 1);
-    SetIntParam(&pi, "introStyle", 0);
     SetDoubleParam(&pi, "shadowOpacity", 0.0);
 
     ASSERT_EQ(RenderFrame(pi, 30.0), kOfxStatOK);
@@ -1681,61 +1717,6 @@ TEST_F(PaperCraftOfxTest, OpaqueInputClipRendersCleanly) {
         static_cast<std::size_t>((kH / 2) * kW + kW / 2) * 4;
     EXPECT_GT(out_buf[center + 3], 0.9f);
     EXPECT_LT(out_buf[3], 0.02f);
-  }
-}
-
-// Verifies overlapping intro/outro stays smooth and mirrorTransV applies.
-TEST_F(PaperCraftOfxTest, ShortClipIntroOutroOverlapAndMirrorBehaveSmoothly) {
-  // Short 20-frame CutoutFX clip with introFrames=14 & outroFrames=14 stays
-  // continuous across the midpoint and honors mirrorTransV.
-  {
-    ScopedPluginInstance pi;
-    ASSERT_NO_FATAL_FAILURE(InitCutout(&pi));
-
-    constexpr int kW = 64;
-    constexpr int kH = 48;
-    const double short_range[2] = {0.0, 20.0};
-    SetIntParam(&pi, "sourceMode", 1);
-    SetIntParam(&pi, "enableStopMotion", 0);
-    SetIntParam(&pi, "introStyle", 2);
-    SetIntParam(&pi, "introFrames", 14);
-    SetIntParam(&pi, "outroStyle", 1);
-    SetIntParam(&pi, "outroFrames", 14);
-
-    auto sum_alpha_at = [&](double t, int mirror_v, std::vector<float>* buf) {
-      MockPropertySet o_img;
-      ConfigureClipAndImage(&host_, pi.inst.clips.at("Output").get(), &o_img,
-                            buf->data(), kW, kH, kW * 16, kOfxBitDepthFloat,
-                            short_range);
-      SetIntParam(&pi, "mirrorTransV", mirror_v);
-      EXPECT_EQ(RenderFrame(pi, t), kOfxStatOK);
-      double total_a = 0.0;
-      for (int i = 0; i < kW * kH; ++i) {
-        total_a += (*buf)[i * 4 + 3];
-      }
-      return total_a;
-    };
-
-    std::vector<float> buf9(kW * kH * 4, 0.0f);
-    std::vector<float> buf10(kW * kH * 4, 0.0f);
-    std::vector<float> buf11(kW * kH * 4, 0.0f);
-    std::vector<float> buf14(kW * kH * 4, 0.0f);
-    const double a9 = sum_alpha_at(9.0, 0, &buf9);
-    const double a10 = sum_alpha_at(10.0, 0, &buf10);
-    const double a11 = sum_alpha_at(11.0, 0, &buf11);
-    const double a14 = sum_alpha_at(14.0, 0, &buf14);
-    EXPECT_GT(a10, 50.0);
-    // Midpoint transition between intro and outro must not collapse or jump by
-    // >30% between frames 9->10->11->14.
-    EXPECT_NEAR(a9, a10, a10 * 0.25);
-    EXPECT_NEAR(a11, a10, a10 * 0.25);
-    EXPECT_LT(a14, a10);
-
-    std::vector<float> buf6_a(kW * kH * 4, 0.0f);
-    std::vector<float> buf6_b(kW * kH * 4, 0.0f);
-    sum_alpha_at(6.0, 0, &buf6_a);
-    sum_alpha_at(6.0, 1, &buf6_b);
-    EXPECT_NE(buf6_a, buf6_b);
   }
 }
 
@@ -1776,7 +1757,6 @@ TEST_F(PaperCraftOfxTest, CroppedInputTileMapsViaRegionOfDefinition) {
                         out_buf.data(), kCanvasW, kCanvasH, kCanvasW * 16,
                         kOfxBitDepthFloat, range);
 
-  SetIntParam(&pi, "introStyle", 0);
   SetDoubleParam(&pi, "mediaScale", 1.0);
   SetIntParam(&pi, "enableBorder", 0);
   SetDoubleParam(&pi, "shadowOpacity", 0.0);
@@ -2115,7 +2095,8 @@ TEST_F(PaperCraftOfxTest,
   const double range[2] = {0.0, 48.0};
 
   // 1. Default CutoutFX renders a resting cutout + drop shadow on frame 0
-  //    (Intro/Outro default to None so timeline transitions never collide).
+  //    (the cutout has no intro/outro, so timeline transitions never
+  //    collide).
   std::vector<float> cutout_buf(static_cast<std::size_t>(kW) * kH * 4, 0.0f);
   {
     ScopedPluginInstance cutout_pi;
@@ -2247,6 +2228,8 @@ TEST_F(PaperCraftOfxTest,
 
 // Verifies CreateInstance looks up every described parameter and clip, so a
 // typo in a parameter ID cannot silently fall back to the default value.
+// Secret (retired) parameters are the exception: they must stay unbound so
+// their saved values can never reach the kernel.
 TEST_F(PaperCraftOfxTest, CreateInstanceBindsEveryDescribedParameterAndClip) {
   const std::pair<const char*, const char*> plugins[] = {
       {"com.papercraft.CutoutFX", kOfxImageEffectContextFilter},
@@ -2261,6 +2244,11 @@ TEST_F(PaperCraftOfxTest, CreateInstanceBindsEveryDescribedParameterAndClip) {
       // Groups and pages only organize the UI; they have no value to read.
       if (param->type == kOfxParamTypeGroup ||
           param->type == kOfxParamTypePage) {
+        continue;
+      }
+      if (IsSecretParam(*param)) {
+        EXPECT_EQ(pi.inst.param_set.looked_up.count(name), 0u)
+            << id << ": secret parameter \"" << name << "\" is bound";
         continue;
       }
       ++value_params;
@@ -2296,8 +2284,9 @@ struct DefaultException {
 // Converts a kernel bool default to the OpenFX 0/1 form.
 double BoolDefault(bool b) { return b ? 1.0 : 0.0; }
 
-// Expected defaults of every Paper Cutout FX value parameter, read from a
-// default-constructed CutoutParams.
+// Expected defaults of every visible Paper Cutout FX value parameter, read
+// from a default-constructed CutoutParams. The secret legacy intro/outro
+// parameters have no kernel field (see kLegacyCutoutParamIds).
 std::vector<KernelDefault> CutoutKernelDefaults() {
   const CutoutParams k;
   return {
@@ -2324,14 +2313,6 @@ std::vector<KernelDefault> CutoutKernelDefaults() {
       {"creaseScale", {k.crease_scale}},
       {"mediaTextureOverlay", {k.media_texture_overlay}},
       {"randomSeed", {static_cast<double>(k.random_seed)}},
-      {"introStyle", {static_cast<double>(k.intro_style)}},
-      {"introFrames", {static_cast<double>(k.intro_frames)}},
-      {"outroStyle", {static_cast<double>(k.outro_style)}},
-      {"outroFrames", {static_cast<double>(k.outro_frames)}},
-      {"transitionAngle", {k.transition_angle_deg}},
-      {"glideDistance", {k.glide_distance}},
-      {"mirrorTransH", {BoolDefault(k.mirror_transition_h)}},
-      {"mirrorTransV", {BoolDefault(k.mirror_transition_v)}},
       {"shadowOpacity", {k.shadow_opacity}},
       {"shadowAngle", {k.shadow_angle_deg}},
       {"shadowDistance", {k.shadow_distance_norm}},
@@ -2396,7 +2377,8 @@ std::vector<double> ParamPropAsDoubles(const MockParam& param,
 }
 
 // Verifies the plugin's parameter tables cannot drift from the kernel
-// structs: every described value parameter has a kernel counterpart, its
+// structs: every visible described value parameter has a kernel
+// counterpart (secret legacy parameters have none), its
 // default equals the CutoutParams / PaperFoldTransitionParams default (as
 // the float/int the kernel stores), and that default lies inside the hard
 // limits, the slider range and the choice options. Intentional differences
@@ -2432,7 +2414,7 @@ TEST_F(PaperCraftOfxTest, DescribedParameterDefaultsMatchKernelStructs) {
     }
     for (const auto& [name, param] : params) {
       if (param->type != kOfxParamTypeGroup &&
-          param->type != kOfxParamTypePage) {
+          param->type != kOfxParamTypePage && !IsSecretParam(*param)) {
         EXPECT_EQ(expected_ids.count(name), 1u)
             << "parameter \"" << name
             << "\" has no kernel default in this test; add it";
@@ -2509,6 +2491,188 @@ TEST_F(PaperCraftOfxTest, DescribedParameterDefaultsMatchKernelStructs) {
   }
 }
 
+// Verifies the retired intro/outro parameters are ignored: setting all of
+// them on an instance (values that used to collapse, slide, or mirror the
+// cutout at these frames) leaves every rendered frame byte-identical.
+TEST_F(PaperCraftOfxTest, CutoutIgnoresLegacyIntroOutroParams) {
+  ScopedPluginInstance pi;
+  ASSERT_NO_FATAL_FAILURE(InitCutout(&pi));
+
+  constexpr int kW = 96;
+  constexpr int kH = 64;
+  const double range[2] = {0.0, 40.0};
+  SetIntParam(&pi, "sourceMode", 1);  // Built-in Paper Sticker.
+
+  // Frames at the clip start, inside the old intro/outro windows, and at
+  // the clip end.
+  const double kTimes[] = {0.0, 3.0, 20.0, 37.0, 40.0};
+  auto render_all = [&]() {
+    std::vector<std::vector<float>> frames;
+    for (double t : kTimes) {
+      std::vector<float> buf(static_cast<std::size_t>(kW) * kH * 4, -1.0f);
+      MockPropertySet o_img;
+      ConfigureClipAndImage(&host_, pi.inst.clips.at("Output").get(), &o_img,
+                            buf.data(), kW, kH, kW * 16, kOfxBitDepthFloat,
+                            range);
+      EXPECT_EQ(RenderFrame(pi, t), kOfxStatOK) << "t=" << t;
+      frames.push_back(std::move(buf));
+    }
+    return frames;
+  };
+
+  const std::vector<std::vector<float>> resting = render_all();
+  for (std::size_t i = 0; i < resting.size(); ++i) {
+    EXPECT_GT(MeanAlpha(resting[i]), 0.05) << "t=" << kTimes[i];
+  }
+
+  SetIntParam(&pi, "introStyle", 1);  // Was Paper Unfold (3D).
+  SetIntParam(&pi, "introFrames", 30);
+  SetIntParam(&pi, "outroStyle", 2);  // Was Crumple Ball.
+  SetIntParam(&pi, "outroFrames", 30);
+  SetDoubleParam(&pi, "transitionAngle", 45.0);
+  SetDoubleParam(&pi, "glideDistance", 1.2);
+  SetIntParam(&pi, "mirrorTransH", 1);
+  SetIntParam(&pi, "mirrorTransV", 1);
+  const std::vector<std::vector<float>> with_legacy = render_all();
+  ASSERT_EQ(with_legacy.size(), resting.size());
+  for (std::size_t i = 0; i < resting.size(); ++i) {
+    EXPECT_TRUE(with_legacy[i] == resting[i]) << "t=" << kTimes[i];
+  }
+}
+
+// Verifies the Cutout describes the 8 retired intro/outro IDs as secret,
+// top-level parameters (in no group), that they are the only secret ones,
+// and that every visible value parameter sits in a group. The Paper Fold &
+// Unfold transition keeps its own mirrorTransH / mirrorTransV visible.
+TEST_F(PaperCraftOfxTest, CutoutLegacyIntroOutroParamsAreSecretAndUngrouped) {
+  ScopedPluginInstance pi;
+  ASSERT_NO_FATAL_FAILURE(InitCutout(&pi));
+  const auto& params = pi.desc.param_set.params;
+  const std::set<std::string> legacy(std::begin(kLegacyCutoutParamIds),
+                                     std::end(kLegacyCutoutParamIds));
+  EXPECT_EQ(legacy.size(), 8u);
+  for (const std::string& id : legacy) {
+    SCOPED_TRACE(id);
+    const auto it = params.find(id);
+    ASSERT_TRUE(it != params.end()) << "legacy ID must stay defined";
+    EXPECT_TRUE(IsSecretParam(*it->second));
+    EXPECT_EQ(ParamStringProp(*it->second, kOfxParamPropParent), "");
+  }
+  for (const auto& [name, param] : params) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(IsSecretParam(*param), legacy.count(name) == 1);
+    if (param->type != kOfxParamTypeGroup && legacy.count(name) == 0) {
+      const std::string parent = ParamStringProp(*param, kOfxParamPropParent);
+      const auto group = params.find(parent);
+      ASSERT_TRUE(group != params.end()) << "visible parameter has no group";
+      EXPECT_EQ(group->second->type, kOfxParamTypeGroup);
+      EXPECT_FALSE(IsSecretParam(*group->second));
+    }
+  }
+  // The retired "5. Intro & Outro Paper Animations" group is gone.
+  EXPECT_EQ(params.count("TransitionGroup"), 0u);
+
+  ScopedPluginInstance fold;
+  ASSERT_NO_FATAL_FAILURE(InitFoldTransition(&fold));
+  for (const char* id : {"mirrorTransH", "mirrorTransV"}) {
+    SCOPED_TRACE(id);
+    const auto it = fold.desc.param_set.params.find(id);
+    ASSERT_TRUE(it != fold.desc.param_set.params.end());
+    EXPECT_FALSE(IsSecretParam(*it->second));
+    EXPECT_EQ(ParamStringProp(*it->second, kOfxParamPropParent), "FoldGroup");
+    EXPECT_EQ(fold.inst.param_set.looked_up.count(id), 1u);
+  }
+}
+
+// Verifies the Cutout stop-motion defaults the host is given: Hold Frames 6
+// (a 4 fps look at 24 fps), Rotation Jitter 0.3 degrees, and Position
+// Jitter 0.001 of the frame, matching CutoutParams.
+TEST_F(PaperCraftOfxTest, CutoutDescribesSubtleStopMotionDefaults) {
+  ScopedPluginInstance pi;
+  ASSERT_NO_FATAL_FAILURE(InitCutout(&pi));
+  const auto& params = pi.desc.param_set.params;
+  ASSERT_EQ(params.count("holdFrames"), 1u);
+  ASSERT_EQ(params.count("jitterRot"), 1u);
+  ASSERT_EQ(params.count("jitterPos"), 1u);
+  EXPECT_EQ(ParamIntProp(*params.at("holdFrames"), kOfxParamPropDefault, -1),
+            6);
+  EXPECT_EQ(ParamPropAsDoubles(*params.at("jitterRot"), kOfxParamPropDefault),
+            std::vector<double>{0.3});
+  EXPECT_EQ(ParamPropAsDoubles(*params.at("jitterPos"), kOfxParamPropDefault),
+            std::vector<double>{0.001});
+  EXPECT_NE(ParamStringProp(*params.at("holdFrames"), kOfxParamPropHint)
+                .find("6 for a 4 fps look at 24 fps"),
+            std::string::npos);
+  const CutoutParams k;
+  EXPECT_EQ(k.hold_frames, 6);
+  EXPECT_EQ(k.jitter_rot_deg, 0.3f);
+  EXPECT_EQ(k.jitter_pos_norm, 0.001f);
+}
+
+// Verifies the Cutout "7. Advanced" group: defined, closed by default, the
+// last visible group in Inspector order, and holding exactly the six moved
+// technical controls in order.
+TEST_F(PaperCraftOfxTest, CutoutAdvancedGroupIsClosedLastAndHoldsSixControls) {
+  ScopedPluginInstance pi;
+  ASSERT_NO_FATAL_FAILURE(InitCutout(&pi));
+  const MockParamSet& ps = pi.desc.param_set;
+  const auto it = ps.params.find("AdvancedGroup");
+  ASSERT_TRUE(it != ps.params.end());
+  const MockParam& group = *it->second;
+  EXPECT_EQ(group.type, kOfxParamTypeGroup);
+  EXPECT_EQ(ParamStringProp(group, kOfxPropLabel), "7. Advanced");
+  EXPECT_EQ(ParamIntProp(group, kOfxParamPropGroupOpen, -1), 0);
+  EXPECT_FALSE(IsSecretParam(group));
+
+  std::string last_visible_group;
+  std::vector<std::string> children;
+  for (const std::string& name : ps.define_order) {
+    const MockParam& param = *ps.params.at(name);
+    if (IsSecretParam(param)) {
+      continue;
+    }
+    if (param.type == kOfxParamTypeGroup) {
+      last_visible_group = name;
+    } else if (ParamStringProp(param, kOfxParamPropParent) == "AdvancedGroup") {
+      children.push_back(name);
+    }
+  }
+  EXPECT_EQ(last_visible_group, "AdvancedGroup");
+  EXPECT_EQ(children, (std::vector<std::string>{"sourceMode", "sourcePremult",
+                                                "tearDetail", "grainScale",
+                                                "creaseScale", "randomSeed"}));
+}
+
+// Verifies both plugins number their visible group labels "1. ", "2. ", ...
+// consecutively in Inspector order (seven Cutout groups, three transition
+// groups), so the Inspector order is obvious and has no gaps.
+TEST_F(PaperCraftOfxTest, VisibleGroupLabelsAreNumberedConsecutively) {
+  const std::pair<const char*, int> cases[] = {{kCutoutId, 7},
+                                               {kFoldTransitionId, 3}};
+  for (const auto& c : cases) {
+    const char* id = c.first;
+    SCOPED_TRACE(id);
+    const char* context = std::strcmp(id, kCutoutId) == 0
+                              ? kOfxImageEffectContextFilter
+                              : kOfxImageEffectContextTransition;
+    ScopedPluginInstance pi;
+    ASSERT_NO_FATAL_FAILURE(InitInstance(id, context, &pi));
+    int number = 0;
+    for (const std::string& name : pi.desc.param_set.define_order) {
+      const MockParam& param = *pi.desc.param_set.params.at(name);
+      if (param.type != kOfxParamTypeGroup || IsSecretParam(param)) {
+        continue;
+      }
+      ++number;
+      const std::string prefix = std::to_string(number) + ". ";
+      EXPECT_EQ(ParamStringProp(param, kOfxPropLabel).rfind(prefix, 0), 0u)
+          << name << " label \"" << ParamStringProp(param, kOfxPropLabel)
+          << "\" should start with \"" << prefix << "\"";
+    }
+    EXPECT_EQ(number, c.second);
+  }
+}
+
 // Verifies Edge Choke scales with both render-scale axes: swapping X and Y
 // gives the same result, and a reduced Y scale changes the choke.
 TEST_F(PaperCraftOfxTest, EdgeChokeUsesBothRenderScaleAxes) {
@@ -2532,7 +2696,6 @@ TEST_F(PaperCraftOfxTest, EdgeChokeUsesBothRenderScaleAxes) {
   MockPropertySet s_img;
   ConfigureClipAndImage(&host_, pi.inst.clips.at("Source").get(), &s_img,
                         src.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
-  SetIntParam(&pi, "introStyle", 0);
   SetIntParam(&pi, "enableBorder", 0);
   SetIntParam(&pi, "enableStopMotion", 0);
   SetDoubleParam(&pi, "shadowOpacity", 0.0);
@@ -2677,7 +2840,6 @@ TEST_F(PaperCraftOfxTest,
                         kOfxBitDepthFloat, range);
   ConfigureClipAndImage(&host_, pi.inst.clips.at("Output").get(), &o_img,
                         out.data(), kW, kH, kW * 16, kOfxBitDepthFloat, range);
-  SetIntParam(&pi, "introStyle", 0);
   const std::array<double, 4> full = {0.0, 0.0, static_cast<double>(kW),
                                       static_cast<double>(kH)};
 

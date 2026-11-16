@@ -4,8 +4,8 @@
 // Entry points (declared in papercraft_kernel.h) are called from the OpenFX
 // render action in papercraft_ofx_plugin.cc:
 //   - RenderCutoutFrame: torn-paper cutout of a clip or the built-in sticker,
-//     with grain, creases, drop shadow, stop-motion jitter, and intro/outro
-//     animations (including the 3D Paper Unfold).
+//     with grain, creases, drop shadow, stop-motion jitter, edge boil, and
+//     the master transform.
 //   - RenderPaperFoldTransition: folds one clip into a paper packet and/or
 //     unfolds the other, with flap lighting, crease marks, and cast shadows.
 //   - ComputeSteppedTransitionProgress: stop-motion quantized progress.
@@ -18,7 +18,7 @@
 //   - Output px: OpenFX pixel coordinates at the current render scale.
 //     Integer (x, y) addresses a pixel; its center is (x + 0.5, y + 0.5).
 //   - Canonical px: the pixel grid of `canvas_bounds` (the output RoD, i.e.
-//     the full frame), describing a point on the un-animated subject or
+//     the full frame), describing a point on the untransformed subject or
 //     paper. Renderers inverse-map output px to canonical px.
 //   - Source px: pixel coordinates of an input clip buffer. Canonical px are
 //     remapped through the clip's RoD so cropped or differently sized inputs
@@ -26,8 +26,8 @@
 //   - Normalized `nu_x/nu_y`: (canonical px - canvas origin) / min(cw, ch).
 //     Procedural textures use it so grain and tears look the same at every
 //     resolution and aspect ratio.
-//   - Normalized `nx/ny`: 0..1 across the canvas per axis (demo sticker,
-//     crumple warp), or a lattice coordinate inside the noise helpers.
+//   - Normalized `nx/ny`: 0..1 across the canvas per axis (demo sticker),
+//     or a lattice coordinate inside the noise helpers.
 //   - Sheet-local px: offset from the paper sheet center (SheetGeometry cx,
 //     cy). Fold hinges live here.
 //   - Packet-local px: sheet-local coordinates of the folded packet, i.e.
@@ -311,8 +311,8 @@ RgbaColor SampleBilinearTransparentOutside(const ImageView& view, float px,
 // Procedural noise and paper textures
 //
 // All noise is pure (no state), deterministic for a given seed, and safe to
-// call from parallel_for workers. Inputs are normalized coordinates (`nu`
-// space, or per-axis 0..1 for the crumple warp) times a frequency.
+// call from parallel_for workers. Inputs are normalized `nu` coordinates
+// times a frequency.
 // ---------------------------------------------------------------------------
 
 // Fast deterministic integer spatial hash returning [0, 1].
@@ -407,8 +407,7 @@ float PaperFiberGrain(float nx, float ny, float scale, std::uint32_t seed) {
   return Lerp(0.81f, 1.04f, grain);
 }
 
-// Ridged-noise octaves shared by PaperCreaseField and CrumpleDisplacement
-// (they must match for CrumpleDisplacement to stay bit-identical).
+// Ridged-noise octaves of PaperCreaseField.
 constexpr int kCreaseOctaves = 3;
 
 // Sheared lattice coordinates of crease octave `i` at normalized (nx, ny).
@@ -427,7 +426,7 @@ float RidgeOf(float n) {
   return ridge * ridge * ridge;
 }
 
-// Sharp ridged crease/crumple field returning [0, 1] where 1.0 = sharp fold
+// Sharp ridged crease field returning [0, 1] where 1.0 = sharp fold
 // valley, at normalized (nx, ny). `scale` sets the crease density (x 1.6,
 // floored at 0.25). Octaves use lacunarity 1.95, gain 0.55, and seed
 // +211 * i.
@@ -449,57 +448,6 @@ float PaperCreaseField(float nx, float ny, float scale, std::uint32_t seed) {
     weight *= 0.55f;
   }
   return total_w > 0.0f ? Clamp01(ridge_sum / total_w) : 0.0f;
-}
-
-// Procedural gradient/displacement vector for 3D crumple ball warp.
-//
-// Evaluates the crease field at (nx, ny), (nx + eps, ny), and (nx, ny + eps)
-// in one pass. The three samples usually fall in the same lattice cell per
-// octave, so cell hashes are reused; results are bit-identical to calling
-// PaperCreaseField three times.
-//
-// Outputs: *dx, *dy = forward-difference gradient of the crease field per
-// normalized unit (kEps = 0.008 of the canvas width or height), and
-// *crease_shade = the field at (nx, ny). Cell reuse is exact because the
-// same HashNoiseCell values feed the same InterpolateNoiseCell arithmetic,
-// in the same order, as in ValueNoise2D.
-void CrumpleDisplacement(float nx, float ny, float scale, std::uint32_t seed,
-                         float* dx, float* dy, float* crease_shade) {
-  constexpr float kEps = 0.008f;
-  const float sx[3] = {nx, nx + kEps, nx};
-  const float sy[3] = {ny, ny, ny + kEps};
-  const float s = std::max(0.25f, scale) * 1.6f;
-  float ridge_sum[3] = {0.0f, 0.0f, 0.0f};
-  float weight = 0.55f;
-  float total_w = 0.0f;
-  float freq = s;
-  for (int i = 0; i < kCreaseOctaves; ++i) {
-    const std::uint32_t oct_seed = seed + static_cast<std::uint32_t>(i) * 211u;
-    NoiseCell cell;
-    bool have_cell = false;
-    for (int k = 0; k < 3; ++k) {
-      float rx = 0.0f;
-      float ry = 0.0f;
-      CreaseOctaveCoords(sx[k], sy[k], freq, i, &rx, &ry);
-      const int ix = static_cast<int>(std::floor(rx));
-      const int iy = static_cast<int>(std::floor(ry));
-      if (!have_cell || cell.ix != ix || cell.iy != iy) {
-        cell = HashNoiseCell(ix, iy, oct_seed);
-        have_cell = true;
-      }
-      ridge_sum[k] += RidgeOf(InterpolateNoiseCell(cell, rx, ry)) * weight;
-    }
-    total_w += weight;
-    freq *= 1.95f;
-    weight *= 0.55f;
-  }
-  float c[3];
-  for (int k = 0; k < 3; ++k) {
-    c[k] = total_w > 0.0f ? Clamp01(ridge_sum[k] / total_w) : 0.0f;
-  }
-  *dx = (c[1] - c[0]) / kEps;
-  *dy = (c[2] - c[0]) / kEps;
-  *crease_shade = c[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,33 +1013,13 @@ CoarseSignedDistanceField BuildSubjectSignedDistanceField(
 }
 
 // ---------------------------------------------------------------------------
-// Cutout animation: stop motion, intro/outro, inverse mapping
+// Cutout motion: stop motion, hand jitter, inverse mapping
 // ---------------------------------------------------------------------------
 
-// Time-dependent animation state of Paper Cutout FX for one frame, computed
-// once by ComputeCutoutAnimState and read by every worker.
+// Time-dependent state of Paper Cutout FX for one frame (stop-motion step
+// and hand jitter folded into the master transform), computed once by
+// ComputeCutoutAnimState and read by every worker.
 struct CutoutAnimState {
-  // Active intro/outro style; kNone while resting.
-  CutoutAnimStyle style = CutoutAnimStyle::kNone;
-  float raw_p = 1.0f;  // Stepped linear progress, 1.0 = resting.
-  // Ease-out cubic of raw_p: 1 - (1 - raw_p)^3.
-  float ease_p = 1.0f;  // 1.0 = flat/resting, 0.0 = collapsed/folded away
-  // Uniform paper scale (1 = rest).
-  float pop_scale = 1.0f;
-  // Animation rotation, radians.
-  float angle_rad = 0.0f;
-  // Horizontal foreshortening cos(tilt); 1 = facing the camera.
-  float tilt_y_cos = 1.0f;
-  // Keystone gradients of the perspective divisor w per canvas width (k) and
-  // height (ky); see MapOutputToPaperCanonical.
-  float perspective_k = 0.0f;
-  float perspective_ky = 0.0f;
-  // Animation translation, canonical px.
-  float slide_x_px = 0.0f;
-  float slide_y_px = 0.0f;
-  // Crumple displacement strength (0 = off) and crease darkening factor.
-  float crumple_warp_norm = 0.0f;
-  float extra_crease_shade = 0.0f;
   // Host frame time after stop-motion quantization, frames.
   float step_time = 0.0f;
   // Hand jitter of the current held step: px offsets and radians.
@@ -1102,20 +1030,15 @@ struct CutoutAnimState {
   float cos_m = 1.0f;
   float sin_m = 0.0f;
   float inv_m_scale = 1.0f;
-  // Inverse animation rotation (-angle_rad).
-  float a_cos = 1.0f;
-  float a_sin = 0.0f;
 };
 
-// Evaluates the cutout animation for the current frame; cw, ch = canvas px.
+// Evaluates the cutout motion for the current frame; cw, ch = canvas px.
 // Runs once per render on the calling thread.
 //
 // Stop motion floors time to multiples of Hold Frames from the clip start,
 // so poses hold. Jitter feeds the stepped time into sin/cos with the classic
 // shader "random" constants (12.9898, 78.233, 43.17), giving every step a
-// stable pseudo-random offset. Intro progress rises 0 -> 1 over Intro Frames
-// from the clip start; outro progress falls 1 -> 0 over Outro Frames before
-// the clip end. Per-style factors below are tuned by eye.
+// stable pseudo-random offset.
 CutoutAnimState ComputeCutoutAnimState(const CutoutParams& params, float cw,
                                        float ch) {
   CutoutAnimState state;
@@ -1149,111 +1072,24 @@ CutoutAnimState ComputeCutoutAnimState(const CutoutParams& params, float cw,
                            std::sin(state.step_time * 43.17f + seed_f * 2.11f);
   }
 
-  // Compute intro / outro progress across clip duration; pick the closer
-  // boundary when short clips cause intro and outro windows to overlap.
-  float t_in = 1.0f;
-  const bool has_intro = (params.intro_style > 0 && params.intro_frames > 0);
-  if (has_intro) {
-    t_in = Clamp01(static_cast<float>(step_time - params.frame_start) /
-                   static_cast<float>(params.intro_frames));
-  }
-  float t_out = 1.0f;
-  const bool has_outro = (params.outro_style > 0 && params.outro_frames > 0);
-  if (has_outro) {
-    t_out = Clamp01(static_cast<float>(params.frame_end - step_time) /
-                    static_cast<float>(params.outro_frames));
-  }
-
-  float raw_p = 1.0f;
-  int active_style = 0;
-  if (has_intro && t_in < 1.0f && (!has_outro || t_in <= t_out)) {
-    raw_p = t_in;
-    active_style = params.intro_style;
-  } else if (has_outro && t_out < 1.0f) {
-    raw_p = t_out;
-    active_style = params.outro_style;
-  }
-
-  if (active_style > 0 && raw_p < 1.0f) {
-    state.style = static_cast<CutoutAnimStyle>(active_style);
-    state.raw_p = raw_p;
-    const float one_minus = 1.0f - raw_p;
-    state.ease_p = 1.0f - one_minus * one_minus * one_minus;
-    const float inv = 1.0f - state.ease_p;
-    const float mh = params.mirror_transition_h ? -1.0f : 1.0f;
-    const float mv = params.mirror_transition_v ? -1.0f : 1.0f;
-
-    switch (state.style) {
-      // RenderCutoutFrame renders this style with the fold machinery
-      // (RenderCutoutPaperUnfold), which reads only raw_p, ease_p,
-      // step_time, jitter, and the master terms; the slide, pop, tilt,
-      // perspective, and crumple fields stay at their resting values.
-      case CutoutAnimStyle::kPaperUnfold:
-        break;
-      // Shrinks into a spinning crumpled ball (scale down to 0.22).
-      case CutoutAnimStyle::kCrumpleBall: {
-        state.pop_scale = std::max(0.06f, 0.22f + 0.78f * state.ease_p);
-        state.angle_rad = mh * mv * 35.0f * inv * kDegToRad;
-        state.slide_y_px = mv * 0.08f * ch * inv;
-        state.crumple_warp_norm = 0.085f * inv;
-        state.extra_crease_shade = 0.65f * inv;
-        break;
-      }
-      // Slides in along Glide Angle over Glide Distance x canvas size, banking
-      // slightly.
-      case CutoutAnimStyle::kAirplaneGlide: {
-        const float rad = params.transition_angle_deg * kDegToRad;
-        state.slide_x_px =
-            mh * params.glide_distance * cw * inv * std::cos(rad);
-        state.slide_y_px =
-            mv * params.glide_distance * ch * inv * std::sin(rad);
-        state.angle_rad =
-            mh * params.transition_angle_deg * 0.4f * inv * kDegToRad;
-        state.tilt_y_cos = std::max(0.25f, std::cos(inv * 0.65f));
-        state.pop_scale = 0.65f + 0.35f * state.ease_p;
-        break;
-      }
-      // easeOutBack: c1 = 1.70158 is Penner's standard overshoot constant
-      // (about 10% overshoot before settling at scale 1).
-      case CutoutAnimStyle::kFlatPop: {
-        const float c1 = 1.70158f;
-        const float c3 = c1 + 1.0f;
-        const float pm1 = raw_p - 1.0f;
-        const float overshoot = 1.0f + c3 * pm1 * pm1 * pm1 + c1 * pm1 * pm1;
-        state.pop_scale = std::max(0.01f, overshoot);
-        state.slide_y_px = mv * (-0.18f) * ch * inv;
-        break;
-      }
-      case CutoutAnimStyle::kNone:
-        break;
-    }
-  }
-
   // Master transform terms, negated so they invert the forward transform.
   const float master_rad =
       -(params.master_angle_deg * kDegToRad + state.jitter_rot_rad);
   state.cos_m = std::cos(master_rad);
   state.sin_m = std::sin(master_rad);
   state.inv_m_scale = 1.0f / std::max(0.01f, params.master_scale);
-  state.a_cos = std::cos(-state.angle_rad);
-  state.a_sin = std::sin(-state.angle_rad);
   return state;
 }
 
-// Inverse-maps output px (x, y) (a pixel center) into canonical, unwarped
-// paper space (*ux, *uy). Undoes, in reverse order, the forward chain:
-// crumple warp -> perspective tilt -> pop scale and rotation -> slide ->
-// flips -> master scale/rotation -> master position plus jitter.
-// cw, ch, origin_x, origin_y describe the canvas in canonical px.
-// `apply_crumple` = false skips the 3-octave crumple warp (used for the soft
-// drop shadow, where it would not show). *fold_shading_out receives the
-// crease darkening (crease value x extra_crease_shade; 0 without crumple).
-// Called per pixel from parallel_for workers.
+// Inverse-maps output px (x, y) (a pixel center) into canonical paper space
+// (*ux, *uy). Undoes, in reverse order, the forward chain: flips -> master
+// scale/rotation -> master position plus jitter. cw, ch, origin_x,
+// origin_y describe the canvas in canonical px. Called per pixel from
+// parallel_for workers.
 void MapOutputToPaperCanonical(const CutoutParams& params,
                                const CutoutAnimState& anim, float cw, float ch,
                                float origin_x, float origin_y, float x, float y,
-                               bool apply_crumple, float* ux, float* uy,
-                               float* fold_shading_out) {
+                               float* ux, float* uy) {
   const float cx_out = origin_x + params.master_pos_x * cw + anim.jitter_dx_px;
   const float cy_out = origin_y + params.master_pos_y * ch + anim.jitter_dy_px;
 
@@ -1269,57 +1105,12 @@ void MapOutputToPaperCanonical(const CutoutParams& params,
     ry = -ry;
   }
 
-  // Inverse transition animation transform.
-  rx -= anim.slide_x_px;
-  ry -= anim.slide_y_px;
-
-  const float inv_pop = 1.0f / anim.pop_scale;
-  const float ax = (rx * anim.a_cos - ry * anim.a_sin) * inv_pop;
-  const float ay = (rx * anim.a_sin + ry * anim.a_cos) * inv_pop;
-
-  const float inv_cw = 1.0f / cw;
-  const float inv_ch = 1.0f / ch;
-
-  // Apply inverse 3D perspective hinge tilt across horizontal/vertical axes.
-  // Without tilt or perspective this divides by exactly 1, so skip it.
-  float px = ax;
-  float py = ay;
-  // Projective divide by w = 1 + k * x / cw + ky * y / ch (floored at 0.15 so
-  // the plane never flips behind the camera); x is also divided by the tilt
-  // foreshortening.
-  if (anim.perspective_k != 0.0f || anim.perspective_ky != 0.0f ||
-      anim.tilt_y_cos != 1.0f) {
-    const float w_persp =
-        std::max(0.15f, 1.0f + anim.perspective_k * (ax * inv_cw) +
-                            anim.perspective_ky * (ay * inv_ch));
-    px = ax / (anim.tilt_y_cos * w_persp);
-    py = ay / w_persp;
-  }
-
-  // Apply radial crumple displacement during crumple/unfold intro/outro.
-  float crease_val = 0.0f;
-  if (apply_crumple && anim.crumple_warp_norm > 1e-4f) {
-    float gdx = 0.0f;
-    float gdy = 0.0f;
-    const float cnx = 0.5f + px * inv_cw;
-    const float cny = 0.5f + py * inv_ch;
-    CrumpleDisplacement(cnx, cny, params.crease_scale,
-                        static_cast<std::uint32_t>(params.random_seed) + 503u,
-                        &gdx, &gdy, &crease_val);
-    // The finite-difference gradient is large (~1 / kEps); 0.08 tames it.
-    const float warp_px = anim.crumple_warp_norm * std::min(cw, ch) * 0.08f;
-    px += gdx * warp_px;
-    py += gdy * warp_px;
-  }
-
-  *ux = origin_x + 0.5f * cw + px;
-  *uy = origin_y + 0.5f * ch + py;
-  *fold_shading_out = crease_val * anim.extra_crease_shade;
+  *ux = origin_x + 0.5f * cw + rx;
+  *uy = origin_y + 0.5f * ch + ry;
 }
 
 // ---------------------------------------------------------------------------
-// Paper fold & unfold machinery, shared by the Paper Fold & Unfold transition
-// and the Paper Unfold (3D) intro/outro of Paper Cutout FX.
+// Paper fold & unfold machinery of the Paper Fold & Unfold transition.
 //
 // The sheet folds along up to kMaxFoldHinges straight hinges. Hinge k folds the
 // packet left by hinges 0..k-1, so rendering inverse-maps every output pixel
@@ -2852,11 +2643,9 @@ RgbaColor EvalFoldStack(const FoldShadeContext& ctx, int k, float x, float y,
 // Packet motion and fold action
 // ---------------------------------------------------------------------------
 
-// Maps canvas pixels into the folded packet's sheet-local frame.
-// Origin is in canvas px for the transition; for the cutout's Paper Unfold
-// it is relative to the canvas center in master-local px. ToLocal applies
-// the inverse rigid motion; ToCanvas is the forward motion, used to map
-// packet bounds to the canvas for pruning.
+// Maps canvas pixels into the folded packet's sheet-local frame (origin in
+// canvas px). ToLocal applies the inverse rigid motion; ToCanvas is the
+// forward motion, used to map packet bounds to the canvas for pruning.
 struct PacketMapper {
   float origin_x = 0.0f;  // Sheet center plus packet offset and jitter.
   float origin_y = 0.0f;
@@ -2997,8 +2786,8 @@ ImageView WithSourceAlphaOverride(const ImageView& view,
   return out;
 }
 
-// Starts the FoldShadeContext shared by the cutout's Paper Unfold and the
-// transition: `sheet` and `layout` (not owned; both must outlive the
+// Starts the transition's FoldShadeContext: `sheet` and `layout` (not
+// owned; both must outlive the
 // render), the texture frame (canvas origin and min_dim, canonical px),
 // crease-band and flap-shadow sizes that scale with min_dim, and the light
 // opposite the drop shadow. ConfigureFoldLight caches per-hinge lighting,
@@ -3053,9 +2842,9 @@ FoldCovers BoundFoldedPacket(const SheetGeometry& sheet, float paper_pad_px,
 // Paper Cutout FX steps
 // ---------------------------------------------------------------------------
 
-// Per-frame values shared by both RenderCutoutFrame paths, filled once on
-// the calling thread by BuildCutoutFrameSetup. Lengths are canonical px.
-// Not copyable: the Paper Unfold sheet keeps a pointer to `sdf`.
+// Per-frame values of RenderCutoutFrame, filled once on the calling thread
+// by BuildCutoutFrameSetup. Lengths are canonical px. Not copyable: the
+// coarse SDF can be large and is only ever read in place.
 struct CutoutFrameSetup {
   CutoutFrameSetup() = default;
   CutoutFrameSetup(const CutoutFrameSetup&) = delete;
@@ -3068,8 +2857,8 @@ struct CutoutFrameSetup {
   float min_dim = 1.0f;
   float origin_x = 0.0f;
   float origin_y = 0.0f;
-  // Something reads the matte distance (collar, shadow, choke, or Paper
-  // Unfold); otherwise `sdf` stays empty.
+  // Something reads the matte distance (collar, shadow, or choke);
+  // otherwise `sdf` stays empty.
   bool need_sdf = false;
   CoarseSignedDistanceField sdf;
   // Torn collar width and tear amplitude; both 0 without a border.
@@ -3102,8 +2891,7 @@ void BuildCutoutFrameSetup(const CutoutParams& params,
   setup->origin_y = subj_xf.origin_y;
 
   setup->need_sdf = params.enable_border || params.shadow_opacity > 1e-4f ||
-                    std::abs(params.edge_choke_px) > 0.01f ||
-                    anim.style == CutoutAnimStyle::kPaperUnfold;
+                    std::abs(params.edge_choke_px) > 0.01f;
   if (setup->need_sdf) {
     setup->sdf = BuildSubjectSignedDistanceField(params, subj_xf, src_view,
                                                  canvas_bounds, parallel_for);
@@ -3130,8 +2918,8 @@ void BuildCutoutFrameSetup(const CutoutParams& params,
   setup->sh_soft_px = std::max(1.0f, params.shadow_softness_norm * min_dim);
 }
 
-// Flat path of RenderCutoutFrame (resting, Crumple Ball, Airplane Glide,
-// Flat Pop). Per output pixel: output px -> canonical px
+// Per-pixel renderer of RenderCutoutFrame. Per output pixel: output px ->
+// canonical px
 // (MapOutputToPaperCanonical) -> torn-edge alpha from the SDF plus tear
 // noise -> subject with Edge Choke -> grain and crease overlay -> paper
 // collar under the subject -> drop shadow under everything. Every pixel is
@@ -3169,9 +2957,8 @@ void RenderCutoutFlat(const CutoutParams& params, const ImageView& src_view,
       const float px_out = static_cast<float>(x) + 0.5f;
       float ux = 0.0f;
       float uy = 0.0f;
-      float anim_crease = 0.0f;
       MapOutputToPaperCanonical(params, anim, cw, ch, origin_x, origin_y,
-                                px_out, py_out, true, &ux, &uy, &anim_crease);
+                                px_out, py_out, &ux, &uy);
 
       const float nu_x = (ux - origin_x) * inv_min_dim;
       const float nu_y = (uy - origin_y) * inv_min_dim;
@@ -3196,18 +2983,16 @@ void RenderCutoutFlat(const CutoutParams& params, const ImageView& src_view,
         sheet_alpha = Smoothstep(1.2f, -1.2f, edge_sdf);
       }
 
-      // Soft 3D drop shadow behind the paper cutout, evaluated without the
-      // multi-octave crumple displacement. Only needed where the cutout is not
-      // fully opaque.
+      // Soft 3D drop shadow behind the paper cutout. Only needed where the
+      // cutout is not fully opaque.
       auto shadow_at_pixel = [&]() -> RgbaColor {
         float shadow_alpha = 0.0f;
         if (params.shadow_opacity > 1e-4f) {
           float sux = 0.0f;
           float suy = 0.0f;
-          float unused_crease = 0.0f;
           MapOutputToPaperCanonical(params, anim, cw, ch, origin_x, origin_y,
-                                    px_out - sh_dx_px, py_out - sh_dy_px, false,
-                                    &sux, &suy, &unused_crease);
+                                    px_out - sh_dx_px, py_out - sh_dy_px, &sux,
+                                    &suy);
           const float s_dist_px = sdf.SamplePx(sux, suy) - border_px;
           shadow_alpha =
               params.shadow_opacity * Smoothstep(sh_soft_px, -2.0f, s_dist_px);
@@ -3265,9 +3050,8 @@ void RenderCutoutFlat(const CutoutParams& params, const ImageView& src_view,
       if (need_paper_bg) {
         const float rim_bright =
             1.0f + 0.08f * Smoothstep(3.0f, 0.0f, std::abs(edge_sdf));
-        const float shade = Clamp(
-            grain * crease_mul * rim_bright * (1.0f - 0.35f * anim_crease),
-            0.25f, 1.15f);
+        const float shade =
+            Clamp(grain * crease_mul * rim_bright, 0.25f, 1.15f);
         const RgbaColor paper_fg = {
             Clamp01(params.paper_r * shade) * sheet_alpha,
             Clamp01(params.paper_g * shade) * sheet_alpha,
@@ -3286,232 +3070,6 @@ void RenderCutoutFlat(const CutoutParams& params, const ImageView& src_view,
       const RgbaColor shadow_rgba =
           cutout_fg.a >= 1.0f ? RgbaColor{} : shadow_at_pixel();
       WritePixelPtr(out_px, out_depth, CompositeOver(cutout_fg, shadow_rgba));
-    }
-  });
-}
-
-// FoldShadeContext of the cutout's Paper Unfold at openness q (raw_p): the
-// resting cutout's collar, Edge Boil tear, paper color, and textures.
-// Folds always show some creasing; the print overlay is stronger while
-// folded, and the hinge creases fade as the sheet lands flat.
-FoldShadeContext BuildCutoutFoldContext(const CutoutParams& params,
-                                        const CutoutFrameSetup& setup,
-                                        const SheetGeometry& sheet,
-                                        const FoldLayout& layout, float q) {
-  FoldShadeContext ctx = BuildFoldShadeContext(
-      sheet, layout, setup.origin_x, setup.origin_y, setup.min_dim,
-      params.shadow_angle_deg, std::max(0.45f, params.shadow_opacity));
-  ctx.enable_border = params.enable_border;
-  ctx.border_px = setup.border_px;
-  ctx.tear_amp_px = setup.tear_amp_px;
-  ctx.tear_frequency = params.tear_frequency;
-  ctx.tear_detail = params.tear_detail;
-  ctx.seed = setup.seed;
-  ctx.tear_seed = setup.boil_seed;
-  ctx.paper_r = params.paper_r;
-  ctx.paper_g = params.paper_g;
-  ctx.paper_b = params.paper_b;
-  ctx.grain_strength = params.grain_strength;
-  ctx.grain_scale = params.grain_scale;
-  ctx.crease_strength = std::max(0.3f, params.crease_strength);
-  ctx.crease_scale = params.crease_scale;
-  ctx.media_overlay =
-      std::max(params.media_texture_overlay, 0.25f * (1.0f - q));
-  ctx.hinge_crease = 1.0f - q * q;
-  // Like the resting cutout: the collar never clips the print, while
-  // borderless cutouts keep the matte edge.
-  ctx.subject_margin_px = params.enable_border ? 1e5f : 0.0f;
-  return ctx;
-}
-
-// Output px <-> packet-local px for the cutout's Paper Unfold: the master
-// transform (center plus hand jitter, rotation, scale, flips) wraps the
-// packet motion, which replaces the flat path's slide and pop.
-struct CutoutPacketMapper {
-  // Master center in output px, jitter included.
-  float cx_out = 0.0f;
-  float cy_out = 0.0f;
-  // Inverse master rotation and 1 / scale (CutoutAnimState), and the scale.
-  float cos_m = 1.0f;
-  float sin_m = 0.0f;
-  float inv_m_scale = 1.0f;
-  float m_scale = 1.0f;
-  bool flip_h = false;
-  bool flip_v = false;
-  // Packet motion relative to the canvas center after the master.
-  PacketMapper packet;
-
-  // Output px -> packet-local px: inverse master rotation/scale and flips,
-  // then the inverse packet motion.
-  void ToLocal(float px, float py, float* lx, float* ly) const {
-    const float dx = px - cx_out;
-    const float dy = py - cy_out;
-    float rx = (dx * cos_m - dy * sin_m) * inv_m_scale;
-    float ry = (dx * sin_m + dy * cos_m) * inv_m_scale;
-    if (flip_h) {
-      rx = -rx;
-    }
-    if (flip_v) {
-      ry = -ry;
-    }
-    packet.ToLocal(rx, ry, lx, ly);
-  }
-
-  // Packet-local px -> output px (forward of ToLocal), used to map packet
-  // bounds into output px.
-  void ToCanvas(float lx, float ly, float* cx, float* cy) const {
-    float rx = 0.0f;
-    float ry = 0.0f;
-    packet.ToCanvas(lx, ly, &rx, &ry);
-    if (flip_h) {
-      rx = -rx;
-    }
-    if (flip_v) {
-      ry = -ry;
-    }
-    *cx = cx_out + (rx * cos_m + ry * sin_m) * m_scale;
-    *cy = cy_out + (-rx * sin_m + ry * cos_m) * m_scale;
-  }
-};
-
-// Builds the Paper Unfold mapper from the frame's master terms and the
-// final layout (call after CenterFoldedPacket, which moves the packet).
-CutoutPacketMapper BuildCutoutPacketMapper(const CutoutParams& params,
-                                           const CutoutAnimState& anim,
-                                           const CutoutFrameSetup& setup,
-                                           const SheetGeometry& sheet,
-                                           const FoldLayout& layout) {
-  CutoutPacketMapper m;
-  m.cx_out =
-      setup.origin_x + params.master_pos_x * setup.cw + anim.jitter_dx_px;
-  m.cy_out =
-      setup.origin_y + params.master_pos_y * setup.ch + anim.jitter_dy_px;
-  m.cos_m = anim.cos_m;
-  m.sin_m = anim.sin_m;
-  m.inv_m_scale = anim.inv_m_scale;
-  m.m_scale = 1.0f / anim.inv_m_scale;
-  m.flip_h = params.flip_h;
-  m.flip_v = params.flip_v;
-  m.packet.origin_x =
-      sheet.cx - (setup.origin_x + 0.5f * setup.cw) + layout.offset_x;
-  m.packet.origin_y =
-      sheet.cy - (setup.origin_y + 0.5f * setup.ch) + layout.offset_y;
-  m.packet.cos_r = layout.rot_cos;
-  m.packet.sin_r = layout.rot_sin;
-  m.packet.inv_scale = 1.0f / std::max(0.05f, layout.scale);
-  return m;
-}
-
-// Paper Unfold (3D) path of RenderCutoutFrame: folds the finished cutout
-// along real paper hinges (Craft Flaps, 4 stages) at openness raw_p and
-// composites the fold stack over its lifted drop shadow. Pixels outside the
-// paper and shadow boxes are written transparent without touching the fold
-// stack. Rows run on parallel_for workers. Output is premultiplied.
-void RenderCutoutPaperUnfold(const CutoutParams& params,
-                             const ImageView& src_view,
-                             const SubjectTransform& subj_xf,
-                             const CutoutAnimState& anim,
-                             const CutoutFrameSetup& setup,
-                             const ImageView& output, const OutputSpan& span,
-                             const ParallelRowsFn& parallel_for) {
-  const SheetGeometry sheet =
-      SheetFromSdf(setup.sdf, setup.border_px + setup.tear_amp_px);
-  if (!sheet.valid) {
-    ClearSpan(output, span, parallel_for);
-    return;
-  }
-  const float q = anim.raw_p;
-  // Glide Angle (default -22) also turns the fold direction (default 0).
-  FoldLayout layout = BuildFoldLayout(
-      FoldPattern::kCraftFlaps, 4, q, sheet, std::hypot(setup.cw, setup.ch),
-      params.transition_angle_deg + 22.0f, 0.55f, 0.0f,
-      params.mirror_transition_h, params.mirror_transition_v, setup.seed);
-  FoldShadeContext ctx =
-      BuildCutoutFoldContext(params, setup, sheet, layout, q);
-  // Bounds per fold level prune the layer recursion away from the paper.
-  // Coarse-SDF error margin: two cells plus 3 px.
-  const float sdf_slack = 2.0f * static_cast<float>(setup.sdf.step) + 3.0f;
-  const FoldCovers covers = BoundFoldedPacket(
-      sheet, setup.border_px + setup.tear_amp_px + sdf_slack,
-      setup.border_px +
-          std::max({1.2f, setup.sh_soft_px, ctx.flap_shadow_soft_px}) +
-          sdf_slack,
-      q, &ctx, &layout);
-  const CutoutPacketMapper mapper =
-      BuildCutoutPacketMapper(params, anim, setup, sheet, layout);
-
-  auto sample_subject = [&](float ux, float uy, float dist_px) {
-    const RgbaColor s =
-        EvaluateSubjectAtCanonicalPx(params, subj_xf, src_view, ux, uy);
-    if (std::abs(params.edge_choke_px) <= 0.01f || s.a <= 1e-4f) {
-      return s;
-    }
-    return ScalePremult(s, Smoothstep(params.edge_choke_px + 1.0f,
-                                      params.edge_choke_px - 1.0f, dist_px));
-  };
-
-  // The drop shadow reaches up to 3.5x further while the packet is lifted.
-  const float lift_k = 1.0f + 2.5f * layout.lift;
-  const float sh_dx_px = setup.sh_dx_px;
-  const float sh_dy_px = setup.sh_dy_px;
-  const float sh_soft_px = setup.sh_soft_px;
-  const auto to_canvas = [&](float lx, float ly, float* cx, float* cy) {
-    mapper.ToCanvas(lx, ly, cx, cy);
-  };
-  const auto to_shadow = [&](float lx, float ly, float* cx, float* cy) {
-    mapper.ToCanvas(lx, ly, cx, cy);
-    *cx += sh_dx_px * lift_k;
-    *cy += sh_dy_px * lift_k;
-  };
-  // Output-space boxes of the paper and its shadow; pixels outside both stay
-  // transparent without evaluating the fold stack.
-  const BoundsBox paper_box = BoundsOfPieces(covers.paper, 3.0f, to_canvas);
-  const BoundsBox shadow_box = BoundsOfPieces(covers.coverage, 3.0f, to_shadow);
-  const int x_begin = span.x_begin;
-  const int x_end = span.x_end;
-  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
-  const PixelDepth out_depth = output.depth;
-
-  RunScanlines(span.y_begin, span.y_end, parallel_for, [&](int y) {
-    const float py_out = static_cast<float>(y) + 0.5f;
-    const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
-    const bool row_shadow = params.shadow_opacity > 1e-4f &&
-                            py_out >= shadow_box.y1 && py_out <= shadow_box.y2;
-    std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
-    if (!row_paper && !row_shadow) {
-      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-        WritePixelPtr(out_px, out_depth, {});
-      }
-      return;
-    }
-    for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-      const float px_out = static_cast<float>(x) + 0.5f;
-      RgbaColor fg;
-      if (row_paper && px_out >= paper_box.x1 && px_out <= paper_box.x2) {
-        float lx = 0.0f;
-        float ly = 0.0f;
-        mapper.ToLocal(px_out, py_out, &lx, &ly);
-        fg = ScalePremult(EvalFoldStack(ctx, layout.count - 1, lx, ly, false,
-                                        1.0f, sample_subject),
-                          layout.alpha);
-        // The shadow underneath would add < 0.1% alpha; skip it.
-        if (fg.a >= 0.999f) {
-          WritePixelPtr(out_px, out_depth, fg);
-          continue;
-        }
-      }
-      float shadow_a = 0.0f;
-      if (row_shadow && px_out >= shadow_box.x1 && px_out <= shadow_box.x2) {
-        float slx = 0.0f;
-        float sly = 0.0f;
-        mapper.ToLocal(px_out - sh_dx_px * lift_k, py_out - sh_dy_px * lift_k,
-                       &slx, &sly);
-        shadow_a = params.shadow_opacity * layout.alpha *
-                   EvalFoldCoverage(ctx, layout.count - 1, slx, sly, false,
-                                    sh_soft_px);
-      }
-      WritePixelPtr(out_px, out_depth,
-                    CompositeOver(fg, {0.0f, 0.0f, 0.0f, shadow_a}));
     }
   });
 }
@@ -4027,10 +3585,9 @@ bool IsValidRgbaView(const ImageView& view) {
 }
 
 // See header. Steps: clip the render window, place the subject, evaluate
-// the intro/outro animation, clear fully collapsed frames, build the shared
-// per-frame setup (SDF, collar, seeds, drop shadow), then render either the
-// Paper Unfold (3D) fold path (RenderCutoutPaperUnfold) or the flat path
-// (RenderCutoutFlat). Output is premultiplied.
+// the stop-motion step and hand jitter, build the per-frame setup (SDF,
+// collar, seeds, drop shadow), then render the rows (RenderCutoutFlat).
+// Output is premultiplied.
 void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
                        const ImageView& output, const PixelRect& canvas_bounds,
                        const PixelRect& render_window,
@@ -4045,21 +3602,9 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
       BuildSubjectTransform(params, src_view, canvas_bounds);
   const CutoutAnimState anim =
       ComputeCutoutAnimState(params, subj_xf.cw, subj_xf.ch);
-
-  // If collapsed below visibility threshold at transition endpoints, clear.
-  if (anim.ease_p <= 1e-4f && anim.style != CutoutAnimStyle::kNone) {
-    ClearSpan(output, span, parallel_for);
-    return;
-  }
-
   CutoutFrameSetup setup;
   BuildCutoutFrameSetup(params, subj_xf, anim, src_view, canvas_bounds,
                         parallel_for, &setup);
-  if (anim.style == CutoutAnimStyle::kPaperUnfold) {
-    RenderCutoutPaperUnfold(params, src_view, subj_xf, anim, setup, output,
-                            span, parallel_for);
-    return;
-  }
   RenderCutoutFlat(params, src_view, subj_xf, anim, setup, output, span,
                    parallel_for);
 }

@@ -4,7 +4,7 @@ This design document explains the architecture, OpenFX 1.4 C++17 rendering pipel
 
 ## Context and goals
 
-Video editors on the DaVinci Resolve 20 and 21 Edit pages often rely on complex Fusion node graphs to create stop-motion paper cutouts, torn cardstock rims, and 3D folded paper intro and outro animations. Distributing effects solely as `.drfx` Fusion `MacroOperator` templates forces DaVinci Resolve to spin out background Fusion render passes that increase timeline caching latency, risk opaque matte clipping on `V2` or higher overlay tracks, and break when host updates change node defaults.
+Video editors on the DaVinci Resolve 20 and 21 Edit pages often rely on complex Fusion node graphs to create stop-motion paper cutouts, torn cardstock rims, and 3D folded paper transitions. Distributing effects solely as `.drfx` Fusion `MacroOperator` templates forces DaVinci Resolve to spin out background Fusion render passes that increase timeline caching latency, risk opaque matte clipping on `V2` or higher overlay tracks, and break when host updates change node defaults.
 
 MTTN PaperCraft Studio 3.1.0 solves this bottleneck by compiling the **Paper Cutout FX** filter and the **Paper Fold & Unfold** transition into a self-contained C++17 OpenFX 1.4 bundle (`PaperCraftStudioPro.ofx.bundle`) that runs directly inside the Edit page OpenFX host while bundling four real-world 48 kHz, 24-bit stereo Paper SFX WAV recordings and validated legacy `.drfx` templates (`MTTN_PaperCraft_Studio.drfx`).
 
@@ -92,21 +92,21 @@ During sampling, the `EffectiveRod` helper maps normalized frame coordinates acr
 
 The plugin advertises `kOfxImageEffectRenderFullySafe` and sets `kOfxImageEffectPluginPropHostFrameThreading` to `1`. Inside `HandleRender`, the `parallel_for` lambda (`ParallelRowsFn`) delegates scanline ranges `[y_start, y_end)` to the host `OfxMultiThreadSuiteV1` pool (`multiThread`), falling back to sequential execution if the host omits the threading suite or runs with a single worker. Workers pull small chunks of rows from a shared atomic counter instead of taking one fixed slice each. Rows that cross the paper cost far more than empty background rows, so dynamic chunks keep every core busy, including the efficiency cores on Apple silicon.
 
-The `HandleDescribe` action explicitly sets `kOfxImageEffectPropSupportsTiles` to `0` on both plugins and disables tiling on every clip descriptor. Because torn paper collars can expand up to 15% of frame width around off-edge subjects and folds and intro and outro animations move geometry across the whole canvas, requiring full-frame buffers eliminates visible rectangular tile seam artifacts while still honoring host `renderWindow` bounds during rendering.
+The `HandleDescribe` action explicitly sets `kOfxImageEffectPropSupportsTiles` to `0` on both plugins and disables tiling on every clip descriptor. Because torn paper collars can expand up to 15% of frame width around off-edge subjects and folds move geometry across the whole canvas, requiring full-frame buffers eliminates visible rectangular tile seam artifacts while still honoring host `renderWindow` bounds during rendering.
 
 ## Procedural paper rendering pipeline
 
 Each rendered frame of **Paper Cutout FX** flows sequentially from timing quantization and distance field computation to inverse-mapped paper synthesis and shadow compositing inside the `RenderCutoutFrame` function.
 
+**Paper Cutout FX** renders only the resting cutout: it has no intro or outro animation. To animate a cutout in or out, editors place the **Paper Fold & Unfold** transition at the clip's start or end (see [Paper fold and unfold renderer](#paper-fold-and-unfold-renderer)). The legacy intro and outro parameters (`introStyle`, `introFrames`, `outroStyle`, `outroFrames`, `transitionAngle`, `glideDistance`, `mirrorTransH`, `mirrorTransV`) stay defined on the filter but hidden (`kOfxParamPropSecret`), so projects saved with earlier versions load without errors, and the renderer ignores their values. The technical controls (`sourceMode`, `sourcePremult`, `tearDetail`, `grainScale`, `creaseScale`, `randomSeed`) live in the `AdvancedGroup` page group, which is placed last and closed by default; parameter IDs are unchanged.
+
 ```mermaid
 flowchart TD
-  A["Step 1: ComputeCutoutAnimState (Intro/Outro Overlap & Hold Stepping)"] --> B{"Animated Ease Alpha <= 0.0001?"}
-  B -- Yes --> C["Clear Render Window to Transparent Black"]
-  B -- No --> D["Step 2: BuildSubjectSignedDistanceField (When Border, Shadow, Choke, or Unfold Active)"]
+  A["Step 1: Stop-Motion State (Hold Stepping, Jitter, Edge Boil)"] --> D["Step 2: BuildSubjectSignedDistanceField (When Border, Shadow, or Choke Active)"]
   D --> E["Step 3: Scanline Render Loop (Inverse Map & Paper Shading)"]
-  E --> F["MapOutputToPaperCanonical (3D Perspective + Crumple Warp)"]
+  E --> F["MapOutputToPaperCanonical (Inverse Master Transform, Flips, Jitter)"]
   F --> G["Sample SDF Collar + Narrow-Band TearEdgeNoise"]
-  G --> H["Eval Grain/Crease Shading + Drop Shadow (No Crumple on Shadow)"]
+  G --> H["Eval Grain/Crease Shading + Drop Shadow"]
   H --> I["Porter-Duff CompositeOver & WritePixel"]
 ```
 
@@ -122,23 +122,21 @@ $$D(p) = \min_{q} \left( (p - q)^2 + f(q) \right)$$
 
 Subtracting the inner distance field from the outer distance field and multiplying by the grid stride produces sub-pixel bilinear distance estimates in canonical canvas pixels through `CoarseSignedDistanceField::SamplePx`. Positive or negative `edge_choke_px` offsets shift the effective matte boundary prior to border width evaluation.
 
-### Inverse 3D perspective and crumple displacement
+### Inverse cutout transform
 
-For each pixel inside `render_window`, `MapOutputToPaperCanonical` applies the inverse global cutout transform, inverse flip axes, inverse 2D glide offset, inverse pop scale, and an inverse 3D hinge perspective divide across both horizontal and vertical mirror directions. When a **Paper Unfold (3D)** or **Crumple Ball** intro or outro is active (`crumple_warp_norm > 0.0001`), the `CrumpleDisplacement` helper adds a faceted ridged Voronoi-style crease offset and extracts facet lighting terms.
-
-To reduce per-pixel ALU cost on 4K timelines, `RenderCutoutFrame` invokes `MapOutputToPaperCanonical` with `apply_crumple = false` when looking up the offset drop shadow pixel (`px_out - sh_dx_px`, `py_out - sh_dy_px`), avoiding a redundant multi-octave Voronoi evaluation behind the soft Gaussian-like shadow skirt.
+For each pixel inside `render_window`, `MapOutputToPaperCanonical` applies the inverse master cutout transform (position, scale, and rotation), the inverse flip axes, and the per-step stop-motion jitter to find the canonical paper coordinate to shade. The offset drop shadow pixel (`px_out - sh_dx_px`, `py_out - sh_dy_px`) is looked up through the same inverse mapping.
 
 ### Narrow-band torn edge noise and paper textures
 
 The `TearEdgeNoise` function evaluates multi-octave periodic value noise around the subject perimeter. Because border roughness (`tear_amp_px`) influences alpha only close to the nominal cardstock rim (`base_edge_dist = dist_px - border_px`), the renderer skips `TearEdgeNoise` completely whenever `abs(base_edge_dist)` exceeds `tear_amp_px + 3.1f`. The subject matte is evaluated first so opaque interior pixels (when `media_texture_overlay` is zero) and borderless untextured cutouts skip `PaperFiberGrain` and `PaperCreaseField`; otherwise cardstock fiber grain and fold crease shading are combined with foreground ink (`media_texture_overlay`) and composited over the drop shadow using `CompositeOver`.
 
-### Short-clip timing and stop-motion stepping
+### Stop-motion stepping
 
-When clips are shorter than `introFrames + outroFrames`, additive intro and outro progress weights would overlap and jump abruptly at the end of the intro window. The `ComputeCutoutAnimState` function measures distance from both the clip in-point (`t_in`) and out-point (`t_out`) independently and selects `min(t_in, t_out)` so entrance and exit motion hand off smoothly across the clip midpoint. Enabling stop-motion stepping quantizes timeline progress to `holdFrames` buckets and derives deterministic pseudo-random per-step XY jitter, rotational wobble, and border tear boiling.
+Enabling stop-motion stepping quantizes timeline time to `holdFrames` buckets (default `6`, a 4 fps look on a 24 fps timeline) and derives deterministic pseudo-random per-step XY jitter (`jitterPos`, default `0.001`), rotational wobble (`jitterRot`, default `0.3°`), and border tear boiling. The per-frame state is computed once per render and read by every worker thread.
 
 ## Paper fold and unfold renderer
 
-The **Paper Fold & Unfold** transition and the **Paper Unfold (3D)** intro and outro of **Paper Cutout FX** share one fold renderer. It folds the sheet along up to five straight hinges and draws the result by inverse mapping, so no geometry is ever rasterized.
+The **Paper Fold & Unfold** transition uses a dedicated fold renderer. It folds the sheet along up to five straight hinges and draws the result by inverse mapping, so no geometry is ever rasterized.
 
 ```mermaid
 flowchart TD
@@ -169,13 +167,13 @@ Visible faces get precomputed per-hinge Lambert shading (`ConfigureFoldLight`) f
 
 ### Bounds pruning
 
-Without help, every folded-over hinge doubles the layers a pixel may see, and pixels far from a small packet still walk the whole hinge stack. Before the pixel loop, `FoldSheetBounds` folds the sheet's bounding rectangle forward through the hinges as convex polygons: each fold clips the pieces at the hinge and replaces the flap part with a box around its folded image, widened for the perspective stretch of either face. The bounds after each fold let `EvalFoldStack` and `EvalFoldCoverage` return early wherever no paper can be, and the final pieces, mapped to the canvas via `BoundsOfPieces`, give boxes outside of which both `RenderPaperFoldTransition` and **Paper Unfold (3D)** skip stack/shadow evaluation altogether. The bounds are conservative (grown by the collar, the torn edge, shadow softness, and the coarse matte's slack), so the output is bit-identical to the unpruned renderer.
+Without help, every folded-over hinge doubles the layers a pixel may see, and pixels far from a small packet still walk the whole hinge stack. Before the pixel loop, `FoldSheetBounds` folds the sheet's bounding rectangle forward through the hinges as convex polygons: each fold clips the pieces at the hinge and replaces the flap part with a box around its folded image, widened for the perspective stretch of either face. The bounds after each fold let `EvalFoldStack` and `EvalFoldCoverage` return early wherever no paper can be, and the final pieces, mapped to the canvas via `BoundsOfPieces`, give boxes outside of which `RenderPaperFoldTransition` skips stack/shadow evaluation altogether. The bounds are conservative (grown by the collar, the torn edge, shadow softness, and the coarse matte's slack), so the output is bit-identical to the unpruned renderer.
 
 ### Seamless transition endpoints and pre-cutout handoff
 
 The first and last transition frames must match the clips exactly, so the renderer copies them 1:1 and lets every temporary detail settle away over the last 12% of an unfold (`settle`): collar width, tear amplitude, crease lines, crumple overlay, jitter, and drop shadow. While the collar is narrower than `2 px + SDF step`, torn edges don't clip the print, so soft matte edges survive. For see-through incoming clips, the outgoing clip fades out over the last 25% of an unfold (and the incoming clip fades in over the first 25% of a fold), so transparency also lands exactly.
 
-When a clip already has **Paper Cutout FX** applied (`Intro Style` and `Outro Style` default to `None` so clip animations do not collide with timeline transitions), DaVinci Resolve feeds the finished cutout—including its premultiplied black drop shadow—into **Paper Fold & Unfold**. `InspectClipContent` detects soft unattached pure-black shadow skirts (`has_cutout_shadow`, ignoring 1–2 px anti-aliased edges of raw black graphics), excludes the shadow from `BuildSubjectSignedDistanceField`, and recovers un-shadowed 1-px perimeter alpha in `BuildCleanCutoutAlpha` using local opaque border reflectance. During the fold, `EvalPaperLeaf` skips adding a second collar or second front-face grain pass, uses the clean cutout alpha for ragged backside flaps, and hands the 3D `EvalFoldCoverage` shadow directly into the cutout's resting shadow over `q` in `[0.90, 1.0]` instead of fading the shadow to zero.
+When a clip already has **Paper Cutout FX** applied (the filter has no intro or outro animation of its own, so it never collides with timeline transitions), DaVinci Resolve feeds the finished cutout—including its premultiplied black drop shadow—into **Paper Fold & Unfold**. `InspectClipContent` detects soft unattached pure-black shadow skirts (`has_cutout_shadow`, ignoring 1–2 px anti-aliased edges of raw black graphics), excludes the shadow from `BuildSubjectSignedDistanceField`, and recovers un-shadowed 1-px perimeter alpha in `BuildCleanCutoutAlpha` using local opaque border reflectance. During the fold, `EvalPaperLeaf` skips adding a second collar or second front-face grain pass, uses the clean cutout alpha for ragged backside flaps, and hands the 3D `EvalFoldCoverage` shadow directly into the cutout's resting shadow over `q` in `[0.90, 1.0]` instead of fading the shadow to zero.
 
 ### Auto action
 
@@ -194,6 +192,7 @@ For existing `.drfx` workflows, `fusion_templates.py` builds two `.setting` scri
 - Top-level nodes declare `MacroOperator` paired with `ViewInfo = OperatorInfo` instead of `GroupOperator` or `GroupInfo`.
 - Every `LBLC_DropDownButton` group count matches the exact number of nested child controls declared in `LBLC_NumInputs`.
 - Every `SimpleExpression` omits Lua `math.` prefixes and C-style `&&` or `||` operators, and every macro control reference exists in `UserControls`.
+- Every macro `Inputs` default row matches a declared `UserControls` entry, so a leftover row from a removed control (for example the retired `IntroStyle`) is rejected.
 
 ## Design decisions and trade-offs
 
@@ -209,7 +208,7 @@ For existing `.drfx` workflows, `fusion_templates.py` builds two `.setting` scri
 
 Two automated test suites validate the runtime plugin and asset packager in CI and local builds:
 
-1. **C++ OpenFX 1.4 host compliance and kernel suite (`ofx/papercraft_ofx_test.cc`)**: Dynamically loads (`dlopen`) the compiled `PaperCraftStudioPro.ofx` shared library and emulates full OpenFX 1.4 property, parameter, image, and multi-thread host suites. The tests verify that the library exports only `OfxGetNumberOfPlugins` and `OfxGetPlugin` and registers the Filter-context `com.papercraft.CutoutFX` and Transition-context `com.papercraft.PaperFoldTransition` plugins, that each rejects every other context with `kOfxStatErrMissingHostFeature`, and that rendering stays correct across float and byte depths, negative `row_bytes` scanlines, cropped `bounds` against `rod`, `kOfxImageOpaque` input, `V2` overlay transparency, the `mirrorTransV` toggle, and overlapping short-clip intro/outro timing. For the transition they check that the first and last frames equal the clips and are reported by `IsIdentity`, that Auto unfolds at a clip start and folds at a clip end (including a missing incoming image), that folded flaps show the paper back, that stop-motion steps hold identical poses, and that every pattern, stage count, and action renders.
+1. **C++ OpenFX 1.4 host compliance and kernel suite (`ofx/papercraft_ofx_test.cc`)**: Dynamically loads (`dlopen`) the compiled `PaperCraftStudioPro.ofx` shared library and emulates full OpenFX 1.4 property, parameter, image, and multi-thread host suites. The tests verify that the library exports only `OfxGetNumberOfPlugins` and `OfxGetPlugin` and registers the Filter-context `com.papercraft.CutoutFX` and Transition-context `com.papercraft.PaperFoldTransition` plugins, that each rejects every other context with `kOfxStatErrMissingHostFeature`, and that rendering stays correct across float and byte depths, negative `row_bytes` scanlines, cropped `bounds` against `rod`, `kOfxImageOpaque` input, `V2` overlay transparency, and hidden legacy intro and outro parameters that no longer change the cutout render. For the transition they check that the first and last frames equal the clips and are reported by `IsIdentity`, that Auto unfolds at a clip start and folds at a clip end (including a missing incoming image), that folded flaps show the paper back, that stop-motion steps hold identical poses, and that every pattern, stage count, and action renders.
 2. **Python packager and asset suite (`papercraft_pro_test.py`)**: Validates all four bundled Foley WAVs, checks both `.setting` graphs and negative mutation failures in `drfx_validator.py`, checks that `MTTN_PaperCraft_Studio.drfx` ships the effect and the transition, tests Bash syntax and `--dry-run` behavior of all OS installers and the macOS uninstaller, verifies nested-directory installation with `install_linux_ofx.sh`, confirms ZIP entry permissions (`0o755` for executables and `.ofx`), and audits relative Markdown links across `README.md`, `README.en.md`, `Paper_SFX/CREDITS.md`, and `docs/*.md`.
 
 ## What's next
