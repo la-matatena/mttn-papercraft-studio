@@ -87,6 +87,8 @@ cc_test(
     linkopts = ["-ldl"],
     deps = [
         ":openfx_headers",
+        # Only for the kernel structs' default values (drift test).
+        ":papercraft_kernel",
         "//testing/base/public:gunit_main",
     ],
 )

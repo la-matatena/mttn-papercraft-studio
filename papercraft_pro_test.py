@@ -14,6 +14,7 @@ need `/bin/bash`.
 """
 
 import array
+import hashlib
 import io
 import math
 import os
@@ -505,6 +506,35 @@ class PapercraftProTest(absltest.TestCase):
           if anchor not in slug_cache[resolved]:
             broken.append(f"{md_rel}: no heading for anchor in {target!r}")
         self.assertEqual(broken, [])
+
+  def test_generated_settings_sha256_pinned(self):
+    """The effect and fold `.setting` texts match their pinned sha256."""
+    # Guards pure refactors of fusion_templates.py: any byte change in the
+    # generated templates fails here, even when the validator still passes.
+    pinned = (
+        (
+            "effect",
+            fusion_templates.build_effect_setting(),
+            "db8119d3519873056a6a6fab71c7b3bd01032fbdbb8f2115a59eb472bd6e5048",
+        ),
+        (
+            "fold",
+            fusion_templates.build_fold_transition_setting(),
+            "f1d9e33f51a76828c72740cf1952d426ab29c118951657c6f36e5e7fde37ecd2",
+        ),
+    )
+    for kind, text, expected in pinned:
+      with self.subTest(template=kind):
+        actual = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        self.assertEqual(
+            actual,
+            expected,
+            f"The generated {kind} .setting changed (sha256 {actual}). If "
+            "this was a refactor, it must be byte-identical: find the "
+            "accidental change. If the change is intended, install the "
+            "rebuilt .drfx, verify the template in DaVinci Resolve, and only "
+            "then update this pinned hash on purpose.",
+        )
 
 
 class PapercraftReleaseTest(absltest.TestCase):

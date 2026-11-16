@@ -31,6 +31,11 @@
 // CloneDescriptorToInstance() mimics the host creating an instance from a
 // described context.
 //
+// papercraft_kernel.h is included only for the default member values of
+// CutoutParams / PaperFoldTransitionParams, which the parameter-default
+// drift test compares against what the plugin describes; no kernel code is
+// linked.
+//
 // Run with Bazel (`papercraft_ofx_test` in BUILD) or as in CI: build the
 // bundle, compile this file against gtest, and set PAPERCRAFT_OFX_PATH.
 
@@ -62,12 +67,14 @@
 #include "ofxMultiThread.h"
 #include "ofxParam.h"
 #include "ofxProperty.h"
+#include "papercraft_kernel.h"  // NOLINT(build/include)
 #else
 #include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/openfx_include/ofxCore.h"
 #include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/openfx_include/ofxImageEffect.h"
 #include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/openfx_include/ofxMultiThread.h"
 #include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/openfx_include/ofxParam.h"
 #include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/openfx_include/ofxProperty.h"
+#include "experimental/users/joseluiszapata/davinci_resolve_plugins/papercraft_pro/ofx/papercraft_kernel.h"
 #include "testing/base/public/gunit.h"
 #endif
 
@@ -2239,7 +2246,7 @@ TEST_F(PaperCraftOfxTest,
 // ---------------------------------------------------------------------------
 
 // Verifies CreateInstance looks up every described parameter and clip, so a
-// typo in a bind() ID cannot silently fall back to the default value.
+// typo in a parameter ID cannot silently fall back to the default value.
 TEST_F(PaperCraftOfxTest, CreateInstanceBindsEveryDescribedParameterAndClip) {
   const std::pair<const char*, const char*> plugins[] = {
       {"com.papercraft.CutoutFX", kOfxImageEffectContextFilter},
@@ -2266,6 +2273,238 @@ TEST_F(PaperCraftOfxTest, CreateInstanceBindsEveryDescribedParameterAndClip) {
       EXPECT_EQ(pi.inst.looked_up_clips.count(name), 1u)
           << id << ": clip \"" << name
           << "\" is described but never bound in CreateInstance";
+    }
+  }
+}
+
+// Expected default of one described value parameter, taken from the kernel
+// struct. `values` has one entry per component (1 for bool/int/choice/double,
+// 2 for 2D, 3 for RGB); booleans are 0/1.
+struct KernelDefault {
+  const char* id;
+  std::vector<double> values;
+};
+
+// One intentional difference between a plugin default and the kernel struct
+// default: the value the host is given and the kernel struct's value.
+struct DefaultException {
+  const char* id;
+  double plugin_value;
+  double kernel_value;
+};
+
+// Converts a kernel bool default to the OpenFX 0/1 form.
+double BoolDefault(bool b) { return b ? 1.0 : 0.0; }
+
+// Expected defaults of every Paper Cutout FX value parameter, read from a
+// default-constructed CutoutParams.
+std::vector<KernelDefault> CutoutKernelDefaults() {
+  const CutoutParams k;
+  return {
+      {"sourceMode", {static_cast<double>(k.source_mode)}},
+      {"sourcePremult", {BoolDefault(k.source_is_premultiplied)}},
+      {"mediaScale", {k.media_scale}},
+      {"mediaOffset", {k.media_offset_x, k.media_offset_y}},
+      {"mediaAngle", {k.media_angle_deg}},
+      {"enableChromaKey", {BoolDefault(k.enable_chroma_key)}},
+      {"keyColor", {k.key_r, k.key_g, k.key_b}},
+      {"keyGain", {k.key_gain}},
+      {"keyBalance", {k.key_balance}},
+      {"edgeChokePx", {k.edge_choke_px}},
+      {"enableBorder", {BoolDefault(k.enable_border)}},
+      {"borderWidth", {k.border_width_norm}},
+      {"tearRoughness", {k.tear_roughness_norm}},
+      {"tearFrequency", {k.tear_frequency}},
+      {"tearDetail", {static_cast<double>(k.tear_detail)}},
+      {"edgeBoil", {k.edge_boil}},
+      {"paperColor", {k.paper_r, k.paper_g, k.paper_b}},
+      {"grainStrength", {k.grain_strength}},
+      {"grainScale", {k.grain_scale}},
+      {"creaseStrength", {k.crease_strength}},
+      {"creaseScale", {k.crease_scale}},
+      {"mediaTextureOverlay", {k.media_texture_overlay}},
+      {"randomSeed", {static_cast<double>(k.random_seed)}},
+      {"introStyle", {static_cast<double>(k.intro_style)}},
+      {"introFrames", {static_cast<double>(k.intro_frames)}},
+      {"outroStyle", {static_cast<double>(k.outro_style)}},
+      {"outroFrames", {static_cast<double>(k.outro_frames)}},
+      {"transitionAngle", {k.transition_angle_deg}},
+      {"glideDistance", {k.glide_distance}},
+      {"mirrorTransH", {BoolDefault(k.mirror_transition_h)}},
+      {"mirrorTransV", {BoolDefault(k.mirror_transition_v)}},
+      {"shadowOpacity", {k.shadow_opacity}},
+      {"shadowAngle", {k.shadow_angle_deg}},
+      {"shadowDistance", {k.shadow_distance_norm}},
+      {"shadowSoftness", {k.shadow_softness_norm}},
+      {"enableStopMotion", {BoolDefault(k.enable_stop_motion)}},
+      {"holdFrames", {static_cast<double>(k.hold_frames)}},
+      {"jitterPos", {k.jitter_pos_norm}},
+      {"jitterRot", {k.jitter_rot_deg}},
+      {"masterPos", {k.master_pos_x, k.master_pos_y}},
+      {"masterScale", {k.master_scale}},
+      {"masterAngle", {k.master_angle_deg}},
+      {"flipH", {BoolDefault(k.flip_h)}},
+      {"flipV", {BoolDefault(k.flip_v)}},
+  };
+}
+
+// Expected defaults of every Paper Fold & Unfold value parameter, read from a
+// default-constructed PaperFoldTransitionParams.
+std::vector<KernelDefault> FoldTransitionKernelDefaults() {
+  const PaperFoldTransitionParams k;
+  return {
+      {kOfxImageEffectTransitionParamName, {k.progress}},
+      {"foldAction", {static_cast<double>(k.fold_action)}},
+      {"foldPattern", {static_cast<double>(k.fold_pattern)}},
+      {"foldStages", {static_cast<double>(k.fold_stages)}},
+      {"foldDirection", {k.direction_angle_deg}},
+      {"foldDepth", {k.fold_depth}},
+      {"slideDistance", {k.slide_distance}},
+      {"mirrorTransH", {BoolDefault(k.mirror_h)}},
+      {"mirrorTransV", {BoolDefault(k.mirror_v)}},
+      {"enableBorder", {BoolDefault(k.enable_border)}},
+      {"borderWidth", {k.border_width_norm}},
+      {"tearRoughness", {k.tear_roughness_norm}},
+      {"tearFrequency", {k.tear_frequency}},
+      {"paperColor", {k.paper_r, k.paper_g, k.paper_b}},
+      {"grainStrength", {k.grain_strength}},
+      {"creaseStrength", {k.crease_strength}},
+      {"randomSeed", {static_cast<double>(k.random_seed)}},
+      {"sourcePremult", {BoolDefault(k.source_is_premultiplied)}},
+      {"enableStopMotion", {BoolDefault(k.enable_stop_motion)}},
+      {"stopMotionSteps", {static_cast<double>(k.stop_motion_steps)}},
+      {"jitterAmount", {k.jitter_amount}},
+      {"shadowOpacity", {k.shadow_opacity}},
+      {"shadowAngle", {k.shadow_angle_deg}},
+      {"shadowDistance", {k.shadow_distance_norm}},
+      {"shadowSoftness", {k.shadow_softness_norm}},
+  };
+}
+
+// Returns property `name` of a described parameter as doubles (int-valued
+// properties are converted), or an empty vector when it is not set.
+std::vector<double> ParamPropAsDoubles(const MockParam& param,
+                                       const char* name) {
+  const auto it = param.props.map.find(name);
+  if (it == param.props.map.end()) {
+    return {};
+  }
+  if (it->second.kind == PropValue::Kind::kInt) {
+    return std::vector<double>(it->second.ints.begin(), it->second.ints.end());
+  }
+  return it->second.doubles;
+}
+
+// Verifies the plugin's parameter tables cannot drift from the kernel
+// structs: every described value parameter has a kernel counterpart, its
+// default equals the CutoutParams / PaperFoldTransitionParams default (as
+// the float/int the kernel stores), and that default lies inside the hard
+// limits, the slider range and the choice options. Intentional differences
+// are listed in kExceptions and checked on both sides, so the list stays
+// accurate:
+//   - Transition progress ("Transition"): the kernel's 0.5 is a mid-transition
+//     value convenient for direct kernel calls; the host-animated OpenFX
+//     progress parameter starts at 0 like any OpenFX transition.
+TEST_F(PaperCraftOfxTest, DescribedParameterDefaultsMatchKernelStructs) {
+  const DefaultException kExceptions[] = {
+      {kOfxImageEffectTransitionParamName, 0.0, 0.5},
+  };
+  struct PluginCase {
+    const char* id;
+    const char* context;
+    std::vector<KernelDefault> expected;
+    bool transition;
+  };
+  const PluginCase cases[] = {
+      {kCutoutId, kOfxImageEffectContextFilter, CutoutKernelDefaults(), false},
+      {kFoldTransitionId, kOfxImageEffectContextTransition,
+       FoldTransitionKernelDefaults(), true},
+  };
+  for (const PluginCase& c : cases) {
+    SCOPED_TRACE(c.id);
+    ScopedPluginInstance pi;
+    ASSERT_NO_FATAL_FAILURE(InitInstance(c.id, c.context, &pi));
+    const auto& params = pi.desc.param_set.params;
+
+    std::set<std::string> expected_ids;
+    for (const KernelDefault& kd : c.expected) {
+      expected_ids.insert(kd.id);
+    }
+    for (const auto& [name, param] : params) {
+      if (param->type != kOfxParamTypeGroup &&
+          param->type != kOfxParamTypePage) {
+        EXPECT_EQ(expected_ids.count(name), 1u)
+            << "parameter \"" << name
+            << "\" has no kernel default in this test; add it";
+      }
+    }
+
+    for (const KernelDefault& kd : c.expected) {
+      SCOPED_TRACE(kd.id);
+      const auto it = params.find(kd.id);
+      ASSERT_TRUE(it != params.end()) << "not described";
+      const MockParam& param = *it->second;
+      const std::vector<double> def =
+          ParamPropAsDoubles(param, kOfxParamPropDefault);
+      ASSERT_EQ(def.size(), kd.values.size()) << "component count";
+
+      const DefaultException* exception = nullptr;
+      for (const DefaultException& e : kExceptions) {
+        if (c.transition && std::strcmp(e.id, kd.id) == 0) {
+          exception = &e;
+        }
+      }
+      const bool is_int = param.type == kOfxParamTypeInteger ||
+                          param.type == kOfxParamTypeBoolean ||
+                          param.type == kOfxParamTypeChoice;
+      for (std::size_t i = 0; i < def.size(); ++i) {
+        if (exception != nullptr) {
+          EXPECT_EQ(def[i], exception->plugin_value) << "documented exception";
+          EXPECT_EQ(kd.values[i], exception->kernel_value)
+              << "documented exception (kernel side)";
+          continue;
+        }
+        // Compare in the type the kernel stores: the plugin narrows doubles
+        // to float when it fills the struct.
+        if (is_int) {
+          EXPECT_EQ(static_cast<int>(def[i]), static_cast<int>(kd.values[i]))
+              << "component " << i;
+        } else {
+          EXPECT_EQ(static_cast<float>(def[i]),
+                    static_cast<float>(kd.values[i]))
+              << "component " << i;
+        }
+      }
+
+      // The kernel default must be reachable from the UI.
+      const std::vector<double> mins =
+          ParamPropAsDoubles(param, kOfxParamPropMin);
+      const std::vector<double> maxs =
+          ParamPropAsDoubles(param, kOfxParamPropMax);
+      const std::vector<double> dmins =
+          ParamPropAsDoubles(param, kOfxParamPropDisplayMin);
+      const std::vector<double> dmaxs =
+          ParamPropAsDoubles(param, kOfxParamPropDisplayMax);
+      if (param.type == kOfxParamTypeBoolean) {
+        EXPECT_TRUE(mins.empty() && maxs.empty());
+      } else if (param.type == kOfxParamTypeChoice) {
+        const auto opt = param.props.map.find(kOfxParamPropChoiceOption);
+        ASSERT_TRUE(opt != param.props.map.end()) << "no choice options";
+        EXPECT_GE(kd.values[0], 0.0);
+        EXPECT_LT(kd.values[0],
+                  static_cast<double>(opt->second.strings.size()));
+      } else {
+        ASSERT_EQ(mins.size(), def.size());
+        ASSERT_EQ(maxs.size(), def.size());
+        ASSERT_EQ(dmins.size(), def.size());
+        ASSERT_EQ(dmaxs.size(), def.size());
+        for (std::size_t i = 0; i < def.size(); ++i) {
+          EXPECT_LE(mins[i], kd.values[i]) << "component " << i;
+          EXPECT_GE(maxs[i], kd.values[i]) << "component " << i;
+          EXPECT_LE(dmins[i], kd.values[i]) << "component " << i;
+          EXPECT_GE(dmaxs[i], kd.values[i]) << "component " << i;
+        }
+      }
     }
   }
 }
