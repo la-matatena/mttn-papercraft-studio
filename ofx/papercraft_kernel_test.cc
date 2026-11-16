@@ -913,7 +913,7 @@ TEST(RenderPaperFoldTransitionTest, ByteAndShortInputsMatchEquivalentFloat) {
 TEST(RenderCutoutFrameTest, RendersPaperCutoutOverTransparency) {
   const FloatImage source = MakeVideoFrame(kCanvasW, kCanvasH, 0.5f);
   CutoutParams params;
-  params.current_time = 60.0;  // Mid-clip: no intro or outro.
+  params.current_time = 60.0;  // Mid-clip.
   std::vector<float> out = MakeOutput(-1.0f);
   RenderCutoutFrame(params, source.View(AlphaMode::kOpaque),
                     MakeView(out.data(), kCanvasW, kCanvasH, PixelDepth::kFloat,
@@ -948,11 +948,20 @@ TEST(RenderCutoutFrameTest, BuiltInStickerRendersWithoutSource) {
 
 TEST(RenderCutoutFrameTest, NegativeRowBytesAndRenderWindowAreConsistent) {
   const FloatImage source = MakeTitle(kCanvasW, kCanvasH);
-  for (int intro : {0, 1, 2}) {
-    SCOPED_TRACE("intro_style=" + std::to_string(intro));
+  // Variants: defaults; rotated, flipped master transform; borderless
+  // cutout with a choked matte.
+  for (int variant : {0, 1, 2}) {
+    SCOPED_TRACE("variant=" + std::to_string(variant));
     CutoutParams params;
-    params.intro_style = intro;
-    params.current_time = 5.0;  // Inside the 14-frame intro.
+    params.current_time = 5.0;
+    if (variant == 1) {
+      params.master_angle_deg = 17.0f;
+      params.master_scale = 0.8f;
+      params.flip_h = true;
+    } else if (variant == 2) {
+      params.enable_border = false;
+      params.edge_choke_px = -2.0f;
+    }
     std::vector<float> top_down = MakeOutput(0.0f);
     RenderCutoutFrame(
         params, source.View(),

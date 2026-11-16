@@ -5,7 +5,7 @@
 // host) can load. One binary registers two plugins:
 //
 //   com.papercraft.CutoutFX            Filter context: torn-paper cutout,
-//                                      chroma key, intro/outro animations.
+//                                      chroma key, stop-motion jitter.
 //   com.papercraft.PaperFoldTransition Transition context: stop-motion paper
 //                                      fold & unfold between two clips.
 //
@@ -256,6 +256,11 @@ void ParallelThreadWorker(unsigned int /*thread_index*/,
 // width, roughness, shadow distance/softness, jitter) are fractions of the
 // frame size, so the look does not depend on resolution.
 //
+// Retired controls stay in the table as secret (hidden) entries without a
+// kernel field: the host still defines them, so projects saved with them
+// open without errors, but they are never bound or read (see
+// ParamSpec::Secret()).
+//
 // Plugin defaults match the kernel struct defaults in papercraft_kernel.h;
 // papercraft_ofx_test.cc checks that, and lists the intentional exceptions
 // (only the transition's progress, which starts at 0 instead of 0.5).
@@ -298,10 +303,14 @@ struct ParamSpec {
   // Slider range only: users can still type values up to the hard limits.
   double display_min = 0.0;
   double display_max = 0.0;
+  // Hidden legacy parameter (kOfxParamPropSecret = 1): defined so old
+  // projects load, but top level, never bound, never read, and without a
+  // kernel field. Set with Secret().
+  bool secret = false;
   // kChoice entries. The host saves the selected index, not the label, so
   // new options must be appended at the end; reordering changes existing
-  // projects. The index maps directly to kernel enums (CutoutAnimStyle,
-  // FoldTransitionAction, FoldPattern) or to CutoutParams::source_mode.
+  // projects. The index maps directly to kernel enums (FoldTransitionAction,
+  // FoldPattern) or to CutoutParams::source_mode.
   const char* const* options = nullptr;
   int option_count = 0;
   // Kernel destination; exactly the one matching `kind` is set.
@@ -426,6 +435,16 @@ struct ParamSpec {
     return spec;
   }
 
+  // Returns a copy of this value parameter marked secret, for retired
+  // controls: build it with a nullptr parent and nullptr kernel field(s),
+  // e.g. Bool("oldId", "Old Label", nullptr, hint, false, nullptr).Secret().
+  // IsValidParamTable() enforces that shape.
+  constexpr ParamSpec Secret() const {
+    ParamSpec spec = *this;
+    spec.secret = true;
+    return spec;
+  }
+
  private:
   // Fills the fields shared by every value parameter.
   static constexpr ParamSpec Common(ParamKind kind, const char* id,
@@ -447,6 +466,8 @@ using FoldSpec = ParamSpec<PaperFoldTransitionParams>;
 // Choice options (index = saved value; append only, never reorder).
 constexpr const char* kSourceModeOptions[] = {"Timeline Clip",
                                               "Built-in Paper Sticker"};
+// Options of the retired, hidden Cutout introStyle / outroStyle choices.
+// Kept so saved indices stay valid when old projects load.
 constexpr const char* kAnimStyleOptions[] = {
     "None", "Paper Unfold (3D)", "Crumple Ball", "Paper Airplane Glide",
     "Flat Cutout Pop"};
@@ -456,18 +477,13 @@ constexpr const char* kFoldActionOptions[] = {
 constexpr const char* kFoldPatternOptions[] = {"Craft Flaps", "Map Grid",
                                                "Accordion", "Origami Corners"};
 
-// Paper Cutout FX controls in seven groups: media source and placement,
-// green screen key, torn border, paper texture, intro/outro animations, drop
-// shadow, and stop-motion plus master transform.
+// Paper Cutout FX controls in seven groups: media placement, green screen
+// key, torn border, paper texture, drop shadow, stop-motion plus master
+// transform, and a closed "Advanced" group with the technical controls
+// (source mode and alpha, tear detail, texture scales, seed). The retired
+// intro/outro controls follow as secret entries.
 constexpr CutoutSpec kCutoutParamSpecs[] = {
     CutoutSpec::Group("MediaSourceGroup", "1. Media Source & Placement", true),
-    CutoutSpec::Choice("sourceMode", "Source Mode", "MediaSourceGroup",
-                       "Use the timeline clip or a procedural demo sticker.", 0,
-                       kSourceModeOptions, &CutoutParams::source_mode),
-    CutoutSpec::Bool(
-        "sourcePremult", "Premultiplied Source Alpha", "MediaSourceGroup",
-        "Disable only if footage has straight/unpremultiplied alpha.", true,
-        &CutoutParams::source_is_premultiplied),
     CutoutSpec::Double("mediaScale", "Media Scale", "MediaSourceGroup",
                        "Scale of the subject inside frame.",
                        kOfxParamDoubleTypeScale, 0.90, 0.05, 5.0, 0.1, 2.5,
@@ -521,9 +537,6 @@ constexpr CutoutSpec kCutoutParamSpecs[] = {
                        "Spatial density of paper edge tears.",
                        kOfxParamDoubleTypePlain, 24.0, 1.0, 120.0, 2.0, 60.0,
                        &CutoutParams::tear_frequency),
-    CutoutSpec::Int("tearDetail", "Tear Fiber Detail", "PaperBorderGroup",
-                    "Octaves of torn paper micro-fibers.", 5, 1, 8, 1, 8,
-                    &CutoutParams::tear_detail),
     CutoutSpec::Double(
         "edgeBoil", "Edge Boil Speed", "PaperBorderGroup",
         "Subtle frame-by-frame edge variation on stop-motion steps.",
@@ -538,57 +551,17 @@ constexpr CutoutSpec kCutoutParamSpecs[] = {
     CutoutSpec::Double("grainStrength", "Paper Grain Strength", "TextureGroup",
                        "Cardstock fiber grain depth.", kOfxParamDoubleTypePlain,
                        0.35, 0.0, 1.0, 0.0, 1.0, &CutoutParams::grain_strength),
-    CutoutSpec::Double("grainScale", "Grain Scale", "TextureGroup",
-                       "Scale of cardstock surface fibers.",
-                       kOfxParamDoubleTypeScale, 1.0, 0.1, 10.0, 0.2, 3.0,
-                       &CutoutParams::grain_scale),
     CutoutSpec::Double("creaseStrength", "Fold Crease Strength", "TextureGroup",
                        "Ridged fold crease contrast.", kOfxParamDoubleTypePlain,
                        0.40, 0.0, 1.0, 0.0, 1.0,
                        &CutoutParams::crease_strength),
-    CutoutSpec::Double("creaseScale", "Crease Scale", "TextureGroup",
-                       "Spatial size of folded paper creases.",
-                       kOfxParamDoubleTypePlain, 3.2, 0.2, 30.0, 0.8, 12.0,
-                       &CutoutParams::crease_scale),
     CutoutSpec::Double("mediaTextureOverlay", "Media Texture Overlay",
                        "TextureGroup",
                        "Subtle paper crease blending across the subject ink.",
                        kOfxParamDoubleTypePlain, 0.22, 0.0, 1.0, 0.0, 1.0,
                        &CutoutParams::media_texture_overlay),
-    CutoutSpec::Int("randomSeed", "Texture Seed", "TextureGroup",
-                    "Seed controlling tear, crease, and jitter variations.", 7,
-                    0, 1000, 0, 100, &CutoutParams::random_seed),
 
-    CutoutSpec::Group("TransitionGroup", "5. Intro & Outro Paper Animations",
-                      true),
-    CutoutSpec::Choice("introStyle", "Intro Style", "TransitionGroup",
-                       "Opening paper animation at clip start.", 0,
-                       kAnimStyleOptions, &CutoutParams::intro_style),
-    CutoutSpec::Int("introFrames", "Intro Duration (Frames)", "TransitionGroup",
-                    "Length of opening animation in frames.", 14, 0, 240, 0, 60,
-                    &CutoutParams::intro_frames),
-    CutoutSpec::Choice("outroStyle", "Outro Style", "TransitionGroup",
-                       "Closing paper animation before clip end.", 0,
-                       kAnimStyleOptions, &CutoutParams::outro_style),
-    CutoutSpec::Int("outroFrames", "Outro Duration (Frames)", "TransitionGroup",
-                    "Length of closing animation in frames.", 14, 0, 240, 0, 60,
-                    &CutoutParams::outro_frames),
-    CutoutSpec::Double("transitionAngle", "Glide Angle", "TransitionGroup",
-                       "Incoming/outgoing glide direction in degrees.",
-                       kOfxParamDoubleTypeAngle, -22.0, -360.0, 360.0, -180.0,
-                       180.0, &CutoutParams::transition_angle_deg),
-    CutoutSpec::Double("glideDistance", "Glide Distance", "TransitionGroup",
-                       "Travel distance for glide entrance.",
-                       kOfxParamDoubleTypePlain, 0.65, 0.0, 3.0, 0.0, 1.5,
-                       &CutoutParams::glide_distance),
-    CutoutSpec::Bool("mirrorTransH", "Mirror Animation H", "TransitionGroup",
-                     "Flip intro/outro motion horizontally.", false,
-                     &CutoutParams::mirror_transition_h),
-    CutoutSpec::Bool("mirrorTransV", "Mirror Animation V", "TransitionGroup",
-                     "Flip intro/outro motion vertically.", false,
-                     &CutoutParams::mirror_transition_v),
-
-    CutoutSpec::Group("ShadowGroup", "6. 3D Drop Shadow", false),
+    CutoutSpec::Group("ShadowGroup", "5. 3D Drop Shadow", false),
     CutoutSpec::Double("shadowOpacity", "Shadow Opacity", "ShadowGroup",
                        "Drop shadow density behind cutout.",
                        kOfxParamDoubleTypePlain, 0.62, 0.0, 1.0, 0.0, 1.0,
@@ -607,21 +580,22 @@ constexpr CutoutSpec kCutoutParamSpecs[] = {
                        &CutoutParams::shadow_softness_norm),
 
     CutoutSpec::Group("StopMotionMasterGroup",
-                      "7. Stop-Motion & Master Transform", true),
+                      "6. Stop-Motion & Master Transform", true),
     CutoutSpec::Bool("enableStopMotion", "Enable Stop-Motion",
                      "StopMotionMasterGroup",
                      "Quantize motion into stepped stop-motion frame holds.",
                      true, &CutoutParams::enable_stop_motion),
-    CutoutSpec::Int("holdFrames", "Hold Frames (Step)", "StopMotionMasterGroup",
-                    "Frames held per stop-motion step (e.g. 3 for 8 fps look).",
-                    3, 1, 30, 1, 12, &CutoutParams::hold_frames),
+    CutoutSpec::Int(
+        "holdFrames", "Hold Frames (Step)", "StopMotionMasterGroup",
+        "Frames held per stop-motion step (e.g. 6 for a 4 fps look at 24 fps).",
+        6, 1, 30, 1, 12, &CutoutParams::hold_frames),
     CutoutSpec::Double("jitterPos", "Position Jitter", "StopMotionMasterGroup",
                        "Hand-placed stop-motion position jitter amplitude.",
-                       kOfxParamDoubleTypePlain, 0.0025, 0.0, 0.1, 0.0, 0.03,
+                       kOfxParamDoubleTypePlain, 0.001, 0.0, 0.1, 0.0, 0.03,
                        &CutoutParams::jitter_pos_norm),
     CutoutSpec::Double("jitterRot", "Rotation Jitter", "StopMotionMasterGroup",
                        "Hand-placed stop-motion rotational wobble in degrees.",
-                       kOfxParamDoubleTypeAngle, 0.75, 0.0, 30.0, 0.0, 8.0,
+                       kOfxParamDoubleTypeAngle, 0.3, 0.0, 30.0, 0.0, 8.0,
                        &CutoutParams::jitter_rot_deg),
     CutoutSpec::Double2D(
         "masterPos", "Master Position", "StopMotionMasterGroup",
@@ -642,6 +616,67 @@ constexpr CutoutSpec kCutoutParamSpecs[] = {
     CutoutSpec::Bool("flipV", "Flip Vertical", "StopMotionMasterGroup",
                      "Mirror finished cutout top/bottom.", false,
                      &CutoutParams::flip_v),
+
+    CutoutSpec::Group("AdvancedGroup", "7. Advanced", false),
+    CutoutSpec::Choice("sourceMode", "Source Mode", "AdvancedGroup",
+                       "Use the timeline clip or a procedural demo sticker.", 0,
+                       kSourceModeOptions, &CutoutParams::source_mode),
+    CutoutSpec::Bool(
+        "sourcePremult", "Premultiplied Source Alpha", "AdvancedGroup",
+        "Disable only if footage has straight/unpremultiplied alpha.", true,
+        &CutoutParams::source_is_premultiplied),
+    CutoutSpec::Int("tearDetail", "Tear Fiber Detail", "AdvancedGroup",
+                    "Octaves of torn paper micro-fibers.", 5, 1, 8, 1, 8,
+                    &CutoutParams::tear_detail),
+    CutoutSpec::Double("grainScale", "Grain Scale", "AdvancedGroup",
+                       "Scale of cardstock surface fibers.",
+                       kOfxParamDoubleTypeScale, 1.0, 0.1, 10.0, 0.2, 3.0,
+                       &CutoutParams::grain_scale),
+    CutoutSpec::Double("creaseScale", "Crease Scale", "AdvancedGroup",
+                       "Spatial size of folded paper creases.",
+                       kOfxParamDoubleTypePlain, 3.2, 0.2, 30.0, 0.8, 12.0,
+                       &CutoutParams::crease_scale),
+    CutoutSpec::Int("randomSeed", "Texture Seed", "AdvancedGroup",
+                    "Seed controlling tear, crease, and jitter variations.", 7,
+                    0, 1000, 0, 100, &CutoutParams::random_seed),
+
+    // Retired "Intro & Outro Paper Animations" controls: secret, top level,
+    // never read (the cutout always renders at rest). IDs, options, and
+    // ranges are unchanged so saved values still load.
+    CutoutSpec::Choice("introStyle", "Intro Style", nullptr,
+                       "Retired: intro animations were removed.", 0,
+                       kAnimStyleOptions, nullptr)
+        .Secret(),
+    CutoutSpec::Int("introFrames", "Intro Duration (Frames)", nullptr,
+                    "Retired: intro animations were removed.", 14, 0, 240, 0,
+                    60, nullptr)
+        .Secret(),
+    CutoutSpec::Choice("outroStyle", "Outro Style", nullptr,
+                       "Retired: outro animations were removed.", 0,
+                       kAnimStyleOptions, nullptr)
+        .Secret(),
+    CutoutSpec::Int("outroFrames", "Outro Duration (Frames)", nullptr,
+                    "Retired: outro animations were removed.", 14, 0, 240, 0,
+                    60, nullptr)
+        .Secret(),
+    CutoutSpec::Double("transitionAngle", "Glide Angle", nullptr,
+                       "Retired: intro/outro animations were removed.",
+                       kOfxParamDoubleTypeAngle, -22.0, -360.0, 360.0, -180.0,
+                       180.0, nullptr)
+        .Secret(),
+    CutoutSpec::Double("glideDistance", "Glide Distance", nullptr,
+                       "Retired: intro/outro animations were removed.",
+                       kOfxParamDoubleTypePlain, 0.65, 0.0, 3.0, 0.0, 1.5,
+                       nullptr)
+        .Secret(),
+    CutoutSpec::Bool("mirrorTransH", "Mirror Animation H", nullptr,
+                     "Retired: intro/outro animations were removed.", false,
+                     nullptr)
+        .Secret(),
+    CutoutSpec::Bool("mirrorTransV", "Mirror Animation V", nullptr,
+                     "Retired: intro/outro animations were removed.", false,
+                     nullptr)
+        .Secret(),
 };
 
 // Paper Fold & Unfold controls: the mandatory transition progress parameter
@@ -774,9 +809,11 @@ constexpr std::size_t FindParamIndex(const ParamSpec<P> (&specs)[N],
 }
 
 // Compile-time sanity check of one table: every entry has an ID and a label,
-// IDs are unique, each value parameter has exactly the kernel field(s) its
-// kind needs, choices have options, and every default lies inside the hard
-// limits and slider range.
+// IDs are unique, every parent is a group defined earlier in the table, each
+// visible value parameter has exactly the kernel field(s) its kind needs,
+// secret (legacy) entries are top-level values with no kernel field,
+// choices have options, and every default lies inside the hard limits and
+// slider range.
 template <typename P, std::size_t N>
 constexpr bool IsValidParamTable(const ParamSpec<P> (&specs)[N]) {
   for (std::size_t i = 0; i < N; ++i) {
@@ -785,27 +822,43 @@ constexpr bool IsValidParamTable(const ParamSpec<P> (&specs)[N]) {
         FindParamIndex(specs, spec.id) != i) {
       return false;
     }
+    if (spec.parent != nullptr) {
+      const std::size_t parent = FindParamIndex(specs, spec.parent);
+      if (parent >= i || specs[parent].kind != ParamKind::kGroup) {
+        return false;
+      }
+    }
+    const bool has_field =
+        spec.bool_field != nullptr || spec.int_field != nullptr ||
+        spec.float_fields[0] != nullptr || spec.float_fields[1] != nullptr ||
+        spec.float_fields[2] != nullptr;
+    // Secret entries are only ever defined, never read, so a kernel field
+    // would be dead (and a parent group would show them again).
+    if (spec.secret && (spec.kind == ParamKind::kGroup ||
+                        spec.parent != nullptr || has_field)) {
+      return false;
+    }
     int components = 0;
     switch (spec.kind) {
       case ParamKind::kGroup:
-        if (spec.bool_field != nullptr || spec.int_field != nullptr ||
-            spec.float_fields[0] != nullptr) {
+        if (has_field) {
           return false;
         }
         continue;
       case ParamKind::kBoolean:
-        if (spec.bool_field == nullptr) {
+        if (!spec.secret && spec.bool_field == nullptr) {
           return false;
         }
         continue;
       case ParamKind::kChoice:
-        if (spec.int_field == nullptr || spec.option_count <= 0 ||
-            spec.def[0] < 0.0 || spec.def[0] >= spec.option_count) {
+        if ((!spec.secret && spec.int_field == nullptr) ||
+            spec.option_count <= 0 || spec.def[0] < 0.0 ||
+            spec.def[0] >= spec.option_count) {
           return false;
         }
         continue;
       case ParamKind::kInteger:
-        if (spec.int_field == nullptr) {
+        if (!spec.secret && spec.int_field == nullptr) {
           return false;
         }
         components = 1;
@@ -821,7 +874,7 @@ constexpr bool IsValidParamTable(const ParamSpec<P> (&specs)[N]) {
         break;
     }
     for (int c = 0; c < components; ++c) {
-      const bool needs_float = spec.kind != ParamKind::kInteger;
+      const bool needs_float = !spec.secret && spec.kind != ParamKind::kInteger;
       if (needs_float != (spec.float_fields[c] != nullptr) ||
           spec.def[c] < spec.min || spec.def[c] > spec.max ||
           spec.def[c] < spec.display_min || spec.def[c] > spec.display_max) {
@@ -925,6 +978,9 @@ void DefineParamFromSpec(const HostSuites& s, OfxParamSetHandle param_set,
       s, param_set, param_type, spec.id, spec.label, spec.parent, spec.hint);
   if (props == nullptr) {
     return;
+  }
+  if (spec.secret) {
+    s.prop->propSetInt(props, kOfxParamPropSecret, 0, 1);
   }
   switch (spec.kind) {
     case ParamKind::kGroup:
@@ -1053,8 +1109,7 @@ OfxStatus HandleDescribe(PluginRole role, OfxImageEffectHandle effect) {
             "or fold away, with paper backside, creases, torn edges, and "
             "shadows."
           : "Real-time torn paper cutout border, fiber texture, fold creases, "
-            "green screen key, intro/outro paper animations, and stop-motion "
-            "jitter.";
+            "green screen key, 3D drop shadow, and stop-motion jitter.";
   s.prop->propSetString(props, kOfxPropLabel, 0, label);
   s.prop->propSetString(props, kOfxPropShortLabel, 0, short_label);
   s.prop->propSetString(props, kOfxPropLongLabel, 0, long_label);
@@ -1168,16 +1223,17 @@ OfxStatus HandleDescribeInContext(PluginRole role, OfxImageEffectHandle effect,
 // ---------------------------------------------------------------------------
 
 // Looks up one handle per entry of `specs` by its persistent ID and stores it
-// at the same index of `*handles`. Groups are skipped. Errors are ignored on
-// purpose: a missing parameter leaves its handle nullptr, which the readers
-// treat as "use the table default".
+// at the same index of `*handles`. Groups and secret (legacy) entries are
+// skipped, so their handles stay nullptr. Errors are ignored on purpose: a
+// missing parameter leaves its handle nullptr, which the readers treat as
+// "use the table default".
 template <typename P, std::size_t N>
 void BindParamTable(const HostSuites& s, OfxParamSetHandle param_set,
                     const ParamSpec<P> (&specs)[N],
                     std::vector<OfxParamHandle>* handles) {
   handles->assign(N, nullptr);
   for (std::size_t i = 0; i < N; ++i) {
-    if (specs[i].kind != ParamKind::kGroup) {
+    if (specs[i].kind != ParamKind::kGroup && !specs[i].secret) {
       s.param->paramGetHandle(param_set, specs[i].id, &(*handles)[i], nullptr);
     }
   }
@@ -1455,16 +1511,21 @@ void ReadRgbParam(const HostSuites& s, OfxParamHandle param, OfxTime time,
   }
 }
 
-// Reads every value parameter of `specs` at `time` into the matching field
-// of `*out`. `handles` holds one handle per table entry (see
-// BindParamTable()); a nullptr or missing handle yields the table default,
-// narrowed to the kernel field's type exactly as the host default is.
+// Reads every visible value parameter of `specs` at `time` into the matching
+// field of `*out`; secret (legacy) entries have no field and are skipped, so
+// their saved values never reach the kernel. `handles` holds one handle per
+// table entry (see BindParamTable()); a nullptr or missing handle yields the
+// table default, narrowed to the kernel field's type exactly as the host
+// default is.
 template <typename P, std::size_t N>
 void ReadParamTable(const HostSuites& s, const ParamSpec<P> (&specs)[N],
                     const std::vector<OfxParamHandle>& handles, OfxTime time,
                     P* out) {
   for (std::size_t i = 0; i < N; ++i) {
     const ParamSpec<P>& spec = specs[i];
+    if (spec.secret) {
+      continue;
+    }
     const OfxParamHandle param = i < handles.size() ? handles[i] : nullptr;
     switch (spec.kind) {
       case ParamKind::kGroup:
@@ -1515,8 +1576,8 @@ int ReadCutoutSourceMode(const HostSuites& s, const PluginInstance& inst,
 // `render_scale_x` and `render_scale_y` are the host's proxy scale per axis
 // (1.0 = full resolution, 0.5 = half-res preview); they convert pixel-unit
 // parameters so the look matches across preview and final renders. Also
-// reads the clip's frame range, which the kernel needs to time intro/outro
-// animations.
+// reads the clip's frame range, which the kernel needs to time stop-motion
+// steps.
 CutoutParams ReadCutoutParams(const HostSuites& s, const PluginInstance& inst,
                               OfxTime time, double render_scale_x,
                               double render_scale_y) {
