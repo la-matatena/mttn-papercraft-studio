@@ -874,51 +874,448 @@ def _active_trans_style_expr(macro_name: str) -> str:
   )
 
 
-def _render_core_cutout_nodes(
-    macro_name: str,
-    source_output_op: str,
-) -> str:
-  """Generates the shared Fusion node graph downstream of the media source.
+def _if_enabled(macro_name: str, toggle: str, value: str) -> str:
+  """Returns a SimpleExpression that is `value` while a checkbox is on.
 
-  Node chain (each arrow is a `SourceOp` link; `Pos` values only place nodes
-  in the Fusion flow view and do not affect rendering):
-
-    source -> ChromaKeyer (DeltaKeyer) -> KeyBypassSwitch (Dissolve picks
-      keyed or raw clip) -> SubjectEdgeChoke (ErodeDilate) ->
-      MediaClipTransform (Clip* placement)
-    MediaClipTransform -> BorderExpand -> BorderCornerSmooth (Blur) ->
-      BorderAlphaCrunch (alpha threshold) -> BorderTearDisplace (displaced by
-      TearEdgeNoise) = torn border matte
-    PaperBaseColor x PaperFiberNoise x PaperCreaseNoise (Multiply merges) ->
-      PaperSheetTextured, masked by the border matte -> PaperCutoutShape
-    PaperCutoutShape + MediaClipTransform -> CompositeSubjectOnPaper ->
-      MediaPaperOverlay (crease multiply) -> CrumpleDisplace -> FoldDVE ->
-      GlideTransform -> CutoutShadow -> StopMotionJitter -> MasterTransform
-      -> PosterizeTime (TimeStretcher; the macro's MainOutput1)
-
-  CrumpleDisplace, FoldDVE, and GlideTransform implement the intro/outro
-  styles; all other nodes are steady-state look controls.
+  Generated form: `iif(<macro_name>.<toggle> > 0.5, <value>, 0)`. Checkboxes
+  are stored as floats, hence the `> 0.5` test (see the module docstring).
 
   Args:
-    macro_name: Name of the enclosing MacroOperator; expressions read
-      controls as `<macro_name>.<ControlId>`.
-    source_output_op: Name of the internal node that receives MainInput1.
+    macro_name: Name of the enclosing Fusion MacroOperator.
+    toggle: Checkbox control ID, e.g. `EnablePaperBorder`.
+    value: SimpleExpression used while the checkbox is on.
 
   Returns:
-    Node definitions (four tabs deep) to append inside the macro `Tools`
-    block, starting with a newline.
+    SimpleExpression evaluating to `value` or 0.
+  """
+  return f"iif({macro_name}.{toggle} > 0.5, {value}, 0)"
+
+
+def _noise_gradient_rows(dark_rgb: tuple[str, str, str]) -> list[str]:
+  """Returns the FastNoise Color1/Color2 rows for a paper-tinted gradient.
+
+  FastNoise maps low noise values to Color1 and high values to Color2. Color2
+  is opaque white, so when the noise is multiplied over the paper (see
+  `_core_paper_texture_nodes`) the bright areas leave the paper untouched and
+  only the `dark_rgb` areas darken it.
+
+  Args:
+    dark_rgb: Color1 red/green/blue as Lua number literals (0..1), kept as
+      strings so the emitted digits stay exactly as written.
+
+  Returns:
+    Eight `_value` rows: Color1Red..Color1Alpha, then Color2Red..Color2Alpha.
+  """
+  channels = ("Red", "Green", "Blue")
+  rows = [_value(f"Color1{ch}", val) for ch, val in zip(channels, dark_rgb)]
+  rows.append(_value("Color1Alpha", "1.0"))
+  rows.extend(_value(f"Color2{ch}", "1.0") for ch in (*channels, "Alpha"))
+  return rows
+
+
+def _core_key_nodes(macro_name: str, source_output_op: str) -> list[str]:
+  """Builds the chroma-key stage that reads the macro's media input.
+
+  * `ChromaKeyer` (Delta Keyer) pulls a matte for the screen color picked by
+    `KeyScreenRed/Green/Blue`; `KeyGain` and `KeyBalance` tune the key.
+  * `KeyBypassSwitch` (Dissolve) is a hard 0/1 switch: `Mix = 0` passes the
+    raw clip (Background), `Mix = 1` the keyed clip (Foreground). It follows
+    `EnableChromaKey`, so the key can be turned off without rewiring.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+    source_output_op: Internal node that receives MainInput1.
+
+  Returns:
+    Rendered node definitions, in graph order.
+  """
+  return [
+      _node(
+          "ChromaKeyer",
+          "DeltaKeyer",
+          [
+              _expr_block("BackgroundRed", "0.0", f"{macro_name}.KeyScreenRed"),
+              _expr_block(
+                  "BackgroundGreen", "1.0", f"{macro_name}.KeyScreenGreen"
+              ),
+              _expr_block(
+                  "BackgroundBlue", "0.0", f"{macro_name}.KeyScreenBlue"
+              ),
+              _expr_block("Gain", "1.0", f"{macro_name}.KeyGain"),
+              _expr_block("Balance", "0.5", f"{macro_name}.KeyBalance"),
+              _link_block("Input", source_output_op),
+          ],
+          (220, 49.5),
+      ),
+      _node(
+          "KeyBypassSwitch",
+          "Dissolve",
+          [
+              _expr_block(
+                  "Mix", "0", _if_enabled(macro_name, "EnableChromaKey", "1")
+              ),
+              _link_block("Background", source_output_op),
+              _link_block("Foreground", "ChromaKeyer"),
+          ],
+          (330, 49.5),
+          preamble=_DISSOLVE,
+      ),
+  ]
+
+
+def _core_subject_nodes(macro_name: str) -> list[str]:
+  """Builds the matte cleanup and clip placement stage.
+
+  * `SubjectEdgeChoke` (Erode/Dilate, `Filter = 3`: circle) shrinks or grows
+    the subject alpha by `SubjectEdgeErode` to remove key fringes.
+  * `MediaClipTransform` places the subject in frame with `ClipCenterX/Y`
+    (normalized 0..1), `ClipScale`, and `ClipAngle` (degrees). Its output
+    feeds both the border matte and the final composite.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+
+  Returns:
+    Rendered node definitions, in graph order.
+  """
+  return [
+      _node(
+          "SubjectEdgeChoke",
+          "ErodeDilate",
+          [
+              _value("Filter", "3"),
+              _expr_block("XAmount", "0.0", f"{macro_name}.SubjectEdgeErode"),
+              _link_block("Input", "KeyBypassSwitch"),
+          ],
+          (440, 49.5),
+      ),
+      _node(
+          "MediaClipTransform",
+          "Transform",
+          [
+              _expr_block(
+                  "Center",
+                  "{ 0.5, 0.5 }",
+                  f"Point({macro_name}.ClipCenterX, {macro_name}.ClipCenterY)",
+              ),
+              _expr_block("Size", "0.88", f"{macro_name}.ClipScale"),
+              _expr_block("Angle", "0.0", f"{macro_name}.ClipAngle"),
+              _link_block("Input", "SubjectEdgeChoke"),
+          ],
+          (550, 49.5),
+      ),
+  ]
+
+
+def _core_border_nodes(macro_name: str, step_t: str) -> list[str]:
+  """Builds the torn paper-border matte around the placed subject.
+
+  * `BorderExpand` (Erode/Dilate) grows the subject alpha by `BorderSize`.
+  * `BorderCornerSmooth` (Fast Gaussian Blur) softens it by
+    `BorderRoundness`, rounding sharp corners.
+  * `BorderAlphaCrunch` (BrightnessContrast on alpha only, with
+    `Low`/`High` 0.15/0.25 and both clips on) re-hardens the blurred alpha
+    into a crisp edge that follows the rounded shape.
+  * `TearEdgeNoise` (FastNoise) is the tear pattern; its `Seethe` (noise
+    evolution) is `RandomSeed` plus stepped time scaled by `EdgeBoilAmount`,
+    so the edge "boils" in sync with the stop-motion steps.
+  * `BorderTearDisplace` (Displace, XY mode, offsets centered at -0.5) pushes
+    the matte edge by the noise times `TearRoughness`.
+
+  Every amount is forced to 0 when `EnablePaperBorder` is off, which leaves
+  the bare subject matte.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+    step_t: Stepped-time expression from `_stepped_time_expr`.
+
+  Returns:
+    Rendered node definitions, in graph order.
+  """
+  tear_roughness = _if_enabled(
+      macro_name, "EnablePaperBorder", f"{macro_name}.TearRoughness"
+  )
+  return [
+      _node(
+          "BorderExpand",
+          "ErodeDilate",
+          [
+              _value("Filter", "3"),
+              _expr_block(
+                  "XAmount",
+                  "0.016",
+                  _if_enabled(
+                      macro_name,
+                      "EnablePaperBorder",
+                      f"{macro_name}.BorderSize",
+                  ),
+              ),
+              _link_block("Input", "MediaClipTransform"),
+          ],
+          (550, 115.5),
+      ),
+      _node(
+          "BorderCornerSmooth",
+          "Blur",
+          [
+              _value("Filter", 'FuID { "Fast Gaussian" }'),
+              _expr_block(
+                  "XBlurSize",
+                  "3.5",
+                  _if_enabled(
+                      macro_name,
+                      "EnablePaperBorder",
+                      f"{macro_name}.BorderRoundness",
+                  ),
+              ),
+              _link_block("Input", "BorderExpand"),
+          ],
+          (660, 115.5),
+      ),
+      _node(
+          "BorderAlphaCrunch",
+          "BrightnessContrast",
+          [
+              _value("Alpha", "1"),
+              _value("Low", "0.15"),
+              _value("High", "0.25"),
+              _value("ClipBlack", "1"),
+              _value("ClipWhite", "1"),
+              _link_block("Input", "BorderCornerSmooth"),
+          ],
+          (770, 115.5),
+      ),
+      _node(
+          "TearEdgeNoise",
+          "FastNoise",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _expr_block("Detail", "6.0", f"{macro_name}.TearDetail"),
+              _value("Contrast", "2.4"),
+              _expr_block("XScale", "22.0", f"{macro_name}.TearScale"),
+              _expr_block(
+                  "Seethe",
+                  "7.0",
+                  f"{macro_name}.RandomSeed + ({step_t}) * "
+                  f"{macro_name}.EdgeBoilAmount * 0.15",
+              ),
+              _value("Color1Alpha", "1"),
+          ],
+          (770, 181.5),
+      ),
+      _node(
+          "BorderTearDisplace",
+          "Displace",
+          [
+              _value("Type", "1"),
+              _value("XOffset", "-0.5"),
+              _value("YOffset", "-0.5"),
+              _expr_block("XRefraction", "0.016", tear_roughness),
+              _expr_block("YRefraction", "0.016", tear_roughness),
+              _link_block("Input", "BorderAlphaCrunch"),
+              _link_block("Foreground", "TearEdgeNoise"),
+          ],
+          (880, 115.5),
+      ),
+  ]
+
+
+def _core_paper_texture_nodes(macro_name: str, step_t: str) -> list[str]:
+  """Builds the full-frame textured paper sheet.
+
+  * `PaperBaseColor` (Background) is the flat paper tint `PaperRed/Green/
+    Blue`.
+  * `PaperFiberNoise` (fine FastNoise; `TextureScale` divides the base
+    `XScale` of 45, so larger values mean coarser fibers) and
+    `PaperCreaseNoise` (coarse, discontinuous, inverted FastNoise sized by
+    `CreaseScale`) give grain and creases. Both seethe with `RandomSeed`
+    plus stepped time scaled by `TextureBoil`; the 1.3/2.1 seed factors
+    decorrelate them.
+  * `PaperSheetWithGrain` and `PaperSheetTextured` multiply the fibers
+    (`FiberStrength`) and then the creases (`CreaseStrength`) over the tint.
+
+  `PaperCreaseNoise` is also reused downstream by `MediaPaperOverlay` and
+  `CrumpleDisplace`.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+    step_t: Stepped-time expression from `_stepped_time_expr`.
+
+  Returns:
+    Rendered node definitions, in graph order.
+  """
+  return [
+      _node(
+          "PaperBaseColor",
+          "Background",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _expr_block("TopLeftRed", "0.965", f"{macro_name}.PaperRed"),
+              _expr_block("TopLeftGreen", "0.945", f"{macro_name}.PaperGreen"),
+              _expr_block("TopLeftBlue", "0.895", f"{macro_name}.PaperBlue"),
+              _value("TopLeftAlpha", "1"),
+          ],
+          (660, 247.5),
+      ),
+      _node(
+          "PaperFiberNoise",
+          "FastNoise",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _value("Detail", "8.0"),
+              _value("Contrast", "1.6"),
+              _expr_block(
+                  "XScale",
+                  "45.0",
+                  f"45.0 / max(0.1, {macro_name}.TextureScale)",
+              ),
+              _expr_block(
+                  "Seethe",
+                  "7.0",
+                  f"{macro_name}.RandomSeed * 1.3 + ({step_t}) * "
+                  f"{macro_name}.TextureBoil * 0.12",
+              ),
+              *_noise_gradient_rows(("0.80", "0.77", "0.72")),
+          ],
+          (770, 247.5),
+      ),
+      _node(
+          "PaperCreaseNoise",
+          "FastNoise",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _value("Detail", "3.0"),
+              _value("Contrast", "2.8"),
+              _value("Discontinuous", "1"),
+              _value("Inverted", "1"),
+              _expr_block("XScale", "3.2", f"{macro_name}.CreaseScale"),
+              _expr_block(
+                  "Seethe",
+                  "7.0",
+                  f"{macro_name}.RandomSeed * 2.1 + ({step_t}) * "
+                  f"{macro_name}.TextureBoil * 0.08",
+              ),
+              *_noise_gradient_rows(("0.76", "0.74", "0.70")),
+          ],
+          (770, 313.5),
+      ),
+      _node(
+          "PaperSheetWithGrain",
+          "Merge",
+          [
+              _value("ApplyMode", 'FuID { "Multiply" }'),
+              _expr_block("Blend", "0.35", f"{macro_name}.FiberStrength"),
+              _link_block("Background", "PaperBaseColor"),
+              _link_block("Foreground", "PaperFiberNoise"),
+          ],
+          (880, 247.5),
+      ),
+      _node(
+          "PaperSheetTextured",
+          "Merge",
+          [
+              _value("ApplyMode", 'FuID { "Multiply" }'),
+              _expr_block("Blend", "0.42", f"{macro_name}.CreaseStrength"),
+              _link_block("Background", "PaperSheetWithGrain"),
+              _link_block("Foreground", "PaperCreaseNoise"),
+          ],
+          (990, 247.5),
+      ),
+  ]
+
+
+def _core_composite_nodes(macro_name: str) -> list[str]:
+  """Builds the cutout composite: paper shape, subject on top, paper overlay.
+
+  * `TransparentCanvas` (Background, alpha 0) is an empty frame-sized plate.
+  * `PaperCutoutShape` (Merge) cuts the textured sheet to the torn border
+    matte through `EffectMask`; `Blend` drops to 0 when `EnablePaperBorder`
+    is off, so no paper is drawn.
+  * `CompositeSubjectOnPaper` (Merge, Over) lays the placed subject on top.
+  * `MediaPaperOverlay` (Merge, Multiply + Atop) multiplies the crease noise
+    over the result by `MediaTextureOverlay`; Atop keeps it inside the
+    existing alpha, so the texture never spills outside the cutout.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+
+  Returns:
+    Rendered node definitions, in graph order.
+  """
+  return [
+      _node(
+          "TransparentCanvas",
+          "Background",
+          [
+              _value("UseFrameFormatSettings", "1"),
+              _value("TopLeftAlpha", "0"),
+          ],
+          (880, 16.5),
+      ),
+      _node(
+          "PaperCutoutShape",
+          "Merge",
+          [
+              _expr_block(
+                  "Blend",
+                  "1",
+                  _if_enabled(macro_name, "EnablePaperBorder", "1"),
+              ),
+              _link_block("Background", "TransparentCanvas"),
+              _link_block("Foreground", "PaperSheetTextured"),
+              _link_block("EffectMask", "BorderTearDisplace"),
+          ],
+          (990, 115.5),
+      ),
+      _node(
+          "CompositeSubjectOnPaper",
+          "Merge",
+          [
+              _link_block("Background", "PaperCutoutShape"),
+              _link_block("Foreground", "MediaClipTransform"),
+          ],
+          (1100, 82.5),
+      ),
+      _node(
+          "MediaPaperOverlay",
+          "Merge",
+          [
+              _value("ApplyMode", 'FuID { "Multiply" }'),
+              _value("Operator", 'FuID { "Atop" }'),
+              _expr_block("Blend", "0.24", f"{macro_name}.MediaTextureOverlay"),
+              _link_block("Background", "CompositeSubjectOnPaper"),
+              _link_block("Foreground", "PaperCreaseNoise"),
+          ],
+          (1210, 82.5),
+      ),
+  ]
+
+
+def _core_transition_nodes(macro_name: str) -> list[str]:
+  """Builds the intro/outro animation nodes.
+
+  * `CrumpleDisplace` (Displace driven by the crease noise) wrinkles the
+    cutout for Crumple Ball and, lightly, for Paper Unfold.
+  * `FoldDVE` (3D DVE) rotates around X/Y for Paper Unfold and Airplane
+    Glide and pushes back in Z for Crumple Ball.
+  * `GlideTransform` (Transform) slides, scales, and spins the cutout in.
+
+  All amounts fade to 0 as the eased progress reaches 1, so between the
+  intro and outro windows these nodes are identity operations.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+
+  Returns:
+    Rendered node definitions, in graph order.
   """
   p_expr = _anim_progress_expr(macro_name)
   style_expr = _active_trans_style_expr(macro_name)
-  step_t = _stepped_time_expr(macro_name)
 
   # Precomputed signed multipliers for horizontal/vertical transition mirror.
-  # mh/mv are -1 or 1 (multiply a direction); flip_h/flip_v are 0 or 1
-  # because Transform.FlipHoriz/FlipVert are checkbox inputs.
+  # mh/mv are -1 or 1 (multiply a direction).
   mh = f"iif({macro_name}.TransitionMirrorH > 0.5, -1, 1)"
   mv = f"iif({macro_name}.TransitionMirrorV > 0.5, -1, 1)"
-  flip_h = f"iif({macro_name}.MasterFlipH > 0.5, 1, 0)"
-  flip_v = f"iif({macro_name}.MasterFlipV > 0.5, 1, 0)"
 
   # Transition curve (smooth ease-out cubic: 1 - (1 - p)^3).
   # inv_p is the remaining "closedness" (1 at the hidden end, 0 when flat), so
@@ -978,491 +1375,216 @@ def _render_core_cutout_nodes(
       f"({mh}) * 35 * ({inv_p}), 0))"
   )
 
-  # Long SimpleExpression lines inside the template are emitted verbatim into
-  # the .setting file; wrapping them would change the generated bytes.
-  # pylint: disable=line-too-long
-  return f"""
-\t\t\t\tChromaKeyer = DeltaKeyer {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tBackgroundRed = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.KeyScreenRed",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBackgroundGreen = Input {{
-\t\t\t\t\t\t\tValue = 1.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.KeyScreenGreen",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBackgroundBlue = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.KeyScreenBlue",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tGain = Input {{
-\t\t\t\t\t\t\tValue = 1.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.KeyGain",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBalance = Input {{
-\t\t\t\t\t\t\tValue = 0.5,
-\t\t\t\t\t\t\tExpression = "{macro_name}.KeyBalance",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "{source_output_op}",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 220, 49.5 }} }},
-\t\t\t\t}},
-\t\t\t\tKeyBypassSwitch = Dissolve {{
-\t\t\t\t\tTransitions = {{ [0] = "DFTDissolve" }},
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tMix = Input {{
-\t\t\t\t\t\t\tValue = 0,
-\t\t\t\t\t\t\tExpression = "iif({macro_name}.EnableChromaKey > 0.5, 1, 0)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBackground = Input {{
-\t\t\t\t\t\t\tSourceOp = "{source_output_op}",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "ChromaKeyer",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 330, 49.5 }} }},
-\t\t\t\t}},
-\t\t\t\tSubjectEdgeChoke = ErodeDilate {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tFilter = Input {{ Value = 3, }},
-\t\t\t\t\t\tXAmount = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.SubjectEdgeErode",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "KeyBypassSwitch",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 440, 49.5 }} }},
-\t\t\t\t}},
-\t\t\t\tMediaClipTransform = Transform {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tCenter = Input {{
-\t\t\t\t\t\t\tValue = {{ 0.5, 0.5 }},
-\t\t\t\t\t\t\tExpression = "Point({macro_name}.ClipCenterX, {macro_name}.ClipCenterY)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tSize = Input {{
-\t\t\t\t\t\t\tValue = 0.88,
-\t\t\t\t\t\t\tExpression = "{macro_name}.ClipScale",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tAngle = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.ClipAngle",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "SubjectEdgeChoke",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 550, 49.5 }} }},
-\t\t\t\t}},
-\t\t\t\tBorderExpand = ErodeDilate {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tFilter = Input {{ Value = 3, }},
-\t\t\t\t\t\tXAmount = Input {{
-\t\t\t\t\t\t\tValue = 0.016,
-\t\t\t\t\t\t\tExpression = "iif({macro_name}.EnablePaperBorder > 0.5, {macro_name}.BorderSize, 0)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "MediaClipTransform",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 550, 115.5 }} }},
-\t\t\t\t}},
-\t\t\t\tBorderCornerSmooth = Blur {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tFilter = Input {{ Value = FuID {{ "Fast Gaussian" }}, }},
-\t\t\t\t\t\tXBlurSize = Input {{
-\t\t\t\t\t\t\tValue = 3.5,
-\t\t\t\t\t\t\tExpression = "iif({macro_name}.EnablePaperBorder > 0.5, {macro_name}.BorderRoundness, 0)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "BorderExpand",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 660, 115.5 }} }},
-\t\t\t\t}},
-\t\t\t\tBorderAlphaCrunch = BrightnessContrast {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tAlpha = Input {{ Value = 1, }},
-\t\t\t\t\t\tLow = Input {{ Value = 0.15, }},
-\t\t\t\t\t\tHigh = Input {{ Value = 0.25, }},
-\t\t\t\t\t\tClipBlack = Input {{ Value = 1, }},
-\t\t\t\t\t\tClipWhite = Input {{ Value = 1, }},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "BorderCornerSmooth",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 770, 115.5 }} }},
-\t\t\t\t}},
-\t\t\t\tTearEdgeNoise = FastNoise {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tUseFrameFormatSettings = Input {{ Value = 1, }},
-\t\t\t\t\t\tDetail = Input {{
-\t\t\t\t\t\t\tValue = 6.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.TearDetail",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tContrast = Input {{ Value = 2.4, }},
-\t\t\t\t\t\tXScale = Input {{
-\t\t\t\t\t\t\tValue = 22.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.TearScale",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tSeethe = Input {{
-\t\t\t\t\t\t\tValue = 7.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.RandomSeed + ({step_t}) * {macro_name}.EdgeBoilAmount * 0.15",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tColor1Alpha = Input {{ Value = 1, }},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 770, 181.5 }} }},
-\t\t\t\t}},
-\t\t\t\tBorderTearDisplace = Displace {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tType = Input {{ Value = 1, }},
-\t\t\t\t\t\tXOffset = Input {{ Value = -0.5, }},
-\t\t\t\t\t\tYOffset = Input {{ Value = -0.5, }},
-\t\t\t\t\t\tXRefraction = Input {{
-\t\t\t\t\t\t\tValue = 0.016,
-\t\t\t\t\t\t\tExpression = "iif({macro_name}.EnablePaperBorder > 0.5, {macro_name}.TearRoughness, 0)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tYRefraction = Input {{
-\t\t\t\t\t\t\tValue = 0.016,
-\t\t\t\t\t\t\tExpression = "iif({macro_name}.EnablePaperBorder > 0.5, {macro_name}.TearRoughness, 0)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "BorderAlphaCrunch",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "TearEdgeNoise",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 880, 115.5 }} }},
-\t\t\t\t}},
-\t\t\t\tPaperBaseColor = Background {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tUseFrameFormatSettings = Input {{ Value = 1, }},
-\t\t\t\t\t\tTopLeftRed = Input {{
-\t\t\t\t\t\t\tValue = 0.965,
-\t\t\t\t\t\t\tExpression = "{macro_name}.PaperRed",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tTopLeftGreen = Input {{
-\t\t\t\t\t\t\tValue = 0.945,
-\t\t\t\t\t\t\tExpression = "{macro_name}.PaperGreen",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tTopLeftBlue = Input {{
-\t\t\t\t\t\t\tValue = 0.895,
-\t\t\t\t\t\t\tExpression = "{macro_name}.PaperBlue",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tTopLeftAlpha = Input {{ Value = 1, }},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 660, 247.5 }} }},
-\t\t\t\t}},
-\t\t\t\tPaperFiberNoise = FastNoise {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tUseFrameFormatSettings = Input {{ Value = 1, }},
-\t\t\t\t\t\tDetail = Input {{ Value = 8.0, }},
-\t\t\t\t\t\tContrast = Input {{ Value = 1.6, }},
-\t\t\t\t\t\tXScale = Input {{
-\t\t\t\t\t\t\tValue = 45.0,
-\t\t\t\t\t\t\tExpression = "45.0 / max(0.1, {macro_name}.TextureScale)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tSeethe = Input {{
-\t\t\t\t\t\t\tValue = 7.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.RandomSeed * 1.3 + ({step_t}) * {macro_name}.TextureBoil * 0.12",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tColor1Red = Input {{ Value = 0.80, }},
-\t\t\t\t\t\tColor1Green = Input {{ Value = 0.77, }},
-\t\t\t\t\t\tColor1Blue = Input {{ Value = 0.72, }},
-\t\t\t\t\t\tColor1Alpha = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Red = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Green = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Blue = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Alpha = Input {{ Value = 1.0, }},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 770, 247.5 }} }},
-\t\t\t\t}},
-\t\t\t\tPaperCreaseNoise = FastNoise {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tUseFrameFormatSettings = Input {{ Value = 1, }},
-\t\t\t\t\t\tDetail = Input {{ Value = 3.0, }},
-\t\t\t\t\t\tContrast = Input {{ Value = 2.8, }},
-\t\t\t\t\t\tDiscontinuous = Input {{ Value = 1, }},
-\t\t\t\t\t\tInverted = Input {{ Value = 1, }},
-\t\t\t\t\t\tXScale = Input {{
-\t\t\t\t\t\t\tValue = 3.2,
-\t\t\t\t\t\t\tExpression = "{macro_name}.CreaseScale",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tSeethe = Input {{
-\t\t\t\t\t\t\tValue = 7.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.RandomSeed * 2.1 + ({step_t}) * {macro_name}.TextureBoil * 0.08",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tColor1Red = Input {{ Value = 0.76, }},
-\t\t\t\t\t\tColor1Green = Input {{ Value = 0.74, }},
-\t\t\t\t\t\tColor1Blue = Input {{ Value = 0.70, }},
-\t\t\t\t\t\tColor1Alpha = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Red = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Green = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Blue = Input {{ Value = 1.0, }},
-\t\t\t\t\t\tColor2Alpha = Input {{ Value = 1.0, }},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 770, 313.5 }} }},
-\t\t\t\t}},
-\t\t\t\tPaperSheetWithGrain = Merge {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tApplyMode = Input {{ Value = FuID {{ "Multiply" }}, }},
-\t\t\t\t\t\tBlend = Input {{
-\t\t\t\t\t\t\tValue = 0.35,
-\t\t\t\t\t\t\tExpression = "{macro_name}.FiberStrength",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBackground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperBaseColor",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperFiberNoise",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 880, 247.5 }} }},
-\t\t\t\t}},
-\t\t\t\tPaperSheetTextured = Merge {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tApplyMode = Input {{ Value = FuID {{ "Multiply" }}, }},
-\t\t\t\t\t\tBlend = Input {{
-\t\t\t\t\t\t\tValue = 0.42,
-\t\t\t\t\t\t\tExpression = "{macro_name}.CreaseStrength",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBackground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperSheetWithGrain",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperCreaseNoise",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 990, 247.5 }} }},
-\t\t\t\t}},
-\t\t\t\tTransparentCanvas = Background {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tUseFrameFormatSettings = Input {{ Value = 1, }},
-\t\t\t\t\t\tTopLeftAlpha = Input {{ Value = 0, }},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 880, 16.5 }} }},
-\t\t\t\t}},
-\t\t\t\tPaperCutoutShape = Merge {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tBlend = Input {{
-\t\t\t\t\t\t\tValue = 1,
-\t\t\t\t\t\t\tExpression = "iif({macro_name}.EnablePaperBorder > 0.5, 1, 0)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBackground = Input {{
-\t\t\t\t\t\t\tSourceOp = "TransparentCanvas",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperSheetTextured",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tEffectMask = Input {{
-\t\t\t\t\t\t\tSourceOp = "BorderTearDisplace",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 990, 115.5 }} }},
-\t\t\t\t}},
-\t\t\t\tCompositeSubjectOnPaper = Merge {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tBackground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperCutoutShape",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "MediaClipTransform",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1100, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tMediaPaperOverlay = Merge {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tApplyMode = Input {{ Value = FuID {{ "Multiply" }}, }},
-\t\t\t\t\t\tOperator = Input {{ Value = FuID {{ "Atop" }}, }},
-\t\t\t\t\t\tBlend = Input {{
-\t\t\t\t\t\t\tValue = 0.24,
-\t\t\t\t\t\t\tExpression = "{macro_name}.MediaTextureOverlay",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tBackground = Input {{
-\t\t\t\t\t\t\tSourceOp = "CompositeSubjectOnPaper",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperCreaseNoise",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1210, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tCrumpleDisplace = Displace {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tType = Input {{ Value = 1, }},
-\t\t\t\t\t\tXOffset = Input {{ Value = -0.5, }},
-\t\t\t\t\t\tYOffset = Input {{ Value = -0.5, }},
-\t\t\t\t\t\tXRefraction = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{crumple_str_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tYRefraction = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{crumple_str_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "MediaPaperOverlay",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tForeground = Input {{
-\t\t\t\t\t\t\tSourceOp = "PaperCreaseNoise",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1320, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tFoldDVE = DVE {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tXRotation = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{dve_xrot_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tYRotation = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{dve_yrot_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tZMove = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{dve_zmove_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "CrumpleDisplace",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1430, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tGlideTransform = Transform {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tCenter = Input {{
-\t\t\t\t\t\t\tValue = {{ 0.5, 0.5 }},
-\t\t\t\t\t\t\tExpression = "{glide_center_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tSize = Input {{
-\t\t\t\t\t\t\tValue = 1.0,
-\t\t\t\t\t\t\tExpression = "{glide_size_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tAngle = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{glide_angle_expr}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "FoldDVE",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1540, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tCutoutShadow = Shadow {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tShadowOffset = Input {{
-\t\t\t\t\t\t\tValue = {{ 0.5, 0.5 }},
-\t\t\t\t\t\t\tExpression = "Point(0.5 + {macro_name}.ShadowDistance * cos({macro_name}.ShadowAngle * pi / 180), 0.5 + {macro_name}.ShadowDistance * sin({macro_name}.ShadowAngle * pi / 180))",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tSoftness = Input {{
-\t\t\t\t\t\t\tValue = 0.018,
-\t\t\t\t\t\t\tExpression = "{macro_name}.ShadowBlur",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tAlpha = Input {{
-\t\t\t\t\t\t\tValue = 0.65,
-\t\t\t\t\t\t\tExpression = "{macro_name}.ShadowStrength",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "GlideTransform",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1650, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tStopMotionJitter = Transform {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tCenter = Input {{
-\t\t\t\t\t\t\tValue = {{ 0.5, 0.5 }},
-\t\t\t\t\t\t\tExpression = "Point(0.5 + iif({macro_name}.EnableStopMotion > 0.5, {macro_name}.JitterPosition * sin(({step_t}) * 12.9898 + {macro_name}.RandomSeed), 0), 0.5 + iif({macro_name}.EnableStopMotion > 0.5, {macro_name}.JitterPosition * cos(({step_t}) * 78.233 + {macro_name}.RandomSeed), 0))",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tAngle = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "iif({macro_name}.EnableStopMotion > 0.5, {macro_name}.JitterRotation * sin(({step_t}) * 43.17 + {macro_name}.RandomSeed), 0)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "CutoutShadow",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1760, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tMasterTransform = Transform {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tCenter = Input {{
-\t\t\t\t\t\t\tValue = {{ 0.5, 0.5 }},
-\t\t\t\t\t\t\tExpression = "Point({macro_name}.MasterCenterX, {macro_name}.MasterCenterY)",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tSize = Input {{
-\t\t\t\t\t\t\tValue = 1.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.MasterScale",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tAngle = Input {{
-\t\t\t\t\t\t\tValue = 0.0,
-\t\t\t\t\t\t\tExpression = "{macro_name}.MasterAngle",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tFlipHoriz = Input {{
-\t\t\t\t\t\t\tValue = 0,
-\t\t\t\t\t\t\tExpression = "{flip_h}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tFlipVert = Input {{
-\t\t\t\t\t\t\tValue = 0,
-\t\t\t\t\t\t\tExpression = "{flip_v}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "StopMotionJitter",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1870, 82.5 }} }},
-\t\t\t\t}},
-\t\t\t\tPosterizeTime = TimeStretcher {{
-\t\t\t\t\tInputs = {{
-\t\t\t\t\t\tSourceTime = Input {{
-\t\t\t\t\t\t\tValue = 0,
-\t\t\t\t\t\t\tExpression = "{step_t}",
-\t\t\t\t\t\t}},
-\t\t\t\t\t\tInterpolateBetweenFrames = Input {{ Value = 0, }},
-\t\t\t\t\t\tInput = Input {{
-\t\t\t\t\t\t\tSourceOp = "MasterTransform",
-\t\t\t\t\t\t\tSource = "Output",
-\t\t\t\t\t\t}},
-\t\t\t\t\t}},
-\t\t\t\t\tViewInfo = OperatorInfo {{ Pos = {{ 1980, 82.5 }} }},
-\t\t\t\t}},"""
-  # pylint: enable=line-too-long
+  return [
+      _node(
+          "CrumpleDisplace",
+          "Displace",
+          [
+              _value("Type", "1"),
+              _value("XOffset", "-0.5"),
+              _value("YOffset", "-0.5"),
+              _expr_block("XRefraction", "0.0", crumple_str_expr),
+              _expr_block("YRefraction", "0.0", crumple_str_expr),
+              _link_block("Input", "MediaPaperOverlay"),
+              _link_block("Foreground", "PaperCreaseNoise"),
+          ],
+          (1320, 82.5),
+      ),
+      _node(
+          "FoldDVE",
+          "DVE",
+          [
+              _expr_block("XRotation", "0.0", dve_xrot_expr),
+              _expr_block("YRotation", "0.0", dve_yrot_expr),
+              _expr_block("ZMove", "0.0", dve_zmove_expr),
+              _link_block("Input", "CrumpleDisplace"),
+          ],
+          (1430, 82.5),
+      ),
+      _node(
+          "GlideTransform",
+          "Transform",
+          [
+              _expr_block("Center", "{ 0.5, 0.5 }", glide_center_expr),
+              _expr_block("Size", "1.0", glide_size_expr),
+              _expr_block("Angle", "0.0", glide_angle_expr),
+              _link_block("Input", "FoldDVE"),
+          ],
+          (1540, 82.5),
+      ),
+  ]
+
+
+def _core_shadow_nodes(macro_name: str) -> list[str]:
+  """Builds the drop shadow under the animated cutout.
+
+  `CutoutShadow` (Shadow) offsets a soft copy of the alpha by
+  `ShadowDistance` (normalized frame units) along `ShadowAngle` (degrees,
+  converted with `pi / 180`) around the 0.5, 0.5 rest point, softened by
+  `ShadowBlur` and faded by `ShadowStrength`. It sits after the transition
+  nodes so the shadow follows the folding/gliding cutout.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+
+  Returns:
+    Rendered node definitions, in graph order.
+  """
+  distance = f"{macro_name}.ShadowDistance"
+  radians = f"{macro_name}.ShadowAngle * pi / 180"
+  return [
+      _node(
+          "CutoutShadow",
+          "Shadow",
+          [
+              _expr_block(
+                  "ShadowOffset",
+                  "{ 0.5, 0.5 }",
+                  f"Point(0.5 + {distance} * cos({radians}), "
+                  f"0.5 + {distance} * sin({radians}))",
+              ),
+              _expr_block("Softness", "0.018", f"{macro_name}.ShadowBlur"),
+              _expr_block("Alpha", "0.65", f"{macro_name}.ShadowStrength"),
+              _link_block("Input", "GlideTransform"),
+          ],
+          (1650, 82.5),
+      ),
+  ]
+
+
+def _core_finishing_nodes(macro_name: str, step_t: str) -> list[str]:
+  """Builds the stop-motion jitter, master transform, and time posterize.
+
+  * `StopMotionJitter` (Transform) nudges position by `JitterPosition` and
+    rotation by `JitterRotation` with sines of stepped time. The constant
+    frequencies (12.9898, 78.233, 43.17) are arbitrary and decorrelate the
+    axes; `RandomSeed` shifts the phase. Identity while `EnableStopMotion`
+    is off.
+  * `MasterTransform` (Transform) is the user's final placement:
+    `MasterCenterX/Y`, `MasterScale`, `MasterAngle`, and flips.
+  * `PosterizeTime` (TimeStretcher, no frame blending) samples the whole
+    chain at stepped time; it is the macro's MainOutput1.
+
+  Args:
+    macro_name: Name of the enclosing Fusion MacroOperator.
+    step_t: Stepped-time expression from `_stepped_time_expr`.
+
+  Returns:
+    Rendered node definitions, in graph order.
+  """
+
+  def jitter(amount: str, wave: str, frequency: str) -> str:
+    """Returns `amount * wave(step_t * frequency + seed)` while enabled."""
+    return _if_enabled(
+        macro_name,
+        "EnableStopMotion",
+        f"{macro_name}.{amount} * {wave}(({step_t}) * {frequency} + "
+        f"{macro_name}.RandomSeed)",
+    )
+
+  # flip_h/flip_v are 0 or 1 because Transform.FlipHoriz/FlipVert are
+  # checkbox inputs.
+  flip_h = _if_enabled(macro_name, "MasterFlipH", "1")
+  flip_v = _if_enabled(macro_name, "MasterFlipV", "1")
+  jitter_x = jitter("JitterPosition", "sin", "12.9898")
+  jitter_y = jitter("JitterPosition", "cos", "78.233")
+  return [
+      _node(
+          "StopMotionJitter",
+          "Transform",
+          [
+              _expr_block(
+                  "Center",
+                  "{ 0.5, 0.5 }",
+                  f"Point(0.5 + {jitter_x}, 0.5 + {jitter_y})",
+              ),
+              _expr_block(
+                  "Angle", "0.0", jitter("JitterRotation", "sin", "43.17")
+              ),
+              _link_block("Input", "CutoutShadow"),
+          ],
+          (1760, 82.5),
+      ),
+      _node(
+          "MasterTransform",
+          "Transform",
+          [
+              _expr_block(
+                  "Center",
+                  "{ 0.5, 0.5 }",
+                  f"Point({macro_name}.MasterCenterX, "
+                  f"{macro_name}.MasterCenterY)",
+              ),
+              _expr_block("Size", "1.0", f"{macro_name}.MasterScale"),
+              _expr_block("Angle", "0.0", f"{macro_name}.MasterAngle"),
+              _expr_block("FlipHoriz", "0", flip_h),
+              _expr_block("FlipVert", "0", flip_v),
+              _link_block("Input", "StopMotionJitter"),
+          ],
+          (1870, 82.5),
+      ),
+      _node(
+          "PosterizeTime",
+          "TimeStretcher",
+          [
+              _expr_block("SourceTime", "0", step_t),
+              _value("InterpolateBetweenFrames", "0"),
+              _link_block("Input", "MasterTransform"),
+          ],
+          (1980, 82.5),
+      ),
+  ]
+
+
+def _render_core_cutout_nodes(
+    macro_name: str,
+    source_output_op: str,
+) -> str:
+  """Generates the shared Fusion node graph downstream of the media source.
+
+  Node chain (each arrow is a `SourceOp` link; `Pos` values only place nodes
+  in the Fusion flow view and do not affect rendering):
+
+    source -> ChromaKeyer (DeltaKeyer) -> KeyBypassSwitch (Dissolve picks
+      keyed or raw clip) -> SubjectEdgeChoke (ErodeDilate) ->
+      MediaClipTransform (Clip* placement)
+    MediaClipTransform -> BorderExpand -> BorderCornerSmooth (Blur) ->
+      BorderAlphaCrunch (alpha threshold) -> BorderTearDisplace (displaced by
+      TearEdgeNoise) = torn border matte
+    PaperBaseColor x PaperFiberNoise x PaperCreaseNoise (Multiply merges) ->
+      PaperSheetTextured, masked by the border matte -> PaperCutoutShape
+    PaperCutoutShape + MediaClipTransform -> CompositeSubjectOnPaper ->
+      MediaPaperOverlay (crease multiply) -> CrumpleDisplace -> FoldDVE ->
+      GlideTransform -> CutoutShadow -> StopMotionJitter -> MasterTransform
+      -> PosterizeTime (TimeStretcher; the macro's MainOutput1)
+
+  CrumpleDisplace, FoldDVE, and GlideTransform implement the intro/outro
+  styles; all other nodes are steady-state look controls. Each stage is
+  built by one `_core_*_nodes` helper; the emission order below is the
+  order the nodes appear in the `.setting` file and is pinned by
+  `test_generated_settings_sha256_pinned`.
+
+  Args:
+    macro_name: Name of the enclosing MacroOperator; expressions read
+      controls as `<macro_name>.<ControlId>`.
+    source_output_op: Name of the internal node that receives MainInput1.
+
+  Returns:
+    Node definitions (four tabs deep) to append inside the macro `Tools`
+    block, starting with a newline.
+  """
+  step_t = _stepped_time_expr(macro_name)
+  nodes = [
+      *_core_key_nodes(macro_name, source_output_op),
+      *_core_subject_nodes(macro_name),
+      *_core_border_nodes(macro_name, step_t),
+      *_core_paper_texture_nodes(macro_name, step_t),
+      *_core_composite_nodes(macro_name),
+      *_core_transition_nodes(macro_name),
+      *_core_shadow_nodes(macro_name),
+      *_core_finishing_nodes(macro_name, step_t),
+  ]
+  return "\n" + "\n".join(nodes)
 
 
 # --- Paper Cutout FX effect template ---
@@ -1521,7 +1643,7 @@ def build_effect_setting() -> str:
 """
 
 
-# --- Compact node-rendering helpers (used by the fold transition) ---
+# --- Node-rendering helpers (used by both templates) ---
 
 
 def _node(
@@ -1573,6 +1695,23 @@ def _expr(name: str, value: str, expression: str) -> str:
       which would end the unescaped Lua string early and corrupt the
       `.setting` file.
   """
+  _check_expression(name, expression)
+  return f'{name} = Input {{ Value = {value}, Expression = "{expression}", }},'
+
+
+def _check_expression(name: str, expression: str) -> None:
+  """Rejects SimpleExpressions that would corrupt the `.setting` file.
+
+  Shared by `_expr` and `_expr_block`.
+
+  Args:
+    name: Tool input name, used in the error message.
+    expression: SimpleExpression about to be embedded in a Lua string.
+
+  Raises:
+    ValueError: If `expression` is empty/blank or contains a double quote,
+      which would end the unescaped Lua string early.
+  """
   if not expression.strip():
     raise ValueError(f"Empty SimpleExpression for input {name!r}.")
   if '"' in expression:
@@ -1580,7 +1719,6 @@ def _expr(name: str, value: str, expression: str) -> str:
         f"SimpleExpression for input {name!r} must not contain '\"': "
         f"{expression}"
     )
-  return f'{name} = Input {{ Value = {value}, Expression = "{expression}", }},'
 
 
 def _link(name: str, source_op: str, source: str = "Output") -> str:
@@ -1608,6 +1746,69 @@ def _value(name: str, value: str) -> str:
     One `<name> = Input { Value = ..., },` row.
   """
   return f"{name} = Input {{ Value = {value}, }},"
+
+
+# Leading tabs `_node` puts before each input row. Block-form rows indent
+# their fields one tab deeper and close at this depth.
+_INPUT_ROW_INDENT = "\t" * 6
+
+
+def _input_block(name: str, fields: Sequence[str]) -> str:
+  """Renders a multi-line input row, one field per line.
+
+  The Paper Cutout FX graph was written in this expanded layout, while the
+  fold transition uses the one-line `_expr`/`_link` rows. Both are the same
+  Lua table to Fusion; the layouts are kept apart so the generated bytes
+  (pinned by `test_generated_settings_sha256_pinned`) stay unchanged.
+
+  Args:
+    name: Tool input name.
+    fields: Lua `key = value` pairs without the trailing comma, in order.
+
+  Returns:
+    A `<name> = Input {` row, one indented line per field, and a closing
+    `},`, ready to pass to `_node` as a single entry.
+  """
+  lines = [f"{name} = Input {{"]
+  lines.extend(f"{_INPUT_ROW_INDENT}\t{field}," for field in fields)
+  lines.append(f"{_INPUT_ROW_INDENT}}},")
+  return "\n".join(lines)
+
+
+def _expr_block(name: str, value: str, expression: str) -> str:
+  """Multi-line counterpart of `_expr` (see `_input_block`).
+
+  Args:
+    name: Tool input name.
+    value: Static fallback value in Lua syntax.
+    expression: SimpleExpression; must not contain double quotes.
+
+  Returns:
+    Expanded `Value`/`Expression` input row.
+
+  Raises:
+    ValueError: Same conditions as `_expr`.
+  """
+  _check_expression(name, expression)
+  return _input_block(
+      name, (f"Value = {value}", f'Expression = "{expression}"')
+  )
+
+
+def _link_block(name: str, source_op: str, source: str = "Output") -> str:
+  """Multi-line counterpart of `_link` (see `_input_block`).
+
+  Args:
+    name: Tool input name.
+    source_op: Name of the upstream node inside the same macro.
+    source: Upstream output name.
+
+  Returns:
+    Expanded `SourceOp`/`Source` input row.
+  """
+  return _input_block(
+      name, (f'SourceOp = "{source_op}"', f'Source = "{source}"')
+  )
 
 
 # Preamble that every Dissolve tool carries in saved comps; selects the plain
