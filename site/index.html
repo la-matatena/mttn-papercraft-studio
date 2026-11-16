@@ -37,7 +37,7 @@
         <div>
           <span class="eyebrow">v3.1 · OpenFX 1.4 · C++17 · MIT</span>
           <h1>Estética de papel hecho a mano, directo en la página Edit.</h1>
-          <p class="lead">Recortes stop-motion orgánicos, bordes de cartulina rasgada, animaciones de entrada y salida de papel, una transición de papel que se dobla y se desdobla, y sonidos Foley de papel para DaVinci Resolve 20 y 21, sin abrir Fusion y sin marcas de agua.</p>
+          <p class="lead">Recortes stop-motion orgánicos, bordes de cartulina rasgada, una transición de papel que se dobla y se desdobla, y sonidos Foley de papel para DaVinci Resolve 20 y 21, sin abrir Fusion y sin marcas de agua.</p>
           <div class="actions">
             <a class="btn primary" href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">Descargar la última versión</a>
             <a class="btn" href="https://github.com/la-matatena/mttn-papercraft-studio">Ver en GitHub</a>
@@ -96,7 +96,7 @@
         <div class="grid">
           <article class="card"><span class="icon" aria-hidden="true">✂️</span><h3>Paper Cutout FX</h3><p>Convierte cualquier clip, título, PNG transparente o toma con pantalla verde (con extracción integrada) en un recorte de papel animado con borde de cartulina rasgada.</p></article>
           <article class="card"><span class="icon" aria-hidden="true">🗞️</span><h3>Paper Fold &amp; Unfold</h3><p>Transición que desdobla un clip desde un paquete de papel doblado o lo dobla para que salga, con reverso de papel, pliegues por etapas y sombra.</p></article>
-          <article class="card"><span class="icon" aria-hidden="true">📄</span><h3>Entradas y salidas de papel</h3><p>Anima el inicio y el final del clip con estilos Paper Unfold (3D) con pliegues reales, Crumple Ball, Paper Airplane Glide o Flat Cutout Pop.</p></article>
+          <article class="card"><span class="icon" aria-hidden="true">📄</span><h3>Recortes que se doblan y se despliegan</h3><p>Para animar la entrada o la salida de un recorte, coloca Paper Fold &amp; Unfold al inicio o al final del clip: detecta el recorte y mantiene un único borde rasgado.</p></article>
           <article class="card"><span class="icon" aria-hidden="true">🎞️</span><h3>Stop-motion táctil</h3><p>Fotogramas sostenidos, vibración de posición y rotación, y sombra 3D para un acabado hecho a mano.</p></article>
         </div>
       </div>
@@ -113,13 +113,13 @@
           <table style="--label-1: 'Sección'; --label-2: 'Qué hace';">
             <thead><tr><th scope="col">Sección</th><th scope="col">Qué hace</th></tr></thead>
             <tbody>
-              <tr><th scope="row">1. Media Source and Placement</th><td>Alterna entre el clip de la línea de tiempo y la estampa integrada, y encuadra la imagen dentro del recorte.</td></tr>
-              <tr><th scope="row">2. Green Screen and Matte Cleanup</th><td>Extrae al sujeto de fondos verdes o azules con supresión de contaminación de color.</td></tr>
+              <tr><th scope="row">1. Media Source &amp; Placement</th><td>Encuadra la imagen del clip dentro del recorte con escala, posición y rotación.</td></tr>
+              <tr><th scope="row">2. Green Screen &amp; Matte Cleanup</th><td>Extrae al sujeto de fondos verdes o azules con supresión de contaminación de color.</td></tr>
               <tr><th scope="row">3. Torn Paper Cutout Border</th><td>Genera un borde procedural de cartulina rasgada alrededor de la silueta alfa.</td></tr>
-              <tr><th scope="row">4. Paper Grain and Fold Creases</th><td>Añade textura de fibra de papel multicapa y pliegues marcados.</td></tr>
-              <tr><th scope="row">5. Intro and Outro Paper Animations</th><td>Entradas y salidas Paper Unfold (3D) con pliegues reales, Crumple Ball, Paper Airplane Glide o Flat Cutout Pop.</td></tr>
-              <tr><th scope="row">6. 3D Drop Shadow</th><td>Sombra suave y direccional con profundidad detrás del recorte.</td></tr>
-              <tr><th scope="row">7. Stop-Motion and Master Transform</th><td>Cuantiza el movimiento en fotogramas sostenidos y añade una vibración táctil.</td></tr>
+              <tr><th scope="row">4. Paper Grain &amp; Fold Creases</th><td>Añade textura de fibra de papel multicapa y pliegues marcados.</td></tr>
+              <tr><th scope="row">5. 3D Drop Shadow</th><td>Sombra suave y direccional con profundidad detrás del recorte.</td></tr>
+              <tr><th scope="row">6. Stop-Motion &amp; Master Transform</th><td>Cuantiza el movimiento en fotogramas sostenidos (cada 6 fotogramas por defecto: aspecto de 4 fps a 24 fps) y añade una vibración táctil sutil.</td></tr>
+              <tr><th scope="row">7. Advanced</th><td>Cerrada por defecto: modo de origen (clip o estampa integrada), alfa premultiplicado, detalle de fibras, escala del grano y de los pliegues, y semilla de textura.</td></tr>
             </tbody>
           </table>
         </div>
@@ -144,10 +144,10 @@
           <p>Grabaciones reales en estéreo a 48 kHz y 24 bits bajo dominio público (<code>CC0</code> / <code>Public Domain</code>). Impórtalas en un Power Bin para usarlas en todos tus proyectos.</p>
         </div>
         <div class="sfx">
-          <article class="card"><h3>01_Paper_Unfold.wav</h3><p>Despliegue nítido de pliego doblado para la transición Paper Fold &amp; Unfold y las entradas y salidas Paper Unfold (3D).</p></article>
-          <article class="card"><h3>02_Paper_Crumple.wav</h3><p>Arrugado orgánico en bola estéreo para animaciones Crumple Ball.</p></article>
-          <article class="card"><h3>03_Paper_Glide_Flip.wav</h3><p>Barrido y giro rápido de hoja para Paper Airplane Glide y cambios de página.</p></article>
-          <article class="card"><h3>04_Paper_Rip_Tear.wav</h3><p>Rasgado seco de fibra para bordes de cartulina rasgada y Flat Cutout Pop.</p></article>
+          <article class="card"><h3>01_Paper_Unfold.wav</h3><p>Despliegue nítido de pliego doblado para la transición Paper Fold &amp; Unfold.</p></article>
+          <article class="card"><h3>02_Paper_Crumple.wav</h3><p>Arrugado orgánico en bola estéreo para gags y texturas de papel arrugado.</p></article>
+          <article class="card"><h3>03_Paper_Glide_Flip.wav</h3><p>Barrido y giro rápido de hoja para cortes rápidos y cambios de página.</p></article>
+          <article class="card"><h3>04_Paper_Rip_Tear.wav</h3><p>Rasgado seco de fibra para bordes de cartulina rasgada y recortes que aparecen de golpe.</p></article>
         </div>
       </div>
     </section>

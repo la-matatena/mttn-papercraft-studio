@@ -4,6 +4,8 @@ This guide helps video editors install MTTN PaperCraft Studio 3.1.0, apply the *
 
 > [!IMPORTANT]
 > Version 3.0 removed the **Paper Cutout FX** generator and the **Paper Unfold Transition**, **Paper Crumple Transition**, and **Paper Rip Wipe Transition** effects. DaVinci Resolve shows these items as unavailable in projects created with earlier versions, so remove them from your timelines. Version 3.1 adds a new transition, **Paper Fold & Unfold**, with its own identifier.
+>
+> **Paper Cutout FX** no longer has built-in intro and outro animations. Projects created with earlier versions open normally, but any **Paper Cutout FX** intro and outro settings (**Intro Style**, **Outro Style**, and their durations) saved in them no longer apply. To animate a cutout in or out, use the **Paper Fold & Unfold** transition instead.
 
 ## Before you begin
 
@@ -99,7 +101,7 @@ The OpenFX bundle registers a filter, **Paper Cutout FX**, which you apply to cl
 1. On the **Edit** page, select a video clip, transparent PNG graphic, or title on Video Track 1 or higher (`V2+`).
 2. Open **Effects** > **Open FX** > **MTTN PaperCraft Studio**.
 3. Drag **Paper Cutout FX** onto the clip.
-4. Open the **Inspector** panel and click the **Effects** tab to adjust cardstock width, tear frequency, entrance and exit styles, and stop-motion stepping.
+4. Open the **Inspector** panel and click the **Effects** tab to adjust cardstock width, tear frequency, shadow, and stop-motion stepping.
 
 > [!NOTE]
 > Upper-track clips (`V2+`) preserve transparent alpha channels around the torn cardstock collar and drop shadow so lower timeline tracks stay visible.
@@ -116,12 +118,12 @@ The OpenFX bundle registers a filter, **Paper Cutout FX**, which you apply to cl
 To preview the look without your own artwork, render the procedural La Matatena demo sticker inside the filter:
 
 1. Apply **Paper Cutout FX** to any clip on the timeline.
-2. In **Inspector** > **Effects** > **1. Media Source & Placement**, set **Source Mode** to `Built-in Paper Sticker`.
-3. Customize paper texture, animation style, and cutout position in the remaining groups.
+2. In **Inspector** > **Effects**, expand **7. Advanced** (closed by default) and set **Source Mode** to `Built-in Paper Sticker`.
+3. Customize paper texture, shadow, and cutout position in the remaining groups.
 
-### Fold the cutout with Paper Unfold (3D)
+### Animate a cutout in or out
 
-The **Paper Unfold (3D)** intro and outro style folds the finished cutout along real creases: the cutout arrives as a small folded packet, its halves and corners flip open with the paper back showing, and it settles flat. Round or irregular cutouts fold across their own outline, so corner flaps stay visible. **Glide Angle** also rotates the fold direction (its default, `-22°`, keeps the folds upright), and **Mirror Animation H** and **Mirror Animation V** mirror the fold layout.
+**Paper Cutout FX** has no built-in intro or outro animation. To bring a cutout in or take it out, drag the **Paper Fold & Unfold** transition onto the start or end of the clip. It detects the cutout automatically, keeps a single torn border while folding, and hands its shadow over to the cutout's resting shadow. See [Combine Paper Cutout FX and Paper Fold & Unfold on the same clip](#combine-paper-cutout-fx-and-paper-fold--unfold-on-the-same-clip).
 
 ## Fold and unfold clips with Paper Fold & Unfold
 
@@ -160,9 +162,9 @@ To force a behavior, set **Fold Action** to **Unfold Incoming Clip**, **Fold Out
 
 ### Combine Paper Cutout FX and Paper Fold & Unfold on the same clip
 
-You can apply **Paper Cutout FX** to a clip and drag **Paper Fold & Unfold** onto its start, end, or cut without duplicate borders or folded shadows:
+You can apply **Paper Cutout FX** to a clip and drag **Paper Fold & Unfold** onto its start, end, or cut without duplicate borders or folded shadows. This is how you animate a cutout in or out:
 
-- **Paper Cutout FX** defaults **Intro Style** and **Outro Style** to `None`, so its built-in entrance and exit animations stay off unless you choose one.
+- **Paper Cutout FX** has no entrance or exit animation of its own, so it never overlaps the transition.
 - **Paper Fold & Unfold** automatically detects clips that already carry a cutout and drop shadow: it folds the existing cutout silhouette (keeping one constant torn border and matching ragged paper backsides) and hands its 3D packet shadow directly into the cutout's resting shadow when the transition finishes.
 
 > [!TIP]
@@ -174,10 +176,10 @@ The tables that follow list all controls exposed in the DaVinci Resolve Inspecto
 
 ### Paper Cutout FX controls
 
+The **7. Advanced** group sits last in the Inspector and is closed by default; expand it to reach the technical controls.
+
 | Group | Control label | Type and range | Default | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| **1. Media Source & Placement** | **Source Mode** | Choice (`Timeline Clip`, `Built-in Paper Sticker`) | `Timeline Clip` | Switches between timeline clip media and procedural sticker |
-| **1. Media Source & Placement** | **Premultiplied Source Alpha** | Boolean | `True` | Disable if straight-alpha graphics show dark or bright edge fringes |
 | **1. Media Source & Placement** | **Media Scale** | Scale (`0.05` to `5.0`) | `0.90` | Scales artwork inside the paper frame |
 | **1. Media Source & Placement** | **Media Position** | XY Point (`0.0` to `1.0`) | `0.5, 0.5` | Repositions the source subject inside the frame |
 | **1. Media Source & Placement** | **Media Rotation** | Angle (`-3600°` to `3600°`) | `0.0°` | Rotates the subject prior to collar extraction |
@@ -190,36 +192,30 @@ The tables that follow list all controls exposed in the DaVinci Resolve Inspecto
 | **3. Torn Paper Cutout Border** | **Border Width** | Float (`0.0` to `0.15`) | `0.018` | Sets collar thickness relative to frame height |
 | **3. Torn Paper Cutout Border** | **Torn Edge Roughness** | Float (`0.0` to `0.20`) | `0.012` | Controls amplitude of torn edge teeth |
 | **3. Torn Paper Cutout Border** | **Tear Frequency** | Float (`1.0` to `120.0`) | `24.0` | Sets spatial density of paper teeth along the edge |
-| **3. Torn Paper Cutout Border** | **Tear Fiber Detail** | Integer (`1` to `8`) | `5` | Sets octave count for torn paper micro-fibers |
 | **3. Torn Paper Cutout Border** | **Edge Boil Speed** | Float (`0.0` to `5.0`) | `0.15` | Animates torn edge variation across stop-motion steps |
 | **3. Torn Paper Cutout Border** | **Paper Cardstock Color** | RGB color picker | `0.965, 0.945, 0.895` | Sets the warm paper border fill color |
 | **4. Paper Grain & Fold Creases** | **Paper Grain Strength** | Float (`0.0` to `1.0`) | `0.35` | Adjusts cardstock fiber grain depth |
-| **4. Paper Grain & Fold Creases** | **Grain Scale** | Scale (`0.1` to `10.0`) | `1.0` | Changes size of surface fiber grain |
 | **4. Paper Grain & Fold Creases** | **Fold Crease Strength** | Float (`0.0` to `1.0`) | `0.40` | Controls contrast of ridged fold creases |
-| **4. Paper Grain & Fold Creases** | **Crease Scale** | Float (`0.2` to `30.0`) | `3.2` | Controls spacing of folded paper creases |
 | **4. Paper Grain & Fold Creases** | **Media Texture Overlay** | Float (`0.0` to `1.0`) | `0.22` | Blends subtle crease shading over subject ink |
-| **4. Paper Grain & Fold Creases** | **Texture Seed** | Integer (`0` to `1000`) | `7` | Varies deterministic tear, crease, and jitter patterns |
-| **5. Intro & Outro Paper Animations** | **Intro Style** | Choice (`None`, `Paper Unfold (3D)`, `Crumple Ball`, `Paper Airplane Glide`, `Flat Cutout Pop`) | `None` | Selects opening clip entrance animation |
-| **5. Intro & Outro Paper Animations** | **Intro Duration (Frames)** | Integer (`0` to `240`) | `14` | Sets opening animation duration in frames |
-| **5. Intro & Outro Paper Animations** | **Outro Style** | Choice (same five styles as **Intro Style**) | `None` | Selects closing clip exit animation |
-| **5. Intro & Outro Paper Animations** | **Outro Duration (Frames)** | Integer (`0` to `240`) | `14` | Sets closing animation duration in frames |
-| **5. Intro & Outro Paper Animations** | **Glide Angle** | Angle (`-360°` to `360°`) | `-22.0°` | Sets directional trajectory for glide moves and fold direction |
-| **5. Intro & Outro Paper Animations** | **Glide Distance** | Float (`0.0` to `3.0`) | `0.65` | Sets travel distance in normalized frame units |
-| **5. Intro & Outro Paper Animations** | **Mirror Animation H** | Boolean | `False` | Flips intro and outro movement horizontally |
-| **5. Intro & Outro Paper Animations** | **Mirror Animation V** | Boolean | `False` | Flips intro and outro movement vertically |
-| **6. 3D Drop Shadow** | **Shadow Opacity** | Float (`0.0` to `1.0`) | `0.62` | Controls cast shadow intensity behind the sheet |
-| **6. 3D Drop Shadow** | **Shadow Angle** | Angle (`-360°` to `360°`) | `-45.0°` | Controls directional shadow throw angle |
-| **6. 3D Drop Shadow** | **Shadow Distance** | Float (`0.0` to `0.20`) | `0.016` | Sets shadow offset distance behind the paper layer |
-| **6. 3D Drop Shadow** | **Shadow Softness** | Float (`0.0` to `0.20`) | `0.018` | Controls shadow feather falloff width |
-| **7. Stop-Motion & Master Transform** | **Enable Stop-Motion** | Boolean | `True` | Steps animation timing on discrete hold intervals |
-| **7. Stop-Motion & Master Transform** | **Hold Frames (Step)** | Integer (`1` to `30`) | `3` | Sets frames per stop-motion step (for example, `3` for an 8 fps cadence on a 24 fps timeline) |
-| **7. Stop-Motion & Master Transform** | **Position Jitter** | Float (`0.0` to `0.1`) | `0.0025` | Adds hand-placed positional wobble per step |
-| **7. Stop-Motion & Master Transform** | **Rotation Jitter** | Angle (`0.0°` to `30.0°`) | `0.75°` | Adds hand-placed rotational wobble per step |
-| **7. Stop-Motion & Master Transform** | **Master Position** | XY Point (`0.0` to `1.0`) | `0.5, 0.5` | Repositions the finished paper cutout on screen |
-| **7. Stop-Motion & Master Transform** | **Master Scale** | Scale (`0.01` to `10.0`) | `1.0` | Scales the finished cutout uniformly |
-| **7. Stop-Motion & Master Transform** | **Master Rotation** | Angle (`-3600°` to `3600°`) | `0.0°` | Rotates the finished cutout cleanly |
-| **7. Stop-Motion & Master Transform** | **Flip Horizontal** | Boolean | `False` | Mirrors the finished cutout left to right |
-| **7. Stop-Motion & Master Transform** | **Flip Vertical** | Boolean | `False` | Mirrors the finished cutout top to bottom |
+| **5. 3D Drop Shadow** | **Shadow Opacity** | Float (`0.0` to `1.0`) | `0.62` | Controls cast shadow intensity behind the sheet |
+| **5. 3D Drop Shadow** | **Shadow Angle** | Angle (`-360°` to `360°`) | `-45.0°` | Controls directional shadow throw angle |
+| **5. 3D Drop Shadow** | **Shadow Distance** | Float (`0.0` to `0.20`) | `0.016` | Sets shadow offset distance behind the paper layer |
+| **5. 3D Drop Shadow** | **Shadow Softness** | Float (`0.0` to `0.20`) | `0.018` | Controls shadow feather falloff width |
+| **6. Stop-Motion & Master Transform** | **Enable Stop-Motion** | Boolean | `True` | Steps animation timing on discrete hold intervals |
+| **6. Stop-Motion & Master Transform** | **Hold Frames (Step)** | Integer (`1` to `30`) | `6` | Sets frames per stop-motion step (for example, `6` for a 4 fps look on a 24 fps timeline) |
+| **6. Stop-Motion & Master Transform** | **Position Jitter** | Float (`0.0` to `0.1`) | `0.001` | Adds hand-placed positional wobble per step |
+| **6. Stop-Motion & Master Transform** | **Rotation Jitter** | Angle (`0.0°` to `30.0°`) | `0.3°` | Adds hand-placed rotational wobble per step |
+| **6. Stop-Motion & Master Transform** | **Master Position** | XY Point (`0.0` to `1.0`) | `0.5, 0.5` | Repositions the finished paper cutout on screen |
+| **6. Stop-Motion & Master Transform** | **Master Scale** | Scale (`0.01` to `10.0`) | `1.0` | Scales the finished cutout uniformly |
+| **6. Stop-Motion & Master Transform** | **Master Rotation** | Angle (`-3600°` to `3600°`) | `0.0°` | Rotates the finished cutout cleanly |
+| **6. Stop-Motion & Master Transform** | **Flip Horizontal** | Boolean | `False` | Mirrors the finished cutout left to right |
+| **6. Stop-Motion & Master Transform** | **Flip Vertical** | Boolean | `False` | Mirrors the finished cutout top to bottom |
+| **7. Advanced** | **Source Mode** | Choice (`Timeline Clip`, `Built-in Paper Sticker`) | `Timeline Clip` | Switches between timeline clip media and procedural sticker |
+| **7. Advanced** | **Premultiplied Source Alpha** | Boolean | `True` | Disable if straight-alpha graphics show dark or bright edge fringes |
+| **7. Advanced** | **Tear Fiber Detail** | Integer (`1` to `8`) | `5` | Sets octave count for torn paper micro-fibers |
+| **7. Advanced** | **Grain Scale** | Scale (`0.1` to `10.0`) | `1.0` | Changes size of surface fiber grain |
+| **7. Advanced** | **Crease Scale** | Float (`0.2` to `30.0`) | `3.2` | Controls spacing of folded paper creases |
+| **7. Advanced** | **Texture Seed** | Integer (`0` to `1000`) | `7` | Varies deterministic tear, crease, and jitter patterns |
 
 ### Paper Fold & Unfold controls
 
@@ -259,10 +255,10 @@ All four WAV files in `Paper_SFX/` are real microphone recordings standardized t
 
 | WAV file in `Paper_SFX/` | Tactile paper gesture | Matching visual preset |
 | :--- | :--- | :--- |
-| `01_Paper_Unfold.wav` | Crisp folded sheet spread and settle | **Paper Fold & Unfold** and **Paper Unfold (3D)** |
-| `02_Paper_Crumple.wav` | Organic stereo paper-ball crumple | **Crumple Ball** intro and outro |
-| `03_Paper_Glide_Flip.wav` | Fast page flip and air swoosh | **Paper Airplane Glide** and quick cuts |
-| `04_Paper_Rip_Tear.wav` | Clean dry fiber tear | Torn cardstock border and **Flat Cutout Pop** |
+| `01_Paper_Unfold.wav` | Crisp folded sheet spread and settle | **Paper Fold & Unfold** |
+| `02_Paper_Crumple.wav` | Organic stereo paper-ball crumple | Crumpled-paper gags and textures |
+| `03_Paper_Glide_Flip.wav` | Fast page flip and air swoosh | Quick cuts and page turns |
+| `04_Paper_Rip_Tear.wav` | Clean dry fiber tear | Torn cardstock border and cutouts that pop into frame |
 
 ## Improve timeline playback performance
 
@@ -277,8 +273,9 @@ For smooth 4K timeline playback on CPU OpenFX tracks:
 | Symptom | Cause | Resolution |
 | :--- | :--- | :--- |
 | Plugin missing under **Effects** on macOS | Mac App Store Resolve edition blocks third-party bundles | Install DaVinci Resolve directly from the Blackmagic Design website and restart |
-| Dark or bright halo around straight-alpha PNG stickers | Straight RGB channels filtered before premultiplication | Clear **Premultiplied Source Alpha** in **1. Media Source & Placement** |
-| Effect shown as unavailable after upgrading to 3.0+ | Project uses the generator or a transition removed in 3.0 | Delete the unavailable generator or transition from the timeline, then use **Paper Cutout FX** intro and outro styles or the **Paper Fold & Unfold** transition instead |
+| Dark or bright halo around straight-alpha PNG stickers | Straight RGB channels filtered before premultiplication | Clear **Premultiplied Source Alpha** in **7. Advanced** |
+| Effect shown as unavailable after upgrading to 3.0+ | Project uses the generator or a transition removed in 3.0 | Delete the unavailable generator or transition from the timeline, then use **Paper Cutout FX** with the **Paper Fold & Unfold** transition instead |
+| Cutout intro or outro from an older project no longer plays | **Paper Cutout FX** no longer has intro and outro animations; saved **Intro Style** and **Outro Style** settings are ignored | Drag **Paper Fold & Unfold** onto the start or end of the clip |
 | Paper Fold & Unfold folds when you expected an unfold | Auto read the clips differently than expected | Set **Fold Action** to the behavior you want instead of **Auto** |
 | Paper Fold & Unfold missing from the transitions list | OpenFX transitions are listed apart from built-in ones | Look under **Effects** > **Open FX** > **Transitions** > **MTTN PaperCraft Studio**, not under **Video Transitions** |
 | Green spill or rough halo on keyed subjects | Unkeyed background pixels entering the signed distance field collar | Increase **Key Gain** and shift **Edge Choke (px)** slightly negative (`-1.5` to `-3.0`) |
