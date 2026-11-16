@@ -1184,20 +1184,12 @@ CutoutAnimState ComputeCutoutAnimState(const CutoutParams& params, float cw,
     const float mv = params.mirror_transition_v ? -1.0f : 1.0f;
 
     switch (state.style) {
-      // RenderCutoutFrame renders this style with the fold machinery and only
-      // reads raw_p, ease_p, jitter, and the master terms, so the tilt,
-      // perspective, and crumple values set here are currently unused.
-      case CutoutAnimStyle::kPaperUnfold: {
-        const float fold_rad = Clamp(inv * 1.48f, 0.0f, 1.54f);
-        state.tilt_y_cos = std::max(0.03f, std::cos(fold_rad));
-        state.perspective_k = mh * 0.42f * std::sin(fold_rad);
-        state.perspective_ky = mv * 0.18f * std::sin(fold_rad);
-        state.slide_y_px = mv * (-0.06f) * ch * inv;
-        state.pop_scale = 0.48f + 0.52f * state.ease_p;
-        state.crumple_warp_norm = 0.015f * inv;
-        state.extra_crease_shade = 0.45f * inv;
+      // RenderCutoutFrame renders this style with the fold machinery
+      // (RenderCutoutPaperUnfold), which reads only raw_p, ease_p,
+      // step_time, jitter, and the master terms; the slide, pop, tilt,
+      // perspective, and crumple fields stay at their resting values.
+      case CutoutAnimStyle::kPaperUnfold:
         break;
-      }
       // Shrinks into a spinning crumpled ball (scale down to 0.22).
       case CutoutAnimStyle::kCrumpleBall: {
         state.pop_scale = std::max(0.06f, 0.22f + 0.78f * state.ease_p);
@@ -1407,6 +1399,14 @@ RgbaColor ClipPixelAt(const ImageView& view, const PixelRect& canvas_bounds,
 // ClipContentSummary (what InspectClipContent learned about a clip) is
 // defined in papercraft_kernel_internal.h.
 
+// (dx, dy) pixel offsets of the 12 neighbors within 2 px (the 8-neighborhood
+// plus the four axis pixels 2 px away), in the order the clip scans visit
+// them. Shared by InspectClipContent (opaque black ink next to a shadow
+// sample) and BuildCleanCutoutAlpha (local paper color near a torn edge).
+constexpr int kNear[12][2] = {{-1, 0},  {1, 0},  {0, -1}, {0, 1},
+                              {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
+                              {-2, 0},  {2, 0},  {0, -2}, {0, 2}};
+
 }  // namespace
 
 namespace internal {
@@ -1454,9 +1454,6 @@ ClipContentSummary InspectClipContent(const ImageView& view) {
   }
   int shadow_samples = 0;
   auto touches_opaque_black = [&](int x, int y) {
-    constexpr int kNear[12][2] = {{-1, 0},  {1, 0},  {0, -1}, {0, 1},
-                                  {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
-                                  {-2, 0},  {2, 0},  {0, -2}, {0, 2}};
     for (const auto& off : kNear) {
       const int nx = x + off[0];
       const int ny = y + off[1];
@@ -1605,9 +1602,6 @@ std::vector<float> BuildCleanCutoutAlpha(const ImageView& view,
       }
       const float max_c = std::max({c.r, c.g, c.b});
       float local_max = -1.0f;
-      constexpr int kNear[12][2] = {{-1, 0},  {1, 0},  {0, -1}, {0, 1},
-                                    {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
-                                    {-2, 0},  {2, 0},  {0, -2}, {0, 2}};
       for (const auto& off : kNear) {
         const int nx = ix + off[0];
         const int ny = iy + off[1];
@@ -2612,6 +2606,50 @@ float HingeCreaseMarks(const FoldShadeContext& ctx, float x, float y,
   return mul;
 }
 
+// Fiber-grain brightness multiplier of the folded cardstock at normalized
+// (nu_x, nu_y): Lerp(1, PaperFiberGrain, Grain Strength), or exactly 1 when
+// the grain is off. Per pixel, from parallel_for workers.
+float FoldPaperGrain(const FoldShadeContext& ctx, float nu_x, float nu_y) {
+  return ctx.grain_strength > 1e-3f
+             ? Lerp(1.0f,
+                    PaperFiberGrain(nu_x, nu_y, ctx.grain_scale, ctx.seed),
+                    Clamp01(ctx.grain_strength))
+             : 1.0f;
+}
+
+// Procedural crease multiplier of the folded cardstock at normalized
+// (nu_x, nu_y): up to 34% darker at full Crease Strength, 1 with creases
+// off. Hinge crease marks are not included (see HingeCreaseMarks).
+float FoldPaperCreaseMul(const FoldShadeContext& ctx, float nu_x, float nu_y) {
+  const float crease_val =
+      ctx.crease_strength > 1e-3f
+          ? PaperCreaseField(nu_x, nu_y, ctx.crease_scale, ctx.seed + 89u)
+          : 0.0f;
+  return 1.0f - 0.34f * Clamp01(ctx.crease_strength) * crease_val;
+}
+
+// Luma bleed-through of premultiplied print `ink` (ink.a > 0) seen from the
+// paper back: the back darkens by up to 14% under black ink, weighted by
+// 0.3 x ink alpha, so the print shows faintly through the cardstock.
+float PrintBleedThrough(const RgbaColor& ink) {
+  const float luma = (0.299f * ink.r + 0.587f * ink.g + 0.114f * ink.b) / ink.a;
+  return Lerp(1.0f, 0.86f + 0.14f * Clamp01(luma), 0.3f * Clamp01(ink.a));
+}
+
+// Premultiplied color of the toned paper back: paper color x 0.93 x grain x
+// creases x rim x shade x bleed (clamped to [0.2, 1.12]), slightly cooler
+// (G x 0.985, B x 0.95), with coverage `sheet_alpha`. Cutout sheets pass
+// rim = 1 (x 1.0f is exact, so both EvalPaperLeaf modes share this).
+RgbaColor PaperBackColor(const FoldShadeContext& ctx, float grain,
+                         float crease_mul, float rim, float shade, float bleed,
+                         float sheet_alpha) {
+  const float s =
+      Clamp(0.93f * grain * crease_mul * rim * shade * bleed, 0.2f, 1.12f);
+  return {Clamp01(ctx.paper_r * s) * sheet_alpha,
+          Clamp01(ctx.paper_g * 0.985f * s) * sheet_alpha,
+          Clamp01(ctx.paper_b * 0.95f * s) * sheet_alpha, sheet_alpha};
+}
+
 // One flat leaf of paper: the print on its torn cardstock collar (front), or
 // the toned paper back with faint bleed-through of the print.
 //
@@ -2646,28 +2684,11 @@ RgbaColor EvalPaperLeaf(const FoldShadeContext& ctx, float x, float y,
     const float hinge_mul = HingeCreaseMarks(ctx, x, y, nu_x, nu_y);
     if (back_side) {
       const float sheet_alpha = Clamp01(ink.a);
-      const float grain =
-          ctx.grain_strength > 1e-3f
-              ? Lerp(1.0f,
-                     PaperFiberGrain(nu_x, nu_y, ctx.grain_scale, ctx.seed),
-                     Clamp01(ctx.grain_strength))
-              : 1.0f;
-      const float crease_val =
-          ctx.crease_strength > 1e-3f
-              ? PaperCreaseField(nu_x, nu_y, ctx.crease_scale, ctx.seed + 89u)
-              : 0.0f;
-      const float crease_mul =
-          (1.0f - 0.34f * Clamp01(ctx.crease_strength) * crease_val) *
-          hinge_mul;
-      const float luma =
-          (0.299f * ink.r + 0.587f * ink.g + 0.114f * ink.b) / ink.a;
-      const float bleed =
-          Lerp(1.0f, 0.86f + 0.14f * Clamp01(luma), 0.3f * Clamp01(ink.a));
-      const float s =
-          Clamp(0.93f * grain * crease_mul * shade * bleed, 0.2f, 1.12f);
-      return {Clamp01(ctx.paper_r * s) * sheet_alpha,
-              Clamp01(ctx.paper_g * 0.985f * s) * sheet_alpha,
-              Clamp01(ctx.paper_b * 0.95f * s) * sheet_alpha, sheet_alpha};
+      const float grain = FoldPaperGrain(ctx, nu_x, nu_y);
+      const float crease_mul = FoldPaperCreaseMul(ctx, nu_x, nu_y) * hinge_mul;
+      // No rim: the clip's own torn border is the sheet edge.
+      return PaperBackColor(ctx, grain, crease_mul, 1.0f, shade,
+                            PrintBleedThrough(ink), sheet_alpha);
     }
     const float mul = hinge_mul * shade;
     return {ink.r * mul, ink.g * mul, ink.b * mul, ink.a};
@@ -2689,33 +2710,16 @@ RgbaColor EvalPaperLeaf(const FoldShadeContext& ctx, float x, float y,
     return {};
   }
 
-  const float grain =
-      ctx.grain_strength > 1e-3f
-          ? Lerp(1.0f, PaperFiberGrain(nu_x, nu_y, ctx.grain_scale, ctx.seed),
-                 Clamp01(ctx.grain_strength))
-          : 1.0f;
-  const float crease_val =
-      ctx.crease_strength > 1e-3f
-          ? PaperCreaseField(nu_x, nu_y, ctx.crease_scale, ctx.seed + 89u)
-          : 0.0f;
-  const float crease_mul =
-      (1.0f - 0.34f * Clamp01(ctx.crease_strength) * crease_val) *
-      HingeCreaseMarks(ctx, x, y, nu_x, nu_y);
+  const float grain = FoldPaperGrain(ctx, nu_x, nu_y);
+  const float crease_mul = FoldPaperCreaseMul(ctx, nu_x, nu_y) *
+                           HingeCreaseMarks(ctx, x, y, nu_x, nu_y);
   const float rim = 1.0f + 0.08f * Smoothstep(3.0f, 0.0f, std::abs(edge_sdf));
 
   if (back_side) {
     const RgbaColor ink = subject(ux, uy, dist_px);
-    float bleed = 1.0f;
-    if (ink.a > 1e-3f) {
-      const float luma =
-          (0.299f * ink.r + 0.587f * ink.g + 0.114f * ink.b) / ink.a;
-      bleed = Lerp(1.0f, 0.86f + 0.14f * Clamp01(luma), 0.3f * Clamp01(ink.a));
-    }
-    const float s =
-        Clamp(0.93f * grain * crease_mul * rim * shade * bleed, 0.2f, 1.12f);
-    return {Clamp01(ctx.paper_r * s) * sheet_alpha,
-            Clamp01(ctx.paper_g * 0.985f * s) * sheet_alpha,
-            Clamp01(ctx.paper_b * 0.95f * s) * sheet_alpha, sheet_alpha};
+    const float bleed = ink.a > 1e-3f ? PrintBleedThrough(ink) : 1.0f;
+    return PaperBackColor(ctx, grain, crease_mul, rim, shade, bleed,
+                          sheet_alpha);
   }
 
   RgbaColor ink = subject(ux, uy, dist_px);
@@ -2938,277 +2942,227 @@ std::vector<float> BuildCleanCutoutAlphaForClip(
 
 }  // namespace internal
 
+namespace {
+
 // ---------------------------------------------------------------------------
-// Public renderers (declared in papercraft_kernel.h)
+// Renderer building blocks
 //
-// Called from the OpenFX render action (kOfxImageEffectActionRender) in
-// papercraft_ofx_plugin.cc, once per render-window request. canvas_bounds
-// is the output RoD (full frame at the current render scale). Setup runs on
-// the calling host thread; per-pixel work fans out through `parallel_for`.
+// Steps of RenderCutoutFrame and RenderPaperFoldTransition. Setup helpers run
+// once per frame on the calling host thread; row helpers run inside
+// RunScanlines lambdas on parallel_for workers. Per-pixel helpers are plain
+// functions, structs, and templates (no std::function) so they inline into
+// the row loops.
 // ---------------------------------------------------------------------------
 
-// See header. Only 4-component buffers are supported; negative row_bytes is
-// valid.
-bool IsValidRgbaView(const ImageView& view) {
-  return view.data != nullptr && view.components == 4 && view.row_bytes != 0 &&
-         view.bounds.x2 > view.bounds.x1 && view.bounds.y2 > view.bounds.y1;
+// Output pixels a renderer writes: `render_window` clipped to the output
+// buffer, in output px. x_end and y_end are exclusive.
+struct OutputSpan {
+  int x_begin = 0;
+  int x_end = 0;
+  int y_begin = 0;
+  int y_end = 0;
+};
+
+// Clips `render_window` to `output.bounds` into *span. Returns false when
+// `output` is not a valid RGBA view or the clipped span is empty, i.e. there
+// is nothing to write.
+bool ComputeOutputSpan(const ImageView& output, const PixelRect& render_window,
+                       OutputSpan* span) {
+  if (!IsValidRgbaView(output)) {
+    return false;
+  }
+  span->y_begin = std::max(render_window.y1, output.bounds.y1);
+  span->y_end = std::min(render_window.y2, output.bounds.y2);
+  span->x_begin = std::max(render_window.x1, output.bounds.x1);
+  span->x_end = std::min(render_window.x2, output.bounds.x2);
+  return span->x_begin < span->x_end && span->y_begin < span->y_end;
 }
 
-// See header. Flat path per output pixel: output px -> canonical px
-// (MapOutputToPaperCanonical) -> torn-edge alpha from the SDF plus tear
-// noise -> subject with Edge Choke -> grain and crease overlay -> paper
-// collar under the subject -> drop shadow under everything. The Paper
-// Unfold (3D) style takes the fold-machinery branch instead. Output is
-// premultiplied.
-void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
-                       const ImageView& output, const PixelRect& canvas_bounds,
-                       const PixelRect& render_window,
-                       const ParallelRowsFn& parallel_for) {
-  if (!IsValidRgbaView(output)) {
-    return;
+// Writes transparent black over the whole span (see ClearOutputRows).
+void ClearSpan(const ImageView& output, const OutputSpan& span,
+               const ParallelRowsFn& parallel_for) {
+  ClearOutputRows(output, span.x_begin, span.x_end, span.y_begin, span.y_end,
+                  parallel_for);
+}
+
+// Copy of `view` honoring "Source Is Premultiplied": when that is off, a
+// buffer the host labels premultiplied is read as straight alpha (for
+// straight-alpha media the host mislabels).
+ImageView WithSourceAlphaOverride(const ImageView& view,
+                                  bool source_is_premultiplied) {
+  ImageView out = view;
+  if (!source_is_premultiplied && out.alpha_mode == AlphaMode::kPremultiplied) {
+    out.alpha_mode = AlphaMode::kUnPremultiplied;
   }
-  const int y_begin = std::max(render_window.y1, output.bounds.y1);
-  const int y_end = std::min(render_window.y2, output.bounds.y2);
-  const int x_begin = std::max(render_window.x1, output.bounds.x1);
-  const int x_end = std::min(render_window.x2, output.bounds.x2);
-  if (x_begin >= x_end || y_begin >= y_end) {
-    return;
+  return out;
+}
+
+// Starts the FoldShadeContext shared by the cutout's Paper Unfold and the
+// transition: `sheet` and `layout` (not owned; both must outlive the
+// render), the texture frame (canvas origin and min_dim, canonical px),
+// crease-band and flap-shadow sizes that scale with min_dim, and the light
+// opposite the drop shadow. ConfigureFoldLight caches per-hinge lighting,
+// so the layout's hinges must be final (only the packet offset may still
+// change). Callers fill in the paper style fields (collar, tear, textures,
+// subject margin) afterwards.
+FoldShadeContext BuildFoldShadeContext(const SheetGeometry& sheet,
+                                       const FoldLayout& layout, float origin_x,
+                                       float origin_y, float min_dim,
+                                       float shadow_angle_deg,
+                                       float flap_shadow_opacity) {
+  FoldShadeContext ctx;
+  ctx.sheet = &sheet;
+  ctx.layout = &layout;
+  ctx.origin_x = origin_x;
+  ctx.origin_y = origin_y;
+  ctx.min_dim = min_dim;
+  ctx.crease_band_px = std::max(2.5f, 0.0055f * min_dim);
+  ConfigureFoldLight(shadow_angle_deg, &ctx);
+  ctx.flap_shadow_opacity = flap_shadow_opacity;
+  ctx.flap_shadow_px = std::max(3.0f, 0.011f * min_dim);
+  ctx.flap_shadow_soft_px = std::max(2.0f, 0.006f * min_dim);
+  return ctx;
+}
+
+// Packet-local covers of the folded sheet (FoldSheetBounds pieces). Mapped
+// to output px with BoundsOfPieces they bound the pixels that need the fold
+// stack (paper) or its soft coverage (drop shadow).
+struct FoldCovers {
+  std::vector<FoldPolygon> paper;     // Paper, torn edge included.
+  std::vector<FoldPolygon> coverage;  // Soft-edged coverage read by shadows.
+};
+
+// Fills ctx->stack_bounds and ctx->coverage_bounds (per fold level) from the
+// sheet grown by `paper_pad_px` and `coverage_pad_px`, then recenters the
+// small folded packet (CenterFoldedPacket, which reads those bounds and
+// moves layout->offset_*). `openness`: 1 = flat, 0 = folded away. Serial,
+// once per frame.
+FoldCovers BoundFoldedPacket(const SheetGeometry& sheet, float paper_pad_px,
+                             float coverage_pad_px, float openness,
+                             FoldShadeContext* ctx, FoldLayout* layout) {
+  FoldCovers covers;
+  covers.paper =
+      FoldSheetBounds(sheet, *layout, paper_pad_px, &ctx->stack_bounds);
+  covers.coverage =
+      FoldSheetBounds(sheet, *layout, coverage_pad_px, &ctx->coverage_bounds);
+  CenterFoldedPacket(*ctx, openness, layout);
+  return covers;
+}
+
+// ---------------------------------------------------------------------------
+// Paper Cutout FX steps
+// ---------------------------------------------------------------------------
+
+// Per-frame values shared by both RenderCutoutFrame paths, filled once on
+// the calling thread by BuildCutoutFrameSetup. Lengths are canonical px.
+// Not copyable: the Paper Unfold sheet keeps a pointer to `sdf`.
+struct CutoutFrameSetup {
+  CutoutFrameSetup() = default;
+  CutoutFrameSetup(const CutoutFrameSetup&) = delete;
+  CutoutFrameSetup& operator=(const CutoutFrameSetup&) = delete;
+
+  // Canvas size and origin; min_dim = min(cw, ch) is the unit of the
+  // *_norm parameters and of the normalized `nu` texture coordinates.
+  float cw = 1.0f;
+  float ch = 1.0f;
+  float min_dim = 1.0f;
+  float origin_x = 0.0f;
+  float origin_y = 0.0f;
+  // Something reads the matte distance (collar, shadow, choke, or Paper
+  // Unfold); otherwise `sdf` stays empty.
+  bool need_sdf = false;
+  CoarseSignedDistanceField sdf;
+  // Torn collar width and tear amplitude; both 0 without a border.
+  float border_px = 0.0f;
+  float tear_amp_px = 0.0f;
+  // Texture seed, and the tear seed advanced by Edge Boil.
+  std::uint32_t seed = 0u;
+  std::uint32_t boil_seed = 0u;
+  // Drop shadow offset and softness.
+  float sh_dx_px = 0.0f;
+  float sh_dy_px = 0.0f;
+  float sh_soft_px = 1.0f;
+};
+
+// Fills *setup for one cutout frame. The coarse SDF (the most expensive
+// setup step) is built, through parallel_for, only when something reads
+// the distance to the matte.
+void BuildCutoutFrameSetup(const CutoutParams& params,
+                           const SubjectTransform& subj_xf,
+                           const CutoutAnimState& anim,
+                           const ImageView& src_view,
+                           const PixelRect& canvas_bounds,
+                           const ParallelRowsFn& parallel_for,
+                           CutoutFrameSetup* setup) {
+  setup->cw = subj_xf.cw;
+  setup->ch = subj_xf.ch;
+  const float min_dim = std::min(setup->cw, setup->ch);
+  setup->min_dim = min_dim;
+  setup->origin_x = subj_xf.origin_x;
+  setup->origin_y = subj_xf.origin_y;
+
+  setup->need_sdf = params.enable_border || params.shadow_opacity > 1e-4f ||
+                    std::abs(params.edge_choke_px) > 0.01f ||
+                    anim.style == CutoutAnimStyle::kPaperUnfold;
+  if (setup->need_sdf) {
+    setup->sdf = BuildSubjectSignedDistanceField(params, subj_xf, src_view,
+                                                 canvas_bounds, parallel_for);
   }
 
-  // "Source Is Premultiplied" off overrides host metadata for straight-alpha
-  // media that the host labels as premultiplied.
-  ImageView src_view = source;
-  if (!params.source_is_premultiplied &&
-      src_view.alpha_mode == AlphaMode::kPremultiplied) {
-    src_view.alpha_mode = AlphaMode::kUnPremultiplied;
-  }
-
-  const SubjectTransform subj_xf =
-      BuildSubjectTransform(params, src_view, canvas_bounds);
-  const float cw = subj_xf.cw;
-  const float ch = subj_xf.ch;
-  const float min_dim = std::min(cw, ch);
-  const float origin_x = subj_xf.origin_x;
-  const float origin_y = subj_xf.origin_y;
-
-  const CutoutAnimState anim = ComputeCutoutAnimState(params, cw, ch);
-
-  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
-  const PixelDepth out_depth = output.depth;
-
-  // If collapsed below visibility threshold at transition endpoints, clear.
-  if (anim.ease_p <= 1e-4f && anim.style != CutoutAnimStyle::kNone) {
-    ClearOutputRows(output, x_begin, x_end, y_begin, y_end, parallel_for);
-    return;
-  }
-
-  // The coarse SDF (the most expensive setup step) is built only when
-  // something reads the distance to the matte.
-  const bool need_sdf = params.enable_border || params.shadow_opacity > 1e-4f ||
-                        std::abs(params.edge_choke_px) > 0.01f ||
-                        anim.style == CutoutAnimStyle::kPaperUnfold;
-  const CoarseSignedDistanceField sdf =
-      need_sdf ? BuildSubjectSignedDistanceField(params, subj_xf, src_view,
-                                                 canvas_bounds, parallel_for)
-               : CoarseSignedDistanceField{};
-
-  const float border_px =
-      params.enable_border ? std::max(0.0f, params.border_width_norm * min_dim)
-                           : 0.0f;
-  const float tear_amp_px =
+  setup->border_px = params.enable_border
+                         ? std::max(0.0f, params.border_width_norm * min_dim)
+                         : 0.0f;
+  setup->tear_amp_px =
       params.enable_border
           ? std::max(0.0f, params.tear_roughness_norm * min_dim)
           : 0.0f;
-  const std::uint32_t seed =
-      static_cast<std::uint32_t>(std::max(0, params.random_seed));
+  setup->seed = static_cast<std::uint32_t>(std::max(0, params.random_seed));
   // Edge Boil: the tear seed advances every 1 / edge_boil stepped frames,
   // re-cutting the torn edge like stop motion.
-  const std::uint32_t boil_seed =
-      seed + static_cast<std::uint32_t>(
-                 std::max(0.0f, std::floor(anim.step_time * params.edge_boil)));
+  setup->boil_seed =
+      setup->seed + static_cast<std::uint32_t>(std::max(
+                        0.0f, std::floor(anim.step_time * params.edge_boil)));
 
   // Drop shadow offset and softness, px (fractions of min_dim).
   const float sh_rad = params.shadow_angle_deg * kDegToRad;
-  const float sh_dx_px =
-      params.shadow_distance_norm * min_dim * std::cos(sh_rad);
-  const float sh_dy_px =
-      params.shadow_distance_norm * min_dim * std::sin(sh_rad);
-  const float sh_soft_px =
-      std::max(1.0f, params.shadow_softness_norm * min_dim);
+  setup->sh_dx_px = params.shadow_distance_norm * min_dim * std::cos(sh_rad);
+  setup->sh_dy_px = params.shadow_distance_norm * min_dim * std::sin(sh_rad);
+  setup->sh_soft_px = std::max(1.0f, params.shadow_softness_norm * min_dim);
+}
 
-  // Paper Unfold (3D): fold the finished cutout along real paper hinges.
-  if (anim.style == CutoutAnimStyle::kPaperUnfold) {
-    const SheetGeometry sheet = SheetFromSdf(sdf, border_px + tear_amp_px);
-    if (!sheet.valid) {
-      ClearOutputRows(output, x_begin, x_end, y_begin, y_end, parallel_for);
-      return;
-    }
-    const float q = anim.raw_p;
-    // Glide Angle (default -22) also turns the fold direction (default 0).
-    FoldLayout layout = BuildFoldLayout(
-        FoldPattern::kCraftFlaps, 4, q, sheet, std::hypot(cw, ch),
-        params.transition_angle_deg + 22.0f, 0.55f, 0.0f,
-        params.mirror_transition_h, params.mirror_transition_v, seed);
+// Flat path of RenderCutoutFrame (resting, Crumple Ball, Airplane Glide,
+// Flat Pop). Per output pixel: output px -> canonical px
+// (MapOutputToPaperCanonical) -> torn-edge alpha from the SDF plus tear
+// noise -> subject with Edge Choke -> grain and crease overlay -> paper
+// collar under the subject -> drop shadow under everything. Every pixel is
+// independent; rows run on parallel_for workers. Output is premultiplied.
+void RenderCutoutFlat(const CutoutParams& params, const ImageView& src_view,
+                      const SubjectTransform& subj_xf,
+                      const CutoutAnimState& anim,
+                      const CutoutFrameSetup& setup, const ImageView& output,
+                      const OutputSpan& span,
+                      const ParallelRowsFn& parallel_for) {
+  // Setup values under the names the per-pixel code reads.
+  const float cw = setup.cw;
+  const float ch = setup.ch;
+  const float origin_x = setup.origin_x;
+  const float origin_y = setup.origin_y;
+  const bool need_sdf = setup.need_sdf;
+  const CoarseSignedDistanceField& sdf = setup.sdf;
+  const float border_px = setup.border_px;
+  const float tear_amp_px = setup.tear_amp_px;
+  const std::uint32_t seed = setup.seed;
+  const std::uint32_t boil_seed = setup.boil_seed;
+  const float sh_dx_px = setup.sh_dx_px;
+  const float sh_dy_px = setup.sh_dy_px;
+  const float sh_soft_px = setup.sh_soft_px;
+  const int x_begin = span.x_begin;
+  const int x_end = span.x_end;
+  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+  const PixelDepth out_depth = output.depth;
+  const float inv_min_dim = 1.0f / setup.min_dim;
 
-    FoldShadeContext ctx;
-    ctx.sheet = &sheet;
-    ctx.layout = &layout;
-    ctx.origin_x = origin_x;
-    ctx.origin_y = origin_y;
-    ctx.min_dim = min_dim;
-    ctx.enable_border = params.enable_border;
-    ctx.border_px = border_px;
-    ctx.tear_amp_px = tear_amp_px;
-    ctx.tear_frequency = params.tear_frequency;
-    ctx.tear_detail = params.tear_detail;
-    ctx.seed = seed;
-    ctx.tear_seed = boil_seed;
-    ctx.paper_r = params.paper_r;
-    ctx.paper_g = params.paper_g;
-    ctx.paper_b = params.paper_b;
-    ctx.grain_strength = params.grain_strength;
-    ctx.grain_scale = params.grain_scale;
-    // Folds always show some creasing; grain shows more while folded, and the
-    // hinge creases fade as the sheet lands flat.
-    ctx.crease_strength = std::max(0.3f, params.crease_strength);
-    ctx.crease_scale = params.crease_scale;
-    ctx.media_overlay =
-        std::max(params.media_texture_overlay, 0.25f * (1.0f - q));
-    ctx.hinge_crease = 1.0f - q * q;
-    ctx.crease_band_px = std::max(2.5f, 0.0055f * min_dim);
-    // Like the resting cutout: the collar never clips the print, while
-    // borderless cutouts keep the matte edge.
-    ctx.subject_margin_px = params.enable_border ? 1e5f : 0.0f;
-    ConfigureFoldLight(params.shadow_angle_deg, &ctx);
-    ctx.flap_shadow_opacity = std::max(0.45f, params.shadow_opacity);
-    ctx.flap_shadow_px = std::max(3.0f, 0.011f * min_dim);
-    ctx.flap_shadow_soft_px = std::max(2.0f, 0.006f * min_dim);
-    // Bounds per fold level prune the layer recursion away from the paper.
-    // Coarse-SDF error margin: two cells plus 3 px.
-    const float sdf_slack = 2.0f * static_cast<float>(sdf.step) + 3.0f;
-    const std::vector<FoldPolygon> paper_cover = FoldSheetBounds(
-        sheet, layout, border_px + tear_amp_px + sdf_slack, &ctx.stack_bounds);
-    const std::vector<FoldPolygon> coverage_cover = FoldSheetBounds(
-        sheet, layout,
-        border_px + std::max({1.2f, sh_soft_px, ctx.flap_shadow_soft_px}) +
-            sdf_slack,
-        &ctx.coverage_bounds);
-    CenterFoldedPacket(ctx, q, &layout);
-
-    auto sample_subject = [&](float ux, float uy, float dist_px) {
-      const RgbaColor s =
-          EvaluateSubjectAtCanonicalPx(params, subj_xf, src_view, ux, uy);
-      if (std::abs(params.edge_choke_px) <= 0.01f || s.a <= 1e-4f) {
-        return s;
-      }
-      return ScalePremult(s, Smoothstep(params.edge_choke_px + 1.0f,
-                                        params.edge_choke_px - 1.0f, dist_px));
-    };
-
-    const float cx_out =
-        origin_x + params.master_pos_x * cw + anim.jitter_dx_px;
-    const float cy_out =
-        origin_y + params.master_pos_y * ch + anim.jitter_dy_px;
-    PacketMapper packet;  // Relative to the canvas center after the master.
-    packet.origin_x = sheet.cx - (origin_x + 0.5f * cw) + layout.offset_x;
-    packet.origin_y = sheet.cy - (origin_y + 0.5f * ch) + layout.offset_y;
-    packet.cos_r = layout.rot_cos;
-    packet.sin_r = layout.rot_sin;
-    packet.inv_scale = 1.0f / std::max(0.05f, layout.scale);
-    // Output px -> packet-local px: inverse master rotation/scale and flips,
-    // then the inverse packet motion (which replaces slide and pop here).
-    auto to_local = [&](float px, float py, float* lx, float* ly) {
-      const float dx = px - cx_out;
-      const float dy = py - cy_out;
-      float rx = (dx * anim.cos_m - dy * anim.sin_m) * anim.inv_m_scale;
-      float ry = (dx * anim.sin_m + dy * anim.cos_m) * anim.inv_m_scale;
-      if (params.flip_h) {
-        rx = -rx;
-      }
-      if (params.flip_v) {
-        ry = -ry;
-      }
-      packet.ToLocal(rx, ry, lx, ly);
-    };
-
-    // The drop shadow reaches up to 3.5x further while the packet is lifted.
-    const float lift_k = 1.0f + 2.5f * layout.lift;
-    const float m_scale = 1.0f / anim.inv_m_scale;
-    // Forward of to_local, used to map packet bounds into output px.
-    const auto to_canvas = [&](float lx, float ly, float* cx, float* cy) {
-      float rx = 0.0f;
-      float ry = 0.0f;
-      packet.ToCanvas(lx, ly, &rx, &ry);
-      if (params.flip_h) {
-        rx = -rx;
-      }
-      if (params.flip_v) {
-        ry = -ry;
-      }
-      *cx = cx_out + (rx * anim.cos_m + ry * anim.sin_m) * m_scale;
-      *cy = cy_out + (-rx * anim.sin_m + ry * anim.cos_m) * m_scale;
-    };
-    const auto to_shadow = [&](float lx, float ly, float* cx, float* cy) {
-      to_canvas(lx, ly, cx, cy);
-      *cx += sh_dx_px * lift_k;
-      *cy += sh_dy_px * lift_k;
-    };
-    // Output-space boxes of the paper and its shadow; pixels outside both stay
-    // transparent without evaluating the fold stack.
-    const BoundsBox paper_box = BoundsOfPieces(paper_cover, 3.0f, to_canvas);
-    const BoundsBox shadow_box =
-        BoundsOfPieces(coverage_cover, 3.0f, to_shadow);
-
-    RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
-      const float py_out = static_cast<float>(y) + 0.5f;
-      const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
-      const bool row_shadow = params.shadow_opacity > 1e-4f &&
-                              py_out >= shadow_box.y1 &&
-                              py_out <= shadow_box.y2;
-      std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
-      if (!row_paper && !row_shadow) {
-        for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-          WritePixelPtr(out_px, out_depth, {});
-        }
-        return;
-      }
-      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-        const float px_out = static_cast<float>(x) + 0.5f;
-        RgbaColor fg;
-        if (row_paper && px_out >= paper_box.x1 && px_out <= paper_box.x2) {
-          float lx = 0.0f;
-          float ly = 0.0f;
-          to_local(px_out, py_out, &lx, &ly);
-          fg = ScalePremult(EvalFoldStack(ctx, layout.count - 1, lx, ly, false,
-                                          1.0f, sample_subject),
-                            layout.alpha);
-          // The shadow underneath would add < 0.1% alpha; skip it.
-          if (fg.a >= 0.999f) {
-            WritePixelPtr(out_px, out_depth, fg);
-            continue;
-          }
-        }
-        float shadow_a = 0.0f;
-        if (row_shadow && px_out >= shadow_box.x1 && px_out <= shadow_box.x2) {
-          float slx = 0.0f;
-          float sly = 0.0f;
-          to_local(px_out - sh_dx_px * lift_k, py_out - sh_dy_px * lift_k, &slx,
-                   &sly);
-          shadow_a = params.shadow_opacity * layout.alpha *
-                     EvalFoldCoverage(ctx, layout.count - 1, slx, sly, false,
-                                      sh_soft_px);
-        }
-        WritePixelPtr(out_px, out_depth,
-                      CompositeOver(fg, {0.0f, 0.0f, 0.0f, shadow_a}));
-      }
-    });
-    return;
-  }
-
-  // Flat path (no fold): every output pixel is evaluated independently by the
-  // parallel_for workers below.
-  const float inv_min_dim = 1.0f / min_dim;
-  RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
+  RunScanlines(span.y_begin, span.y_end, parallel_for, [&](int y) {
     const float py_out = static_cast<float>(y) + 0.5f;
     std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
     for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
@@ -3336,6 +3290,780 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
   });
 }
 
+// FoldShadeContext of the cutout's Paper Unfold at openness q (raw_p): the
+// resting cutout's collar, Edge Boil tear, paper color, and textures.
+// Folds always show some creasing; the print overlay is stronger while
+// folded, and the hinge creases fade as the sheet lands flat.
+FoldShadeContext BuildCutoutFoldContext(const CutoutParams& params,
+                                        const CutoutFrameSetup& setup,
+                                        const SheetGeometry& sheet,
+                                        const FoldLayout& layout, float q) {
+  FoldShadeContext ctx = BuildFoldShadeContext(
+      sheet, layout, setup.origin_x, setup.origin_y, setup.min_dim,
+      params.shadow_angle_deg, std::max(0.45f, params.shadow_opacity));
+  ctx.enable_border = params.enable_border;
+  ctx.border_px = setup.border_px;
+  ctx.tear_amp_px = setup.tear_amp_px;
+  ctx.tear_frequency = params.tear_frequency;
+  ctx.tear_detail = params.tear_detail;
+  ctx.seed = setup.seed;
+  ctx.tear_seed = setup.boil_seed;
+  ctx.paper_r = params.paper_r;
+  ctx.paper_g = params.paper_g;
+  ctx.paper_b = params.paper_b;
+  ctx.grain_strength = params.grain_strength;
+  ctx.grain_scale = params.grain_scale;
+  ctx.crease_strength = std::max(0.3f, params.crease_strength);
+  ctx.crease_scale = params.crease_scale;
+  ctx.media_overlay =
+      std::max(params.media_texture_overlay, 0.25f * (1.0f - q));
+  ctx.hinge_crease = 1.0f - q * q;
+  // Like the resting cutout: the collar never clips the print, while
+  // borderless cutouts keep the matte edge.
+  ctx.subject_margin_px = params.enable_border ? 1e5f : 0.0f;
+  return ctx;
+}
+
+// Output px <-> packet-local px for the cutout's Paper Unfold: the master
+// transform (center plus hand jitter, rotation, scale, flips) wraps the
+// packet motion, which replaces the flat path's slide and pop.
+struct CutoutPacketMapper {
+  // Master center in output px, jitter included.
+  float cx_out = 0.0f;
+  float cy_out = 0.0f;
+  // Inverse master rotation and 1 / scale (CutoutAnimState), and the scale.
+  float cos_m = 1.0f;
+  float sin_m = 0.0f;
+  float inv_m_scale = 1.0f;
+  float m_scale = 1.0f;
+  bool flip_h = false;
+  bool flip_v = false;
+  // Packet motion relative to the canvas center after the master.
+  PacketMapper packet;
+
+  // Output px -> packet-local px: inverse master rotation/scale and flips,
+  // then the inverse packet motion.
+  void ToLocal(float px, float py, float* lx, float* ly) const {
+    const float dx = px - cx_out;
+    const float dy = py - cy_out;
+    float rx = (dx * cos_m - dy * sin_m) * inv_m_scale;
+    float ry = (dx * sin_m + dy * cos_m) * inv_m_scale;
+    if (flip_h) {
+      rx = -rx;
+    }
+    if (flip_v) {
+      ry = -ry;
+    }
+    packet.ToLocal(rx, ry, lx, ly);
+  }
+
+  // Packet-local px -> output px (forward of ToLocal), used to map packet
+  // bounds into output px.
+  void ToCanvas(float lx, float ly, float* cx, float* cy) const {
+    float rx = 0.0f;
+    float ry = 0.0f;
+    packet.ToCanvas(lx, ly, &rx, &ry);
+    if (flip_h) {
+      rx = -rx;
+    }
+    if (flip_v) {
+      ry = -ry;
+    }
+    *cx = cx_out + (rx * cos_m + ry * sin_m) * m_scale;
+    *cy = cy_out + (-rx * sin_m + ry * cos_m) * m_scale;
+  }
+};
+
+// Builds the Paper Unfold mapper from the frame's master terms and the
+// final layout (call after CenterFoldedPacket, which moves the packet).
+CutoutPacketMapper BuildCutoutPacketMapper(const CutoutParams& params,
+                                           const CutoutAnimState& anim,
+                                           const CutoutFrameSetup& setup,
+                                           const SheetGeometry& sheet,
+                                           const FoldLayout& layout) {
+  CutoutPacketMapper m;
+  m.cx_out =
+      setup.origin_x + params.master_pos_x * setup.cw + anim.jitter_dx_px;
+  m.cy_out =
+      setup.origin_y + params.master_pos_y * setup.ch + anim.jitter_dy_px;
+  m.cos_m = anim.cos_m;
+  m.sin_m = anim.sin_m;
+  m.inv_m_scale = anim.inv_m_scale;
+  m.m_scale = 1.0f / anim.inv_m_scale;
+  m.flip_h = params.flip_h;
+  m.flip_v = params.flip_v;
+  m.packet.origin_x =
+      sheet.cx - (setup.origin_x + 0.5f * setup.cw) + layout.offset_x;
+  m.packet.origin_y =
+      sheet.cy - (setup.origin_y + 0.5f * setup.ch) + layout.offset_y;
+  m.packet.cos_r = layout.rot_cos;
+  m.packet.sin_r = layout.rot_sin;
+  m.packet.inv_scale = 1.0f / std::max(0.05f, layout.scale);
+  return m;
+}
+
+// Paper Unfold (3D) path of RenderCutoutFrame: folds the finished cutout
+// along real paper hinges (Craft Flaps, 4 stages) at openness raw_p and
+// composites the fold stack over its lifted drop shadow. Pixels outside the
+// paper and shadow boxes are written transparent without touching the fold
+// stack. Rows run on parallel_for workers. Output is premultiplied.
+void RenderCutoutPaperUnfold(const CutoutParams& params,
+                             const ImageView& src_view,
+                             const SubjectTransform& subj_xf,
+                             const CutoutAnimState& anim,
+                             const CutoutFrameSetup& setup,
+                             const ImageView& output, const OutputSpan& span,
+                             const ParallelRowsFn& parallel_for) {
+  const SheetGeometry sheet =
+      SheetFromSdf(setup.sdf, setup.border_px + setup.tear_amp_px);
+  if (!sheet.valid) {
+    ClearSpan(output, span, parallel_for);
+    return;
+  }
+  const float q = anim.raw_p;
+  // Glide Angle (default -22) also turns the fold direction (default 0).
+  FoldLayout layout = BuildFoldLayout(
+      FoldPattern::kCraftFlaps, 4, q, sheet, std::hypot(setup.cw, setup.ch),
+      params.transition_angle_deg + 22.0f, 0.55f, 0.0f,
+      params.mirror_transition_h, params.mirror_transition_v, setup.seed);
+  FoldShadeContext ctx =
+      BuildCutoutFoldContext(params, setup, sheet, layout, q);
+  // Bounds per fold level prune the layer recursion away from the paper.
+  // Coarse-SDF error margin: two cells plus 3 px.
+  const float sdf_slack = 2.0f * static_cast<float>(setup.sdf.step) + 3.0f;
+  const FoldCovers covers = BoundFoldedPacket(
+      sheet, setup.border_px + setup.tear_amp_px + sdf_slack,
+      setup.border_px +
+          std::max({1.2f, setup.sh_soft_px, ctx.flap_shadow_soft_px}) +
+          sdf_slack,
+      q, &ctx, &layout);
+  const CutoutPacketMapper mapper =
+      BuildCutoutPacketMapper(params, anim, setup, sheet, layout);
+
+  auto sample_subject = [&](float ux, float uy, float dist_px) {
+    const RgbaColor s =
+        EvaluateSubjectAtCanonicalPx(params, subj_xf, src_view, ux, uy);
+    if (std::abs(params.edge_choke_px) <= 0.01f || s.a <= 1e-4f) {
+      return s;
+    }
+    return ScalePremult(s, Smoothstep(params.edge_choke_px + 1.0f,
+                                      params.edge_choke_px - 1.0f, dist_px));
+  };
+
+  // The drop shadow reaches up to 3.5x further while the packet is lifted.
+  const float lift_k = 1.0f + 2.5f * layout.lift;
+  const float sh_dx_px = setup.sh_dx_px;
+  const float sh_dy_px = setup.sh_dy_px;
+  const float sh_soft_px = setup.sh_soft_px;
+  const auto to_canvas = [&](float lx, float ly, float* cx, float* cy) {
+    mapper.ToCanvas(lx, ly, cx, cy);
+  };
+  const auto to_shadow = [&](float lx, float ly, float* cx, float* cy) {
+    mapper.ToCanvas(lx, ly, cx, cy);
+    *cx += sh_dx_px * lift_k;
+    *cy += sh_dy_px * lift_k;
+  };
+  // Output-space boxes of the paper and its shadow; pixels outside both stay
+  // transparent without evaluating the fold stack.
+  const BoundsBox paper_box = BoundsOfPieces(covers.paper, 3.0f, to_canvas);
+  const BoundsBox shadow_box = BoundsOfPieces(covers.coverage, 3.0f, to_shadow);
+  const int x_begin = span.x_begin;
+  const int x_end = span.x_end;
+  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+  const PixelDepth out_depth = output.depth;
+
+  RunScanlines(span.y_begin, span.y_end, parallel_for, [&](int y) {
+    const float py_out = static_cast<float>(y) + 0.5f;
+    const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
+    const bool row_shadow = params.shadow_opacity > 1e-4f &&
+                            py_out >= shadow_box.y1 && py_out <= shadow_box.y2;
+    std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+    if (!row_paper && !row_shadow) {
+      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+        WritePixelPtr(out_px, out_depth, {});
+      }
+      return;
+    }
+    for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+      const float px_out = static_cast<float>(x) + 0.5f;
+      RgbaColor fg;
+      if (row_paper && px_out >= paper_box.x1 && px_out <= paper_box.x2) {
+        float lx = 0.0f;
+        float ly = 0.0f;
+        mapper.ToLocal(px_out, py_out, &lx, &ly);
+        fg = ScalePremult(EvalFoldStack(ctx, layout.count - 1, lx, ly, false,
+                                        1.0f, sample_subject),
+                          layout.alpha);
+        // The shadow underneath would add < 0.1% alpha; skip it.
+        if (fg.a >= 0.999f) {
+          WritePixelPtr(out_px, out_depth, fg);
+          continue;
+        }
+      }
+      float shadow_a = 0.0f;
+      if (row_shadow && px_out >= shadow_box.x1 && px_out <= shadow_box.x2) {
+        float slx = 0.0f;
+        float sly = 0.0f;
+        mapper.ToLocal(px_out - sh_dx_px * lift_k, py_out - sh_dy_px * lift_k,
+                       &slx, &sly);
+        shadow_a = params.shadow_opacity * layout.alpha *
+                   EvalFoldCoverage(ctx, layout.count - 1, slx, sly, false,
+                                    sh_soft_px);
+      }
+      WritePixelPtr(out_px, out_depth,
+                    CompositeOver(fg, {0.0f, 0.0f, 0.0f, shadow_a}));
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Paper Fold & Unfold transition steps
+// ---------------------------------------------------------------------------
+
+// Writes `weight` x `clip` over the span, streaming each output row through
+// one pointer, or transparency when `clip` is null, invalid, or weighted
+// out. Used at the endpoints and whenever no folding sheet is visible.
+void FillWithClip(const ImageView* clip, float weight, const ImageView& output,
+                  const PixelRect& canvas_bounds, const OutputSpan& span,
+                  const ParallelRowsFn& parallel_for) {
+  const bool use_clip =
+      clip != nullptr && weight > 1e-4f && IsValidRgbaView(*clip);
+  if (!use_clip) {
+    ClearSpan(output, span, parallel_for);
+    return;
+  }
+  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+  const PixelDepth out_depth = output.depth;
+  RunScanlines(span.y_begin, span.y_end, parallel_for, [&](int y) {
+    std::uint8_t* out_px = PixelMutPtr(output, span.x_begin, y);
+    for (int x = span.x_begin; x < span.x_end; ++x, out_px += out_pixel_bytes) {
+      WritePixelPtr(
+          out_px, out_depth,
+          ScalePremult(ClipPixelAt(*clip, canvas_bounds, x, y), weight));
+    }
+  });
+}
+
+// Which clip folds and which shows underneath on one transition frame.
+struct FoldRoles {
+  // The paper sheet that folds or unfolds, and what InspectClipContent
+  // learned about it.
+  const ImageView* active = nullptr;
+  ClipContentSummary active_info;
+  // Shown behind the sheet, scaled by under_weight; null for Fold & Unfold.
+  const ImageView* under = nullptr;
+  float under_weight = 1.0f;
+  // Openness of the active sheet: 1 = flat, 0 = folded away.
+  float q = 0.0f;
+};
+
+// Resolves the Fold Action at stepped progress p (strictly inside (0, 1))
+// into FoldRoles. Only the clips the requested action can use are
+// inspected; each scan reads about 230k pixels. The result points at
+// `from_view` / `to_view`, which must outlive it.
+FoldRoles ResolveFoldRoles(const PaperFoldTransitionParams& params, float p,
+                           const ImageView& from_view,
+                           const ImageView& to_view) {
+  const auto requested = static_cast<FoldTransitionAction>(
+      std::min(3, std::max(0, params.fold_action)));
+  const bool need_from =
+      requested == FoldTransitionAction::kAuto ||
+      requested == FoldTransitionAction::kFoldOut ||
+      (requested == FoldTransitionAction::kFoldAndUnfold && p < 0.5f);
+  const bool need_to =
+      requested == FoldTransitionAction::kAuto ||
+      requested == FoldTransitionAction::kUnfoldIn ||
+      (requested == FoldTransitionAction::kFoldAndUnfold && p >= 0.5f);
+  const ClipContentSummary from_info =
+      need_from ? InspectClipContent(from_view) : ClipContentSummary{};
+  const ClipContentSummary to_info =
+      need_to ? InspectClipContent(to_view) : ClipContentSummary{};
+  const FoldTransitionAction action =
+      ResolveFoldAction(params.fold_action, from_info, to_info);
+
+  // Default (Auto, Unfold In): the incoming clip unfolds over the outgoing.
+  FoldRoles roles;
+  roles.active = &to_view;
+  roles.active_info = to_info;
+  roles.under = &from_view;
+  roles.under_weight = 1.0f;
+  roles.q = p;
+  switch (action) {
+    case FoldTransitionAction::kFoldOut:
+      roles.active = &from_view;
+      roles.active_info = from_info;
+      roles.under = &to_view;
+      roles.q = 1.0f - p;
+      // See-through outgoing clips let the incoming clip fade in early.
+      roles.under_weight =
+          from_info.is_full_frame_opaque ? 1.0f : Smoothstep(0.0f, 0.25f, p);
+      break;
+    case FoldTransitionAction::kFoldAndUnfold:
+      if (p < 0.5f) {
+        roles.active = &from_view;
+        roles.active_info = from_info;
+        roles.q = 1.0f - 2.0f * p;
+      } else {
+        roles.q = 2.0f * p - 1.0f;
+      }
+      roles.under = nullptr;
+      roles.under_weight = 0.0f;
+      break;
+    case FoldTransitionAction::kAuto:
+    case FoldTransitionAction::kUnfoldIn:
+      // A see-through incoming clip fades the outgoing one out at the end.
+      roles.under_weight =
+          to_info.is_full_frame_opaque ? 1.0f : Smoothstep(1.0f, 0.75f, p);
+      break;
+  }
+  return roles;
+}
+
+// The active clip as a paper sheet, filled by BuildActiveSheet. Not
+// copyable: `sheet` points at `matte_sdf` for non-box sheets.
+struct ActiveSheet {
+  ActiveSheet() = default;
+  ActiveSheet(const ActiveSheet&) = delete;
+  ActiveSheet& operator=(const ActiveSheet&) = delete;
+
+  // Matte SDF in canonical px (identity placement); empty for opaque
+  // full-frame clips, whose sheet is an analytic box.
+  CoarseSignedDistanceField matte_sdf;
+  SheetGeometry sheet;
+  // SDF cell size in px (0 for box sheets) and the coarse-SDF error margin:
+  // two cells plus 3 px.
+  float sdf_step = 0.0f;
+  float sdf_slack = 3.0f;
+  // Pre-cutout clips (Paper Cutout FX output): per-pixel alpha with the
+  // baked shadow removed (BuildCleanCutoutAlpha) and the buffer-px box of
+  // non-zero raw alpha. use_clean = clean alpha is available.
+  std::vector<float> clean_alpha;
+  PixelRect alpha_box;
+  bool use_clean = false;
+};
+
+// Fills *out with the active clip's sheet: an analytic box for opaque
+// full-frame clips, else the clip's matte SDF grown by the torn collar
+// (full_border + full_tear, px at rest). Pre-cutout clips reuse their own
+// border (no growth) and get clean alpha. Returns false, before building
+// clean alpha, when the matte is empty and there is no paper to fold.
+// The SDF and clean alpha fan out through parallel_for.
+bool BuildActiveSheet(const FoldRoles& roles, const PixelRect& canvas_bounds,
+                      float full_border, float full_tear,
+                      const ParallelRowsFn& parallel_for, ActiveSheet* out) {
+  const ClipContentSummary& info = roles.active_info;
+  const bool is_cutout = !info.is_full_frame_opaque && info.has_cutout_shadow;
+  if (info.is_full_frame_opaque) {
+    out->sheet = FullFrameSheet(canvas_bounds);
+  } else {
+    // Identity placement: the matte is the clip alpha in canonical px.
+    out->matte_sdf = BuildClipMatteSdf(*roles.active, canvas_bounds,
+                                       parallel_for, is_cutout);
+    out->sheet = SheetFromSdf(out->matte_sdf,
+                              is_cutout ? 0.0f : (full_border + full_tear));
+    out->sdf_step = static_cast<float>(out->matte_sdf.step);
+  }
+  if (!out->sheet.valid) {
+    return false;
+  }
+  if (is_cutout) {
+    out->clean_alpha =
+        BuildCleanCutoutAlpha(*roles.active, canvas_bounds, out->matte_sdf,
+                              parallel_for, &out->alpha_box);
+  }
+  out->use_clean = !out->clean_alpha.empty();
+  out->sdf_slack = 2.0f * out->sdf_step + 3.0f;
+  return true;
+}
+
+// FoldShadeContext of the transition sheet. The collar, tear, and print
+// overlay settle away as the sheet lands flat (`settle`); pre-cutout sheets
+// (use_clean) keep their own border, so neither collar nor overlay is
+// added. The tear uses 5 octaves and the seed offset by 17.
+FoldShadeContext BuildTransitionFoldContext(
+    const PaperFoldTransitionParams& params, const ActiveSheet& active_sheet,
+    const FoldLayout& layout, const PixelRect& canvas_bounds, float min_dim,
+    float full_border, float full_tear, float settle, std::uint32_t seed) {
+  const bool use_clean = active_sheet.use_clean;
+  FoldShadeContext ctx = BuildFoldShadeContext(
+      active_sheet.sheet, layout, static_cast<float>(canvas_bounds.x1),
+      static_cast<float>(canvas_bounds.y1), min_dim, params.shadow_angle_deg,
+      params.shadow_opacity);
+  ctx.cutout_sheet = use_clean;
+  ctx.cutout_sdf_slack_px = active_sheet.sdf_slack;
+  ctx.enable_border = params.enable_border && !use_clean;
+  ctx.border_px = use_clean ? 0.0f : full_border * settle;
+  ctx.tear_amp_px = use_clean ? 0.0f : full_tear * settle;
+  ctx.tear_frequency = params.tear_frequency;
+  ctx.tear_detail = 5;
+  ctx.seed = seed;
+  ctx.tear_seed = seed + 17u;
+  ctx.paper_r = params.paper_r;
+  ctx.paper_g = params.paper_g;
+  ctx.paper_b = params.paper_b;
+  ctx.grain_strength = params.grain_strength;
+  ctx.grain_scale = 1.0f;
+  ctx.crease_strength = params.crease_strength;
+  ctx.crease_scale = 3.4f;
+  ctx.media_overlay =
+      use_clean ? 0.0f : 0.30f * Clamp01(params.crease_strength) * settle;
+  ctx.hinge_crease = settle;
+  // Keep soft matte edges (and the coarse matte's slack) while the collar is
+  // narrower than that margin.
+  ctx.subject_margin_px =
+      std::max(0.0f, 2.0f + active_sheet.sdf_step - ctx.border_px);
+  return ctx;
+}
+
+// Drop shadow of the transition packet and its hand-off into a pre-cutout
+// clip's baked resting shadow. Lengths are canvas px.
+struct TransitionShadow {
+  // Offset (grows with the packet lift), softness, and opacity.
+  float dx = 0.0f;
+  float dy = 0.0f;
+  float soft = 1.2f;
+  float opacity = 0.0f;
+  // Weight of the clip's own baked shadow near rest (pre-cutout clips);
+  // rest_blend_on = the blend is active this frame.
+  float rest_blend = 0.0f;
+  bool rest_blend_on = false;
+  // Canonical-px box outside which the baked shadow is exactly 0; empty
+  // unless rest_blend_on.
+  PixelRect rest_box;
+};
+
+// Drop shadow grows and softens while the packet is lifted. For pre-cutout
+// clips, the 3D shadow stays alive and hands off into the cutout's resting
+// shadow (max_shadow_alpha) instead of fading out with `settle`. Reads
+// ctx.shadow_dir_* (ConfigureFoldLight) and the layout lift.
+//
+// The resting-shadow blend reads the active clip at every pixel, but
+// outside the clip's non-zero alpha its raw and clean alpha are both 0, so
+// the blend reduces to sh_a = Lerp(sh_a, 0, blend). Pixels outside rest_box
+// (output px == canonical px) skip the two clip reads, and rows outside it
+// that miss the paper and shadow boxes take the underlay fast path.
+TransitionShadow ComputeTransitionShadow(
+    const PaperFoldTransitionParams& params, const FoldShadeContext& ctx,
+    const FoldLayout& layout, const FoldRoles& roles,
+    const ActiveSheet& active_sheet, const PixelRect& canvas_bounds,
+    float min_dim, float settle) {
+  const bool use_clean = active_sheet.use_clean;
+  const float q = roles.q;
+  TransitionShadow sh;
+  const float lift_k = 1.0f + 2.5f * layout.lift;
+  const float sh_dist = params.shadow_distance_norm * min_dim * lift_k;
+  sh.dx = ctx.shadow_dir_x * sh_dist;
+  sh.dy = ctx.shadow_dir_y * sh_dist;
+  sh.soft = std::max(1.2f, params.shadow_softness_norm * min_dim *
+                               (1.0f + 1.5f * layout.lift));
+  const float rest_sh_target = roles.active_info.max_shadow_alpha > 1e-3f
+                                   ? roles.active_info.max_shadow_alpha
+                                   : params.shadow_opacity;
+  sh.opacity =
+      use_clean ? Lerp(params.shadow_opacity * (1.0f - 0.35f * layout.lift),
+                       rest_sh_target, Smoothstep(0.65f, 0.95f, q))
+                : params.shadow_opacity * settle * (1.0f - 0.35f * layout.lift);
+  sh.rest_blend = use_clean ? Smoothstep(0.90f, 1.0f, q) : 0.0f;
+  sh.rest_blend_on = use_clean && sh.rest_blend > 1e-4f;
+  sh.rest_box = sh.rest_blend_on
+                    ? ClipBoxToCanonical(*roles.active, canvas_bounds,
+                                         active_sheet.alpha_box)
+                    : PixelRect{};
+  return sh;
+}
+
+// Canvas <-> packet-local mapper of the transition: the layout's packet
+// motion plus stop-motion hand jitter, one pose per held step of the stepped
+// progress p. Jitter settles away near rest (pre-cutout clips: as q goes
+// from 0.25 to 0.85). Call after CenterFoldedPacket, which moves the packet.
+PacketMapper BuildTransitionPacket(const PaperFoldTransitionParams& params,
+                                   float p, float q, bool use_clean,
+                                   float settle, float min_dim,
+                                   std::uint32_t seed,
+                                   const SheetGeometry& sheet,
+                                   const FoldLayout& layout) {
+  float jitter_x = 0.0f;
+  float jitter_y = 0.0f;
+  float jitter_rot = 0.0f;
+  if (params.enable_stop_motion && params.jitter_amount > 1e-4f) {
+    const float step = std::floor(
+        p * static_cast<float>(std::max(2, params.stop_motion_steps)));
+    // Golden-ratio spacing decorrelates consecutive steps.
+    const float sf = step * 1.618f + static_cast<float>(seed) * 0.37f;
+    const float amp = Clamp01(params.jitter_amount) *
+                      (use_clean ? Smoothstep(0.85f, 0.25f, q) : settle);
+    jitter_x = 0.008f * amp * min_dim * std::sin(sf * 12.9898f);
+    jitter_y = 0.008f * amp * min_dim * std::cos(sf * 78.233f);
+    jitter_rot = 2.2f * amp * kDegToRad * std::sin(sf * 43.17f);
+  }
+  PacketMapper packet;
+  packet.origin_x = sheet.cx + layout.offset_x + jitter_x;
+  packet.origin_y = sheet.cy + layout.offset_y + jitter_y;
+  const float packet_rot =
+      std::atan2(layout.rot_sin, layout.rot_cos) + jitter_rot;
+  packet.cos_r = std::cos(packet_rot);
+  packet.sin_r = std::sin(packet_rot);
+  packet.inv_scale = 1.0f / std::max(0.05f, layout.scale);
+  return packet;
+}
+
+// The clip shown under the transition sheet: `under` x `weight`, or
+// transparency. Shared read-only by the row workers.
+struct UnderlayWriter {
+  const ImageView* under = nullptr;
+  float weight = 0.0f;
+  // `under` is valid and visible (weight > 1e-4).
+  bool has_under = false;
+  // Same-size underlay covering the whole row span: rows stream with
+  // pointer increments (see MakeUnderlayWriter).
+  bool direct_x = false;
+  std::ptrdiff_t under_pixel_bytes = 0;
+  PixelRect canvas_bounds;
+
+  // Premultiplied underlay color at output px (x, y).
+  RgbaColor At(int x, int y) const {
+    return has_under
+               ? ScalePremult(ClipPixelAt(*under, canvas_bounds, x, y), weight)
+               : RgbaColor{};
+  }
+
+  // Writes the underlay of output row y, px [x_begin, x_end), starting at
+  // `out_px` (the pixel at x_begin). Bit-identical to calling At per pixel.
+  void WriteRow(int y, int x_begin, int x_end, std::uint8_t* out_px,
+                std::ptrdiff_t out_pixel_bytes, PixelDepth out_depth) const {
+    if (!has_under) {
+      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+        WritePixelPtr(out_px, out_depth, {});
+      }
+    } else if (direct_x && y >= under->bounds.y1 && y < under->bounds.y2) {
+      const std::uint8_t* under_px = PixelConstPtr(*under, x_begin, y);
+      const PixelDepth under_depth = under->depth;
+      const AlphaMode under_alpha = under->alpha_mode;
+      if (weight == 1.0f) {
+        for (int x = x_begin; x < x_end;
+             ++x, out_px += out_pixel_bytes, under_px += under_pixel_bytes) {
+          WritePixelPtr(out_px, out_depth,
+                        ReadPixelPtr(under_px, under_depth, under_alpha));
+        }
+      } else {
+        for (int x = x_begin; x < x_end;
+             ++x, out_px += out_pixel_bytes, under_px += under_pixel_bytes) {
+          WritePixelPtr(
+              out_px, out_depth,
+              ScalePremult(ReadPixelPtr(under_px, under_depth, under_alpha),
+                           weight));
+        }
+      }
+    } else {
+      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+        WritePixelPtr(
+            out_px, out_depth,
+            ScalePremult(ClipPixelAt(*under, canvas_bounds, x, y), weight));
+      }
+    }
+  }
+};
+
+// Builds the underlay writer for the span. Fast underlay copy: a same-size
+// underlay covering the whole row span can be streamed with pointer
+// increments. ClipPixelAt would do the same direct reads, so this is
+// bit-identical; only an exact weight of 1 skips the scale (c * 1.0f == c),
+// so the copy matches ScalePremult bit for bit.
+UnderlayWriter MakeUnderlayWriter(const ImageView* under, float weight,
+                                  const PixelRect& canvas_bounds,
+                                  const OutputSpan& span) {
+  UnderlayWriter w;
+  w.under = under;
+  w.weight = weight;
+  w.canvas_bounds = canvas_bounds;
+  w.has_under = under != nullptr && weight > 1e-4f && IsValidRgbaView(*under);
+  if (w.has_under) {
+    const PixelRect under_rod = EffectiveRod(*under);
+    w.direct_x =
+        under_rod.x1 == canvas_bounds.x1 && under_rod.x2 == canvas_bounds.x2 &&
+        under_rod.y1 == canvas_bounds.y1 && under_rod.y2 == canvas_bounds.y2 &&
+        under->bounds.x1 <= span.x_begin && under->bounds.x2 >= span.x_end;
+    w.under_pixel_bytes = PixelSizeBytes(*under);
+  }
+  return w;
+}
+
+// Print sampler for EvalFoldStack on the transition sheet: the active clip
+// at canonical px (ux, uy), with clean (shadow-free) alpha on pre-cutout
+// sheets. The SDF distance argument is unused.
+struct ActiveClipSampler {
+  const ImageView* clip = nullptr;
+  const ActiveSheet* sheet = nullptr;
+  const PixelRect* canvas_bounds = nullptr;
+
+  RgbaColor operator()(float ux, float uy, float /*dist_px*/) const {
+    return sheet->use_clean
+               ? SampleCleanClipCanonicalPx(*clip, sheet->clean_alpha,
+                                            *canvas_bounds, ux, uy)
+               : SampleClipCanonicalPx(*clip, *canvas_bounds, ux, uy);
+  }
+};
+
+// Row loop of the transition; rows run on parallel_for workers. Only pixels
+// near the packet (or its drop shadow) need the fold stack; rows that miss
+// the paper box, the shadow box, and the resting-shadow box (see
+// ComputeTransitionShadow) are just the underlay. Other pixels composite
+// the fold stack over the drop shadow (blended toward the clip's baked
+// shadow near rest) over the underlay. Output is premultiplied.
+void RenderTransitionRows(
+    const FoldShadeContext& ctx, const FoldLayout& layout,
+    const PacketMapper& packet, const FoldCovers& covers,
+    const TransitionShadow& shadow, const ImageView& active,
+    const ActiveSheet& active_sheet, const UnderlayWriter& underlay,
+    const ImageView& output, const PixelRect& canvas_bounds,
+    const OutputSpan& span, const ParallelRowsFn& parallel_for) {
+  const ActiveClipSampler sample_active{&active, &active_sheet, &canvas_bounds};
+  const auto to_canvas = [&](float lx, float ly, float* cx, float* cy) {
+    packet.ToCanvas(lx, ly, cx, cy);
+  };
+  const auto to_shadow = [&](float lx, float ly, float* cx, float* cy) {
+    packet.ToCanvas(lx, ly, cx, cy);
+    *cx += shadow.dx;
+    *cy += shadow.dy;
+  };
+  const BoundsBox paper_box = BoundsOfPieces(covers.paper, 3.0f, to_canvas);
+  const BoundsBox shadow_box = BoundsOfPieces(covers.coverage, 3.0f, to_shadow);
+  // Frame values under the names the per-pixel code reads.
+  const float sh_dx = shadow.dx;
+  const float sh_dy = shadow.dy;
+  const float sh_soft = shadow.soft;
+  const float sh_opacity = shadow.opacity;
+  const float rest_shadow_blend = shadow.rest_blend;
+  const bool rest_blend_on = shadow.rest_blend_on;
+  const PixelRect& rest_box = shadow.rest_box;
+  const std::vector<float>& clean_alpha = active_sheet.clean_alpha;
+  const int x_begin = span.x_begin;
+  const int x_end = span.x_end;
+  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
+  const PixelDepth out_depth = output.depth;
+
+  RunScanlines(span.y_begin, span.y_end, parallel_for, [&](int y) {
+    const float py_out = static_cast<float>(y) + 0.5f;
+    const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
+    const bool row_shadow = sh_opacity > 1e-4f && py_out >= shadow_box.y1 &&
+                            py_out <= shadow_box.y2;
+    std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
+    const bool row_rest = rest_blend_on && y >= rest_box.y1 && y < rest_box.y2;
+    // Rows that miss the paper and shadow boxes (and the clip's resting
+    // shadow, see rest_box) are just the underlay.
+    if (!row_paper && !row_shadow && !row_rest) {
+      underlay.WriteRow(y, x_begin, x_end, out_px, out_pixel_bytes, out_depth);
+      return;
+    }
+    for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
+      const float px_out = static_cast<float>(x) + 0.5f;
+      RgbaColor fg;
+      if (row_paper && px_out >= paper_box.x1 && px_out <= paper_box.x2) {
+        float lx = 0.0f;
+        float ly = 0.0f;
+        packet.ToLocal(px_out, py_out, &lx, &ly);
+        fg = ScalePremult(EvalFoldStack(ctx, layout.count - 1, lx, ly, false,
+                                        1.0f, sample_active),
+                          layout.alpha);
+        // The underlay and shadow would add < 0.1%; skip them.
+        if (fg.a >= 0.999f) {
+          WritePixelPtr(out_px, out_depth, fg);
+          continue;
+        }
+      }
+      RgbaColor bg = underlay.At(x, y);
+      float sh_a = 0.0f;
+      if (row_shadow && px_out >= shadow_box.x1 && px_out <= shadow_box.x2) {
+        float slx = 0.0f;
+        float sly = 0.0f;
+        packet.ToLocal(px_out - sh_dx, py_out - sh_dy, &slx, &sly);
+        sh_a =
+            sh_opacity * layout.alpha *
+            EvalFoldCoverage(ctx, layout.count - 1, slx, sly, false, sh_soft);
+      }
+      // Near rest, blend toward the clip's own baked shadow, recovered by
+      // inverting Over with a black shadow:
+      // sh = (raw.a - clean.a) / (1 - clean.a).
+      // Outside rest_box both alphas are exactly 0, so rest_sh_a is 0 and
+      // the clip reads are skipped (same Lerp arguments, same result).
+      if (rest_blend_on) {
+        if (row_rest && x >= rest_box.x1 && x < rest_box.x2) {
+          const RgbaColor raw_c = ClipPixelAt(active, canvas_bounds, x, y);
+          const float clean_a =
+              CleanClipAlphaAt(active, clean_alpha, canvas_bounds, x, y);
+          if (clean_a < 0.99f) {
+            const float rest_sh_a =
+                Clamp01((raw_c.a - clean_a) / (1.0f - clean_a)) * layout.alpha;
+            sh_a = Lerp(sh_a, rest_sh_a, rest_shadow_blend);
+          }
+        } else {
+          sh_a = Lerp(sh_a, 0.0f, rest_shadow_blend);
+        }
+      }
+      if (sh_a > 1e-4f) {
+        bg = CompositeOver({0.0f, 0.0f, 0.0f, sh_a}, bg);
+      }
+      WritePixelPtr(out_px, out_depth, CompositeOver(fg, bg));
+    }
+  });
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Public renderers (declared in papercraft_kernel.h)
+//
+// Called from the OpenFX render action (kOfxImageEffectActionRender) in
+// papercraft_ofx_plugin.cc, once per render-window request. canvas_bounds
+// is the output RoD (full frame at the current render scale). Setup runs on
+// the calling host thread; per-pixel work fans out through `parallel_for`.
+// ---------------------------------------------------------------------------
+
+// See header. Only 4-component buffers are supported; negative row_bytes is
+// valid.
+bool IsValidRgbaView(const ImageView& view) {
+  return view.data != nullptr && view.components == 4 && view.row_bytes != 0 &&
+         view.bounds.x2 > view.bounds.x1 && view.bounds.y2 > view.bounds.y1;
+}
+
+// See header. Steps: clip the render window, place the subject, evaluate
+// the intro/outro animation, clear fully collapsed frames, build the shared
+// per-frame setup (SDF, collar, seeds, drop shadow), then render either the
+// Paper Unfold (3D) fold path (RenderCutoutPaperUnfold) or the flat path
+// (RenderCutoutFlat). Output is premultiplied.
+void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
+                       const ImageView& output, const PixelRect& canvas_bounds,
+                       const PixelRect& render_window,
+                       const ParallelRowsFn& parallel_for) {
+  OutputSpan span;
+  if (!ComputeOutputSpan(output, render_window, &span)) {
+    return;
+  }
+  const ImageView src_view =
+      WithSourceAlphaOverride(source, params.source_is_premultiplied);
+  const SubjectTransform subj_xf =
+      BuildSubjectTransform(params, src_view, canvas_bounds);
+  const CutoutAnimState anim =
+      ComputeCutoutAnimState(params, subj_xf.cw, subj_xf.ch);
+
+  // If collapsed below visibility threshold at transition endpoints, clear.
+  if (anim.ease_p <= 1e-4f && anim.style != CutoutAnimStyle::kNone) {
+    ClearSpan(output, span, parallel_for);
+    return;
+  }
+
+  CutoutFrameSetup setup;
+  BuildCutoutFrameSetup(params, subj_xf, anim, src_view, canvas_bounds,
+                        parallel_for, &setup);
+  if (anim.style == CutoutAnimStyle::kPaperUnfold) {
+    RenderCutoutPaperUnfold(params, src_view, subj_xf, anim, setup, output,
+                            span, parallel_for);
+    return;
+  }
+  RenderCutoutFlat(params, src_view, subj_xf, anim, setup, output, span,
+                   parallel_for);
+}
+
 // See header. Interior progress snaps to the middle of its stop-motion
 // bucket, (floor(p * N) + 0.5) / N, so held frames never reach exactly 0
 // or 1.
@@ -3372,113 +4100,31 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
                                const PixelRect& canvas_bounds,
                                const PixelRect& render_window,
                                const ParallelRowsFn& parallel_for) {
-  if (!IsValidRgbaView(output)) {
+  OutputSpan span;
+  if (!ComputeOutputSpan(output, render_window, &span)) {
     return;
   }
-  const int y_begin = std::max(render_window.y1, output.bounds.y1);
-  const int y_end = std::min(render_window.y2, output.bounds.y2);
-  const int x_begin = std::max(render_window.x1, output.bounds.x1);
-  const int x_end = std::min(render_window.x2, output.bounds.x2);
-  if (x_begin >= x_end || y_begin >= y_end) {
-    return;
-  }
+  const ImageView from_view =
+      WithSourceAlphaOverride(source_from, params.source_is_premultiplied);
+  const ImageView to_view =
+      WithSourceAlphaOverride(source_to, params.source_is_premultiplied);
 
-  ImageView from_view = source_from;
-  ImageView to_view = source_to;
-  if (!params.source_is_premultiplied) {
-    for (ImageView* view : {&from_view, &to_view}) {
-      if (view->alpha_mode == AlphaMode::kPremultiplied) {
-        view->alpha_mode = AlphaMode::kUnPremultiplied;
-      }
-    }
-  }
-
-  // Writes `weight` x `clip` (or transparency) over the render window,
-  // streaming each output row through one pointer.
-  auto fill_with_clip = [&](const ImageView* clip, float weight) {
-    const bool use_clip =
-        clip != nullptr && weight > 1e-4f && IsValidRgbaView(*clip);
-    if (!use_clip) {
-      ClearOutputRows(output, x_begin, x_end, y_begin, y_end, parallel_for);
-      return;
-    }
-    const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
-    const PixelDepth out_depth = output.depth;
-    RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
-      std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
-      for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-        WritePixelPtr(
-            out_px, out_depth,
-            ScalePremult(ClipPixelAt(*clip, canvas_bounds, x, y), weight));
-      }
-    });
-  };
-
+  // Endpoints show the plain clips.
   const float p = ComputeSteppedTransitionProgress(params);
   if (p <= 0.0f) {
-    fill_with_clip(&from_view, 1.0f);
+    FillWithClip(&from_view, 1.0f, output, canvas_bounds, span, parallel_for);
     return;
   }
   if (p >= 1.0f) {
-    fill_with_clip(&to_view, 1.0f);
+    FillWithClip(&to_view, 1.0f, output, canvas_bounds, span, parallel_for);
     return;
   }
 
-  // Inspect only the clips the requested action can use; each scan reads
-  // about 230k pixels.
-  const auto requested = static_cast<FoldTransitionAction>(
-      std::min(3, std::max(0, params.fold_action)));
-  const bool need_from =
-      requested == FoldTransitionAction::kAuto ||
-      requested == FoldTransitionAction::kFoldOut ||
-      (requested == FoldTransitionAction::kFoldAndUnfold && p < 0.5f);
-  const bool need_to =
-      requested == FoldTransitionAction::kAuto ||
-      requested == FoldTransitionAction::kUnfoldIn ||
-      (requested == FoldTransitionAction::kFoldAndUnfold && p >= 0.5f);
-  const ClipContentSummary from_info =
-      need_from ? InspectClipContent(from_view) : ClipContentSummary{};
-  const ClipContentSummary to_info =
-      need_to ? InspectClipContent(to_view) : ClipContentSummary{};
-  const FoldTransitionAction action =
-      ResolveFoldAction(params.fold_action, from_info, to_info);
-
-  // The active clip folds or unfolds; the other one shows underneath.
-  const ImageView* active = &to_view;
-  const ClipContentSummary* active_info = &to_info;
-  const ImageView* under = &from_view;
-  float under_weight = 1.0f;
-  float q = p;  // Openness of the active sheet: 1 = flat, 0 = folded away.
-  switch (action) {
-    case FoldTransitionAction::kFoldOut:
-      active = &from_view;
-      active_info = &from_info;
-      under = &to_view;
-      q = 1.0f - p;
-      // See-through outgoing clips let the incoming clip fade in early.
-      under_weight =
-          from_info.is_full_frame_opaque ? 1.0f : Smoothstep(0.0f, 0.25f, p);
-      break;
-    case FoldTransitionAction::kFoldAndUnfold:
-      if (p < 0.5f) {
-        active = &from_view;
-        active_info = &from_info;
-        q = 1.0f - 2.0f * p;
-      } else {
-        q = 2.0f * p - 1.0f;
-      }
-      under = nullptr;
-      under_weight = 0.0f;
-      break;
-    case FoldTransitionAction::kAuto:
-    case FoldTransitionAction::kUnfoldIn:
-      // A see-through incoming clip fades the outgoing one out at the end.
-      under_weight =
-          to_info.is_full_frame_opaque ? 1.0f : Smoothstep(1.0f, 0.75f, p);
-      break;
-  }
-  if (!active_info->has_visible_alpha || q <= 0.0f) {
-    fill_with_clip(under, under_weight);
+  const FoldRoles roles = ResolveFoldRoles(params, p, from_view, to_view);
+  const float q = roles.q;
+  if (!roles.active_info.has_visible_alpha || q <= 0.0f) {
+    FillWithClip(roles.under, roles.under_weight, output, canvas_bounds, span,
+                 parallel_for);
     return;
   }
 
@@ -3498,273 +4144,43 @@ void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
           ? std::max(0.0f, params.tear_roughness_norm * min_dim)
           : 0.0f;
 
-  const bool is_cutout =
-      !active_info->is_full_frame_opaque && active_info->has_cutout_shadow;
-  CoarseSignedDistanceField matte_sdf;
-  SheetGeometry sheet;
-  float sdf_step = 0.0f;
-  if (active_info->is_full_frame_opaque) {
-    sheet = FullFrameSheet(canvas_bounds);
-  } else {
-    // Identity placement: the matte is the clip alpha in canonical px.
-    matte_sdf =
-        BuildClipMatteSdf(*active, canvas_bounds, parallel_for, is_cutout);
-    sheet =
-        SheetFromSdf(matte_sdf, is_cutout ? 0.0f : (full_border + full_tear));
-    sdf_step = static_cast<float>(matte_sdf.step);
-  }
-  if (!sheet.valid) {
-    fill_with_clip(under, under_weight);
+  ActiveSheet active_sheet;
+  if (!BuildActiveSheet(roles, canvas_bounds, full_border, full_tear,
+                        parallel_for, &active_sheet)) {
+    FillWithClip(roles.under, roles.under_weight, output, canvas_bounds, span,
+                 parallel_for);
     return;
   }
-  PixelRect active_alpha_box;
-  const std::vector<float> clean_alpha =
-      is_cutout ? BuildCleanCutoutAlpha(*active, canvas_bounds, matte_sdf,
-                                        parallel_for, &active_alpha_box)
-                : std::vector<float>{};
-  const bool use_clean = !clean_alpha.empty();
-  // Coarse-SDF error margin: two cells plus 3 px.
-  const float sdf_slack = 2.0f * sdf_step + 3.0f;
 
   const std::uint32_t seed =
       static_cast<std::uint32_t>(std::max(0, params.random_seed));
   FoldLayout layout = BuildFoldLayout(
       static_cast<FoldPattern>(std::min(3, std::max(0, params.fold_pattern))),
-      params.fold_stages, q, sheet, std::hypot(cw, ch),
+      params.fold_stages, q, active_sheet.sheet, std::hypot(cw, ch),
       params.direction_angle_deg, params.fold_depth, params.slide_distance,
       params.mirror_h, params.mirror_v, seed);
-
-  FoldShadeContext ctx;
-  ctx.sheet = &sheet;
-  ctx.layout = &layout;
-  ctx.origin_x = static_cast<float>(canvas_bounds.x1);
-  ctx.origin_y = static_cast<float>(canvas_bounds.y1);
-  ctx.min_dim = min_dim;
-  ctx.cutout_sheet = use_clean;
-  ctx.cutout_sdf_slack_px = sdf_slack;
-  ctx.enable_border = params.enable_border && !use_clean;
-  ctx.border_px = use_clean ? 0.0f : full_border * settle;
-  ctx.tear_amp_px = use_clean ? 0.0f : full_tear * settle;
-  ctx.tear_frequency = params.tear_frequency;
-  ctx.tear_detail = 5;
-  ctx.seed = seed;
-  ctx.tear_seed = seed + 17u;
-  ctx.paper_r = params.paper_r;
-  ctx.paper_g = params.paper_g;
-  ctx.paper_b = params.paper_b;
-  ctx.grain_strength = params.grain_strength;
-  ctx.grain_scale = 1.0f;
-  ctx.crease_strength = params.crease_strength;
-  ctx.crease_scale = 3.4f;
-  ctx.media_overlay =
-      use_clean ? 0.0f : 0.30f * Clamp01(params.crease_strength) * settle;
-  ctx.hinge_crease = settle;
-  ctx.crease_band_px = std::max(2.5f, 0.0055f * min_dim);
-  // Keep soft matte edges (and the coarse matte's slack) while the collar is
-  // narrower than that margin.
-  ctx.subject_margin_px = std::max(0.0f, 2.0f + sdf_step - ctx.border_px);
-  ConfigureFoldLight(params.shadow_angle_deg, &ctx);
-  ctx.flap_shadow_opacity = params.shadow_opacity;
-  ctx.flap_shadow_px = std::max(3.0f, 0.011f * min_dim);
-  ctx.flap_shadow_soft_px = std::max(2.0f, 0.006f * min_dim);
-
-  // Drop shadow grows and softens while the packet is lifted. For pre-cutout
-  // clips, keep the 3D shadow alive and hand it off into the cutout's resting
-  // shadow instead of fading it out.
-  const float lift_k = 1.0f + 2.5f * layout.lift;
-  const float sh_dist = params.shadow_distance_norm * min_dim * lift_k;
-  const float sh_dx = ctx.shadow_dir_x * sh_dist;
-  const float sh_dy = ctx.shadow_dir_y * sh_dist;
-  const float sh_soft = std::max(1.2f, params.shadow_softness_norm * min_dim *
-                                           (1.0f + 1.5f * layout.lift));
-  const float rest_sh_target = active_info->max_shadow_alpha > 1e-3f
-                                   ? active_info->max_shadow_alpha
-                                   : params.shadow_opacity;
-  const float sh_opacity =
-      use_clean ? Lerp(params.shadow_opacity * (1.0f - 0.35f * layout.lift),
-                       rest_sh_target, Smoothstep(0.65f, 0.95f, q))
-                : params.shadow_opacity * settle * (1.0f - 0.35f * layout.lift);
-  const float rest_shadow_blend = use_clean ? Smoothstep(0.90f, 1.0f, q) : 0.0f;
-  const bool rest_blend_on = use_clean && rest_shadow_blend > 1e-4f;
-  // The resting-shadow blend reads the active clip at every pixel, but
-  // outside the clip's non-zero alpha its raw and clean alpha are both 0, so
-  // the blend reduces to sh_a = Lerp(sh_a, 0, blend). Pixels outside this
-  // box (output px == canonical px) skip the two clip reads, and rows
-  // outside it that miss the paper and shadow boxes take the fast path.
-  const PixelRect rest_box =
-      rest_blend_on
-          ? ClipBoxToCanonical(*active, canvas_bounds, active_alpha_box)
-          : PixelRect{};
-
+  FoldShadeContext ctx =
+      BuildTransitionFoldContext(params, active_sheet, layout, canvas_bounds,
+                                 min_dim, full_border, full_tear, settle, seed);
+  const TransitionShadow shadow = ComputeTransitionShadow(
+      params, ctx, layout, roles, active_sheet, canvas_bounds, min_dim, settle);
   // Conservative bounds of the paper (torn edge included) and of the soft
   // coverage used by shadows, per fold level; the coarse matte adds slack.
-  const std::vector<FoldPolygon> paper_cover = FoldSheetBounds(
-      sheet, layout, ctx.border_px + ctx.tear_amp_px + sdf_slack,
-      &ctx.stack_bounds);
-  const std::vector<FoldPolygon> coverage_cover = FoldSheetBounds(
-      sheet, layout,
-      ctx.border_px + std::max(sh_soft, ctx.flap_shadow_soft_px) + sdf_slack,
-      &ctx.coverage_bounds);
-  CenterFoldedPacket(ctx, q, &layout);
+  const FoldCovers covers = BoundFoldedPacket(
+      active_sheet.sheet,
+      ctx.border_px + ctx.tear_amp_px + active_sheet.sdf_slack,
+      ctx.border_px + std::max(shadow.soft, ctx.flap_shadow_soft_px) +
+          active_sheet.sdf_slack,
+      q, &ctx, &layout);
+  const PacketMapper packet =
+      BuildTransitionPacket(params, p, q, active_sheet.use_clean, settle,
+                            min_dim, seed, active_sheet.sheet, layout);
+  const UnderlayWriter underlay =
+      MakeUnderlayWriter(roles.under, roles.under_weight, canvas_bounds, span);
 
-  // Stop-motion hand jitter: one pose per held step.
-  float jitter_x = 0.0f;
-  float jitter_y = 0.0f;
-  float jitter_rot = 0.0f;
-  if (params.enable_stop_motion && params.jitter_amount > 1e-4f) {
-    const float step = std::floor(
-        p * static_cast<float>(std::max(2, params.stop_motion_steps)));
-    // Golden-ratio spacing decorrelates consecutive steps.
-    const float sf = step * 1.618f + static_cast<float>(seed) * 0.37f;
-    const float amp = Clamp01(params.jitter_amount) *
-                      (use_clean ? Smoothstep(0.85f, 0.25f, q) : settle);
-    jitter_x = 0.008f * amp * min_dim * std::sin(sf * 12.9898f);
-    jitter_y = 0.008f * amp * min_dim * std::cos(sf * 78.233f);
-    jitter_rot = 2.2f * amp * kDegToRad * std::sin(sf * 43.17f);
-  }
-  PacketMapper packet;
-  packet.origin_x = sheet.cx + layout.offset_x + jitter_x;
-  packet.origin_y = sheet.cy + layout.offset_y + jitter_y;
-  const float packet_rot =
-      std::atan2(layout.rot_sin, layout.rot_cos) + jitter_rot;
-  packet.cos_r = std::cos(packet_rot);
-  packet.sin_r = std::sin(packet_rot);
-  packet.inv_scale = 1.0f / std::max(0.05f, layout.scale);
-
-  auto sample_active = [&](float ux, float uy, float /*dist_px*/) {
-    return use_clean ? SampleCleanClipCanonicalPx(*active, clean_alpha,
-                                                  canvas_bounds, ux, uy)
-                     : SampleClipCanonicalPx(*active, canvas_bounds, ux, uy);
-  };
-  const bool has_under =
-      under != nullptr && under_weight > 1e-4f && IsValidRgbaView(*under);
-
-  // Only pixels near the packet (or its drop shadow) need the fold stack; the
-  // rest of the frame, most of it while the packet is small, is the underlay.
-  const auto to_canvas = [&](float lx, float ly, float* cx, float* cy) {
-    packet.ToCanvas(lx, ly, cx, cy);
-  };
-  const auto to_shadow = [&](float lx, float ly, float* cx, float* cy) {
-    packet.ToCanvas(lx, ly, cx, cy);
-    *cx += sh_dx;
-    *cy += sh_dy;
-  };
-  const BoundsBox paper_box = BoundsOfPieces(paper_cover, 3.0f, to_canvas);
-  const BoundsBox shadow_box = BoundsOfPieces(coverage_cover, 3.0f, to_shadow);
-  const std::ptrdiff_t out_pixel_bytes = PixelSizeBytes(output);
-  const PixelDepth out_depth = output.depth;
-  // Fast underlay copy: a same-size underlay covering the whole row span can
-  // be streamed with pointer increments. ClipPixelAt would do the same direct
-  // reads, so this is bit-identical; only an exact weight of 1 skips the
-  // scale (c * 1.0f == c), so the copy matches ScalePremult bit for bit.
-  bool under_direct_x = false;
-  if (has_under) {
-    const PixelRect under_rod = EffectiveRod(*under);
-    under_direct_x =
-        under_rod.x1 == canvas_bounds.x1 && under_rod.x2 == canvas_bounds.x2 &&
-        under_rod.y1 == canvas_bounds.y1 && under_rod.y2 == canvas_bounds.y2 &&
-        under->bounds.x1 <= x_begin && under->bounds.x2 >= x_end;
-  }
-  const std::ptrdiff_t under_pixel_bytes =
-      has_under ? PixelSizeBytes(*under) : 0;
-
-  RunScanlines(y_begin, y_end, parallel_for, [&](int y) {
-    const float py_out = static_cast<float>(y) + 0.5f;
-    const bool row_paper = py_out >= paper_box.y1 && py_out <= paper_box.y2;
-    const bool row_shadow = sh_opacity > 1e-4f && py_out >= shadow_box.y1 &&
-                            py_out <= shadow_box.y2;
-    std::uint8_t* out_px = PixelMutPtr(output, x_begin, y);
-    const bool row_rest = rest_blend_on && y >= rest_box.y1 && y < rest_box.y2;
-    // Rows that miss the paper and shadow boxes (and the clip's resting
-    // shadow, see rest_box) are just the underlay.
-    if (!row_paper && !row_shadow && !row_rest) {
-      if (!has_under) {
-        for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-          WritePixelPtr(out_px, out_depth, {});
-        }
-      } else if (under_direct_x && y >= under->bounds.y1 &&
-                 y < under->bounds.y2) {
-        const std::uint8_t* under_px = PixelConstPtr(*under, x_begin, y);
-        const PixelDepth under_depth = under->depth;
-        const AlphaMode under_alpha = under->alpha_mode;
-        if (under_weight == 1.0f) {
-          for (int x = x_begin; x < x_end;
-               ++x, out_px += out_pixel_bytes, under_px += under_pixel_bytes) {
-            WritePixelPtr(out_px, out_depth,
-                          ReadPixelPtr(under_px, under_depth, under_alpha));
-          }
-        } else {
-          for (int x = x_begin; x < x_end;
-               ++x, out_px += out_pixel_bytes, under_px += under_pixel_bytes) {
-            WritePixelPtr(
-                out_px, out_depth,
-                ScalePremult(ReadPixelPtr(under_px, under_depth, under_alpha),
-                             under_weight));
-          }
-        }
-      } else {
-        for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-          WritePixelPtr(out_px, out_depth,
-                        ScalePremult(ClipPixelAt(*under, canvas_bounds, x, y),
-                                     under_weight));
-        }
-      }
-      return;
-    }
-    for (int x = x_begin; x < x_end; ++x, out_px += out_pixel_bytes) {
-      const float px_out = static_cast<float>(x) + 0.5f;
-      RgbaColor fg;
-      if (row_paper && px_out >= paper_box.x1 && px_out <= paper_box.x2) {
-        float lx = 0.0f;
-        float ly = 0.0f;
-        packet.ToLocal(px_out, py_out, &lx, &ly);
-        fg = ScalePremult(EvalFoldStack(ctx, layout.count - 1, lx, ly, false,
-                                        1.0f, sample_active),
-                          layout.alpha);
-        // The underlay and shadow would add < 0.1%; skip them.
-        if (fg.a >= 0.999f) {
-          WritePixelPtr(out_px, out_depth, fg);
-          continue;
-        }
-      }
-      RgbaColor bg =
-          has_under ? ScalePremult(ClipPixelAt(*under, canvas_bounds, x, y),
-                                   under_weight)
-                    : RgbaColor{};
-      float sh_a = 0.0f;
-      if (row_shadow && px_out >= shadow_box.x1 && px_out <= shadow_box.x2) {
-        float slx = 0.0f;
-        float sly = 0.0f;
-        packet.ToLocal(px_out - sh_dx, py_out - sh_dy, &slx, &sly);
-        sh_a =
-            sh_opacity * layout.alpha *
-            EvalFoldCoverage(ctx, layout.count - 1, slx, sly, false, sh_soft);
-      }
-      // Near rest, blend toward the clip's own baked shadow, recovered by
-      // inverting Over with a black shadow:
-      // sh = (raw.a - clean.a) / (1 - clean.a).
-      // Outside rest_box both alphas are exactly 0, so rest_sh_a is 0 and
-      // the clip reads are skipped (same Lerp arguments, same result).
-      if (rest_blend_on) {
-        if (row_rest && x >= rest_box.x1 && x < rest_box.x2) {
-          const RgbaColor raw_c = ClipPixelAt(*active, canvas_bounds, x, y);
-          const float clean_a =
-              CleanClipAlphaAt(*active, clean_alpha, canvas_bounds, x, y);
-          if (clean_a < 0.99f) {
-            const float rest_sh_a =
-                Clamp01((raw_c.a - clean_a) / (1.0f - clean_a)) * layout.alpha;
-            sh_a = Lerp(sh_a, rest_sh_a, rest_shadow_blend);
-          }
-        } else {
-          sh_a = Lerp(sh_a, 0.0f, rest_shadow_blend);
-        }
-      }
-      if (sh_a > 1e-4f) {
-        bg = CompositeOver({0.0f, 0.0f, 0.0f, sh_a}, bg);
-      }
-      WritePixelPtr(out_px, out_depth, CompositeOver(fg, bg));
-    }
-  });
+  RenderTransitionRows(ctx, layout, packet, covers, shadow, *roles.active,
+                       active_sheet, underlay, output, canvas_bounds, span,
+                       parallel_for);
 }
 
 }  // namespace papercraft
