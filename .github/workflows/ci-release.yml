@@ -96,7 +96,7 @@ jobs:
             --linux_ofx_path=PaperCraftStudioPro.ofx
 
       - name: Upload workflow build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mttn-papercraft-studio-bundle
           path: |
