@@ -8,7 +8,8 @@ Entry points:
 
 * `validate_setting_syntax_and_graph`: one `.setting` text (balanced braces,
   MacroOperator layout, MainInput/MainOutput wiring, dangling `SourceOp`s,
-  `LBLC_NumInputs` counts, SimpleExpression syntax and control references).
+  `LBLC_NumInputs` counts, macro `Inputs` defaults without a UserControl,
+  SimpleExpression syntax and control references).
 * `validate_drfx_bytes`: the whole `.drfx` ZIP (one effect + one transition,
   104x58 PNG thumbnails, bundled `Setting:/` assets).
 * `validate_wav_bytes`: Paper SFX format and loudness sanity checks.
@@ -242,6 +243,20 @@ def validate_setting_syntax_and_graph(
             f"LabelControl {ctrl_name} declares LBLC_NumInputs={expected_count}"
             f", but has {actual_count} following controls."
         )
+
+  # Every macro-level default row (`<Id> = Input { Value = ... }`) must
+  # belong to a declared UserControl. A stale row is what a half-finished
+  # control removal leaves behind (e.g. the removed Paper Cutout FX
+  # intro/outro controls), and Fusion would carry a hidden orphan input.
+  for default_id in re.findall(
+      r"^\t{4}([A-Za-z0-9_]+)\s*=\s*Input\s*\{",
+      macro_inputs_body,
+      flags=re.MULTILINE,
+  ):
+    if default_id not in declared_controls:
+      raise ValueError(
+          f"Macro Inputs default {default_id!r} has no matching UserControl."
+      )
 
   # Validate SimpleExpressions syntax and control references.
   # SimpleExpressions are not Lua: they use bare math functions and the

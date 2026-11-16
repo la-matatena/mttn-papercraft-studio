@@ -70,15 +70,16 @@ except ImportError:
 def _eval_simple_expr(expr, macro, t, render_end, **ctrl_vals):
   """Evaluates a Fusion SimpleExpression as Python at frame `t`.
 
-  The SimpleExpressions under test only use `iif`, `min`, `max`, `and`, and
-  attribute access, a subset Python can run once those names are provided.
+  The SimpleExpressions under test only use `iif`, `min`, `max`, `floor`,
+  `and`, and attribute access, a subset Python can run once those names are
+  provided.
 
   Args:
     expr: SimpleExpression string.
     macro: Macro name the expression reads controls from.
     t: Current frame (`time`).
     render_end: `comp.RenderEnd`; `comp.RenderStart` is 0.
-    **ctrl_vals: Macro control values, e.g. `IntroFrames=10`.
+    **ctrl_vals: Macro control values, e.g. `StopMotionHoldFrames=6`.
 
   Returns:
     The evaluated value.
@@ -88,6 +89,7 @@ def _eval_simple_expr(expr, macro, t, render_end, **ctrl_vals):
       "iif": lambda c, a, b: a if c else b,
       "min": min,
       "max": max,
+      "floor": math.floor,
       "comp": types.SimpleNamespace(RenderStart=0, RenderEnd=render_end),
       "time": t,
       macro: types.SimpleNamespace(**ctrl_vals),
@@ -235,9 +237,26 @@ class PapercraftProTest(absltest.TestCase):
     with self.assertRaisesRegex(ValueError, "LBLC_NumInputs=99"):
       drfx_validator.validate_setting_syntax_and_graph(bad_count, "effect")
 
-    bad_op = valid.replace(" and ", " && ", 1)
+    # The effect has no `and` left since the intro/outro expressions were
+    # removed, so inject the C-style operator into a checkbox test instead.
+    bad_op = valid.replace(
+        "EnableChromaKey > 0.5", "EnableChromaKey > 0.5 && 1 > 0", 1
+    )
+    self.assertNotEqual(bad_op, valid)
     with self.assertRaisesRegex(ValueError, "Illegal C-style"):
       drfx_validator.validate_setting_syntax_and_graph(bad_op, "effect")
+
+    # A default row left behind for a removed control (here the old intro
+    # combo) is an orphan input.
+    orphan = valid.replace(
+        "\t\t\t\tMediaSourceGroup = Input {",
+        "\t\t\t\tIntroStyle = Input { Value = 0, },\n"
+        "\t\t\t\tMediaSourceGroup = Input {",
+        1,
+    )
+    self.assertNotEqual(orphan, valid)
+    with self.assertRaisesRegex(ValueError, "'IntroStyle' has no matching"):
+      drfx_validator.validate_setting_syntax_and_graph(orphan, "effect")
 
   def test_bundled_paper_sfx_wavs(self):
     """The four bundled Foley WAVs and credits exist and pass validation."""
@@ -302,45 +321,6 @@ class PapercraftProTest(absltest.TestCase):
         drfx_bytes = bundle_builder_lib._write_deterministic_zip(broken)  # pylint: disable=protected-access
         with self.assertRaisesRegex(ValueError, "Truncated PNG"):
           drfx_validator.validate_drfx_bytes(drfx_bytes)
-
-  def test_active_trans_style_ignores_zero_intro_frames(self):
-    """IntroFrames == 0 never selects IntroStyle, even at RenderStart."""
-    macro = "PaperCutoutFX"
-    prog_expr = fusion_templates._anim_progress_expr(macro)  # pylint: disable=protected-access
-    style_expr = fusion_templates._active_trans_style_expr(macro)  # pylint: disable=protected-access
-    ctrls = dict(IntroStyle=2, IntroFrames=0, OutroStyle=3, OutroFrames=10)
-    for t, expected_prog in ((0, 1.0), (25, 0.5)):
-      with self.subTest(t=t):
-        self.assertEqual(
-            _eval_simple_expr(style_expr, macro, t, 30, **ctrls), 3
-        )
-        self.assertAlmostEqual(
-            _eval_simple_expr(prog_expr, macro, t, 30, **ctrls), expected_prog
-        )
-
-  def test_active_trans_style_matches_anim_progress(self):
-    """With overlapping windows the style follows the active progress ramp."""
-    macro = "PaperCutoutFX"
-    prog_expr = fusion_templates._anim_progress_expr(macro)  # pylint: disable=protected-access
-    style_expr = fusion_templates._active_trans_style_expr(macro)  # pylint: disable=protected-access
-    # Overlapping intro/outro windows on a 10-frame comp.
-    overlap_ctrls = dict(
-        IntroStyle=1, IntroFrames=10, OutroStyle=4, OutroFrames=10
-    )
-    for t, expected_prog, expected_style in (
-        (2, 0.2, 1),
-        (5, 0.5, 1),
-        (8, 0.2, 4),
-    ):
-      with self.subTest(t=t):
-        self.assertAlmostEqual(
-            _eval_simple_expr(prog_expr, macro, t, 10, **overlap_ctrls),
-            expected_prog,
-        )
-        self.assertEqual(
-            _eval_simple_expr(style_expr, macro, t, 10, **overlap_ctrls),
-            expected_style,
-        )
 
   def test_deterministic_zip_pins_deflate_level(self):
     """Every ZIP entry is compressed with the pinned DEFLATE level 6."""
@@ -515,7 +495,11 @@ class PapercraftProTest(absltest.TestCase):
         (
             "effect",
             fusion_templates.build_effect_setting(),
-            "db8119d3519873056a6a6fab71c7b3bd01032fbdbb8f2115a59eb472bd6e5048",
+            # Intentionally re-pinned when the intro/outro controls were
+            # removed, the jitter/hold defaults changed, and the Advanced
+            # section was added; the user verifies this template in DaVinci
+            # Resolve. The fold hash below did not change.
+            "6dff2ae64328492dfa77d74be89531e42916b34b97373836485505c6ab4895ce",
         ),
         (
             "fold",
@@ -535,6 +519,106 @@ class PapercraftProTest(absltest.TestCase):
             "rebuilt .drfx, verify the template in DaVinci Resolve, and only "
             "then update this pinned hash on purpose.",
         )
+
+  def test_effect_has_no_intro_outro_controls_or_nodes(self):
+    """Paper Cutout FX ships no intro/outro controls, groups, or nodes."""
+    text = fusion_templates.build_effect_setting()
+    for removed in (
+        "TransitionGroup",
+        "IntroStyle",
+        "IntroFrames",
+        "OutroStyle",
+        "OutroFrames",
+        "TransitionAngle",
+        "TransitionDistance",
+        "TransitionMirrorH",
+        "TransitionMirrorV",
+        "CrumpleDisplace",
+        "FoldDVE",
+        "GlideTransform",
+        "Intro",
+        "Outro",
+        "Glide",
+    ):
+      with self.subTest(removed=removed):
+        self.assertNotIn(removed, text)
+    # The shadow now reads the finished cutout directly.
+    shadow = text.split("\t\t\t\tCutoutShadow = Shadow {", 1)[1]
+    shadow = shadow.split("\n\t\t\t\t},", 1)[0]
+    self.assertIn('SourceOp = "MediaPaperOverlay"', shadow)
+
+  def test_effect_stop_motion_defaults(self):
+    """Jitter and hold defaults are 0.3 deg, 0.001, and 6 frames."""
+    specs = {
+        spec.control_id: spec
+        for _, _, controls in fusion_templates._core_cutout_control_groups()  # pylint: disable=protected-access
+        for spec in controls
+    }
+    self.assertEqual(specs["JitterRotation"].default, 0.3)
+    self.assertEqual(specs["JitterPosition"].default, 0.001)
+    self.assertEqual(specs["StopMotionHoldFrames"].default, 6)
+    text = fusion_templates.build_effect_setting()
+    for row in (
+        "JitterRotation = Input { Value = 0.3, },",
+        "JitterPosition = Input { Value = 0.001, },",
+        "StopMotionHoldFrames = Input { Value = 6, },",
+    ):
+      with self.subTest(row=row):
+        self.assertIn(f"\t\t\t\t{row}\n", text)
+
+  def test_stepped_time_holds_six_frames_by_default(self):
+    """The default hold posterizes time to one new pose every 6 frames."""
+    macro = "PaperCutoutFX"
+    step_expr = fusion_templates._stepped_time_expr(macro)  # pylint: disable=protected-access
+    stepped = [
+        _eval_simple_expr(
+            step_expr,
+            macro,
+            t,
+            23,
+            EnableStopMotion=1,
+            StopMotionHoldFrames=6,
+        )
+        for t in range(24)
+    ]
+    self.assertEqual(stepped, [t - t % 6 for t in range(24)])
+
+  def test_effect_advanced_section_is_last_and_collapsed(self):
+    """Sections are numbered 1-7 and "7. Advanced" is last and closed."""
+    groups = fusion_templates._core_cutout_control_groups()  # pylint: disable=protected-access
+    self.assertEqual(
+        [(group_id, title) for group_id, title, _ in groups],
+        [
+            ("MediaSourceGroup", "1. Media Placement"),
+            ("KeyerGroup", "2. Green Screen and Matte Cleanup"),
+            ("PaperBorderGroup", "3. Torn Paper Cutout Border"),
+            ("PaperTextureGroup", "4. Paper Texture and Fold Creases"),
+            ("ShadowGroup", "5. 3D Drop Shadow"),
+            ("StopMotionMasterGroup", "6. Stop-Motion and Master Transform"),
+            ("AdvancedGroup", "7. Advanced"),
+        ],
+    )
+    self.assertEqual(
+        [spec.control_id for spec in groups[-1][2]],
+        ["TearDetail", "TextureScale", "CreaseScale", "RandomSeed"],
+    )
+    # Each technical control appears exactly once, only in Advanced.
+    all_ids = [spec.control_id for _, _, specs in groups for spec in specs]
+    self.assertLen(all_ids, len(set(all_ids)))
+
+    text = fusion_templates.build_effect_setting()
+    self.assertIn("\t\t\t\tAdvancedGroup = Input { Value = 0, },\n", text)
+    user_controls = text[text.index("UserControls = ordered()") :]
+    label_ids = re.findall(
+        r"^\t{4}(\w+) = \{\n(?:\t{5}.*\n)*?"
+        r'\t{5}INPID_InputControl = "LabelControl"',
+        user_controls,
+        flags=re.MULTILINE,
+    )
+    self.assertEqual(label_ids, [group_id for group_id, _, _ in groups])
+    advanced = user_controls[user_controls.index("\t\t\t\tAdvancedGroup = {") :]
+    self.assertIn("INP_Default = 0,", advanced.split("\t\t\t\t},", 1)[0])
+    self.assertIn("LBLC_DropDownButton = true,", advanced)
 
 
 class PapercraftReleaseTest(absltest.TestCase):

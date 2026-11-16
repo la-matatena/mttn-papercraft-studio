@@ -255,6 +255,11 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
   frame width; angles are degrees; durations are frames. The Edit effect
   always uses the clip it is applied to, so there is no media-source picker.
 
+  The layout mirrors the OpenFX Paper Cutout FX Inspector: six numbered look
+  sections, then a collapsed "7. Advanced" section with the technical
+  texture controls. The macro has no intro/outro animation controls; the
+  cutout always renders in its resting (fully open) state.
+
   Returns:
     Ordered `(group_id, group_title, controls)` tuples. Group IDs and control
     IDs are referenced by expressions and must stay stable.
@@ -424,15 +429,6 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
                   max_allowed=120.0,
               ),
               ControlSpec(
-                  "TearDetail",
-                  "Tear Fiber Detail",
-                  default=6.0,
-                  min_scale=1.0,
-                  max_scale=10.0,
-                  min_allowed=1.0,
-                  max_allowed=10.0,
-              ),
-              ControlSpec(
                   "EdgeBoilAmount",
                   "Edge Boil Speed",
                   default=0.18,
@@ -484,16 +480,6 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
                   max_allowed=1.0,
               ),
               ControlSpec(
-                  "TextureScale",
-                  "Grain Scale",
-                  default=1.0,
-                  min_scale=0.2,
-                  max_scale=3.0,
-                  min_allowed=0.1,
-                  max_allowed=10.0,
-                  center=1.0,
-              ),
-              ControlSpec(
                   "CreaseStrength",
                   "Fold Crease Strength",
                   default=0.42,
@@ -501,15 +487,6 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
                   max_scale=1.0,
                   min_allowed=0.0,
                   max_allowed=1.0,
-              ),
-              ControlSpec(
-                  "CreaseScale",
-                  "Crease Scale",
-                  default=3.2,
-                  min_scale=0.8,
-                  max_scale=12.0,
-                  min_allowed=0.2,
-                  max_allowed=30.0,
               ),
               ControlSpec(
                   "MediaTextureOverlay",
@@ -529,117 +506,11 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
                   min_allowed=0.0,
                   max_allowed=4.0,
               ),
-              ControlSpec(
-                  "RandomSeed",
-                  "Texture Seed",
-                  default=7.0,
-                  min_scale=0.0,
-                  max_scale=100.0,
-                  min_allowed=0.0,
-                  max_allowed=1000.0,
-              ),
-          ],
-      ),
-      (
-          "TransitionGroup",
-          "5. Intro and Outro Paper Transitions",
-          [
-              ControlSpec(
-                  control_id="IntroStyle",
-                  label="Intro Style",
-                  input_control="ComboControl",
-                  default=0,
-                  min_scale=0,
-                  max_scale=4,
-                  min_allowed=0,
-                  max_allowed=4,
-                  integer=True,
-                  combo_options=(
-                      "None",
-                      "Paper Unfold (3D)",
-                      "Crumple Ball Unpack",
-                      "Paper Airplane Glide",
-                      "Flat Cutout Pop",
-                  ),
-              ),
-              ControlSpec(
-                  "IntroFrames",
-                  "Intro Duration (Frames)",
-                  default=14,
-                  min_scale=0,
-                  max_scale=60,
-                  min_allowed=0,
-                  max_allowed=240,
-                  integer=True,
-              ),
-              ControlSpec(
-                  control_id="OutroStyle",
-                  label="Outro Style",
-                  input_control="ComboControl",
-                  default=0,
-                  min_scale=0,
-                  max_scale=4,
-                  min_allowed=0,
-                  max_allowed=4,
-                  integer=True,
-                  combo_options=(
-                      "None",
-                      "Paper Unfold (3D)",
-                      "Crumple Ball Pack",
-                      "Paper Airplane Glide",
-                      "Flat Cutout Pop",
-                  ),
-              ),
-              ControlSpec(
-                  "OutroFrames",
-                  "Outro Duration (Frames)",
-                  default=14,
-                  min_scale=0,
-                  max_scale=60,
-                  min_allowed=0,
-                  max_allowed=240,
-                  integer=True,
-              ),
-              ControlSpec(
-                  "TransitionAngle",
-                  "Transition Angle",
-                  default=-22.0,
-                  min_scale=-180.0,
-                  max_scale=180.0,
-                  center=0.0,
-              ),
-              ControlSpec(
-                  "TransitionDistance",
-                  "Glide Distance",
-                  default=0.65,
-                  min_scale=0.0,
-                  max_scale=1.5,
-                  min_allowed=0.0,
-                  max_allowed=3.0,
-              ),
-              ControlSpec(
-                  "TransitionMirrorH",
-                  "Mirror Transition H",
-                  input_control="CheckboxControl",
-                  default=0,
-                  min_allowed=0,
-                  max_allowed=1,
-                  integer=True,
-              ),
-              ControlSpec(
-                  "TransitionMirrorV",
-                  "Mirror Transition V",
-                  input_control="CheckboxControl",
-                  default=0,
-                  min_allowed=0,
-                  max_allowed=1,
-                  integer=True,
-              ),
           ],
       ),
       (
           "ShadowGroup",
-          "6. 3D Drop Shadow",
+          "5. 3D Drop Shadow",
           [
               ControlSpec(
                   "ShadowStrength",
@@ -680,7 +551,7 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
       ),
       (
           "StopMotionMasterGroup",
-          "7. Stop-Motion and Master Transform",
+          "6. Stop-Motion and Master Transform",
           [
               ControlSpec(
                   "EnableStopMotion",
@@ -691,29 +562,34 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
                   max_allowed=1,
                   integer=True,
               ),
+              # A new pose every 6 frames: a 4 fps look on a 24 fps timeline.
               ControlSpec(
                   "StopMotionHoldFrames",
                   "Hold Frames (Step)",
-                  default=3,
+                  default=6,
                   min_scale=1,
                   max_scale=12,
                   min_allowed=1,
                   max_allowed=30,
                   integer=True,
               ),
+              # Transform Center offset in normalized frame units (0.001 =
+              # 0.1% of the frame). OpenFX `jitterPos` uses the same value
+              # as a fraction of the shorter side; both defaults stay 1:1.
               ControlSpec(
                   "JitterPosition",
                   "Position Jitter",
-                  default=0.0025,
+                  default=0.001,
                   min_scale=0.0,
                   max_scale=0.03,
                   min_allowed=0.0,
                   max_allowed=0.1,
               ),
+              # Degrees, like the OpenFX `jitterRot` parameter.
               ControlSpec(
                   "JitterRotation",
                   "Rotation Jitter",
-                  default=0.75,
+                  default=0.3,
                   min_scale=0.0,
                   max_scale=8.0,
                   min_allowed=0.0,
@@ -773,6 +649,53 @@ def _core_cutout_control_groups() -> list[tuple[str, str, list[ControlSpec]]]:
               ),
           ],
       ),
+      # Technical controls, collapsed by default (not in `default_open`) and
+      # kept last, mirroring the OpenFX "Advanced" group. The Edit effect has
+      # no source-mode or premultiplied-alpha controls, so only the texture
+      # tuning knobs live here.
+      (
+          "AdvancedGroup",
+          "7. Advanced",
+          [
+              ControlSpec(
+                  "TearDetail",
+                  "Tear Fiber Detail",
+                  default=6.0,
+                  min_scale=1.0,
+                  max_scale=10.0,
+                  min_allowed=1.0,
+                  max_allowed=10.0,
+              ),
+              ControlSpec(
+                  "TextureScale",
+                  "Grain Scale",
+                  default=1.0,
+                  min_scale=0.2,
+                  max_scale=3.0,
+                  min_allowed=0.1,
+                  max_allowed=10.0,
+                  center=1.0,
+              ),
+              ControlSpec(
+                  "CreaseScale",
+                  "Crease Scale",
+                  default=3.2,
+                  min_scale=0.8,
+                  max_scale=12.0,
+                  min_allowed=0.2,
+                  max_allowed=30.0,
+              ),
+              ControlSpec(
+                  "RandomSeed",
+                  "Texture Seed",
+                  default=7.0,
+                  min_scale=0.0,
+                  max_scale=100.0,
+                  min_allowed=0.0,
+                  max_allowed=1000.0,
+              ),
+          ],
+      ),
   ])
   return groups
 
@@ -789,8 +712,9 @@ def _stepped_time_expr(macro_name: str) -> str:
     iif(M.EnableStopMotion > 0.5,
         comp.RenderStart + floor((t - comp.RenderStart) / h) * h, t)
 
-  so time advances in steps of `h` frames (a "shot on twos/threes" look) and
-  never leaves the clip range. `max(1, ...)` avoids division by zero.
+  so time advances in steps of `h` frames (a "shot on twos/threes" look; the
+  default of 6 gives 4 fps on a 24 fps timeline) and never leaves the clip
+  range. `max(1, ...)` avoids division by zero.
 
   Args:
     macro_name: Name of the enclosing Fusion MacroOperator (`M` above).
@@ -804,73 +728,6 @@ def _stepped_time_expr(macro_name: str) -> str:
       f"iif({macro_name}.EnableStopMotion > 0.5, "
       f"comp.RenderStart + floor(({clamped_t} - comp.RenderStart) / {hold}) * "
       f"{hold}, {clamped_t})"
-  )
-
-
-def _trans_progress_exprs(macro_name: str) -> tuple[str, str]:
-  """Returns (in_prog, out_prog) Fusion SimpleExpressions in [0, 1].
-
-  `in_prog` ramps 0 -> 1 over the first `IntroFrames` frames after
-  `comp.RenderStart`; `out_prog` ramps 1 -> 0 over the last `OutroFrames`
-  frames before `comp.RenderEnd`. Each is a constant 1 when its style is
-  "None" (combo index 0) or its duration is 0, so a disabled side never
-  hides the cutout. `max(1, frames)` guards against division by zero.
-
-  Args:
-    macro_name: Name of the enclosing Fusion MacroOperator.
-
-  Returns:
-    `(in_prog, out_prog)` SimpleExpression strings.
-  """
-  in_prog = (
-      f"iif({macro_name}.IntroStyle > 0.5 and {macro_name}.IntroFrames > 0, "
-      "min(1, max(0, (time - comp.RenderStart) / "
-      f"max(1, {macro_name}.IntroFrames))), 1)"
-  )
-  out_prog = (
-      f"iif({macro_name}.OutroStyle > 0.5 and {macro_name}.OutroFrames > 0, "
-      "min(1, max(0, (comp.RenderEnd - time) / "
-      f"max(1, {macro_name}.OutroFrames))), 1)"
-  )
-  return in_prog, out_prog
-
-
-def _anim_progress_expr(macro_name: str) -> str:
-  """Returns normalized 0..1 visibility multiplier for Intro/Outro transitions.
-
-  1.0 means fully open/flat; 0.0 means fully folded/collapsed off-screen.
-  Taking `min(in_prog, out_prog)` lets intro and outro windows overlap on
-  short clips without the value ever exceeding either ramp.
-
-  Args:
-    macro_name: Name of the enclosing Fusion MacroOperator.
-
-  Returns:
-    Fusion SimpleExpression string computing normalized 0..1 visibility.
-  """
-  in_prog, out_prog = _trans_progress_exprs(macro_name)
-  return f"min({in_prog}, {out_prog})"
-
-
-def _active_trans_style_expr(macro_name: str) -> str:
-  """Selects IntroStyle when the intro ramp dominates, else OutroStyle.
-
-  "Dominates" means the intro is enabled and `in_prog <= out_prog`, i.e. the
-  intro ramp is the one `min()` picked in `_anim_progress_expr`. Ties go to
-  the intro. With `IntroFrames == 0` the intro is never chosen, even at
-  `comp.RenderStart` (see `test_active_trans_style_matches_anim_progress`).
-
-  Args:
-    macro_name: Name of the enclosing Fusion MacroOperator.
-
-  Returns:
-    SimpleExpression evaluating to a style combo index (0..4, as a float).
-  """
-  in_prog, out_prog = _trans_progress_exprs(macro_name)
-  return (
-      f"iif({macro_name}.IntroStyle > 0.5 and {macro_name}.IntroFrames > 0 "
-      f"and ({in_prog}) <= ({out_prog}), "
-      f"{macro_name}.IntroStyle, {macro_name}.OutroStyle)"
   )
 
 
@@ -1134,8 +991,7 @@ def _core_paper_texture_nodes(macro_name: str, step_t: str) -> list[str]:
   * `PaperSheetWithGrain` and `PaperSheetTextured` multiply the fibers
     (`FiberStrength`) and then the creases (`CreaseStrength`) over the tint.
 
-  `PaperCreaseNoise` is also reused downstream by `MediaPaperOverlay` and
-  `CrumpleDisplace`.
+  `PaperCreaseNoise` is also reused downstream by `MediaPaperOverlay`.
 
   Args:
     macro_name: Name of the enclosing Fusion MacroOperator.
@@ -1291,138 +1147,15 @@ def _core_composite_nodes(macro_name: str) -> list[str]:
   ]
 
 
-def _core_transition_nodes(macro_name: str) -> list[str]:
-  """Builds the intro/outro animation nodes.
-
-  * `CrumpleDisplace` (Displace driven by the crease noise) wrinkles the
-    cutout for Crumple Ball and, lightly, for Paper Unfold.
-  * `FoldDVE` (3D DVE) rotates around X/Y for Paper Unfold and Airplane
-    Glide and pushes back in Z for Crumple Ball.
-  * `GlideTransform` (Transform) slides, scales, and spins the cutout in.
-
-  All amounts fade to 0 as the eased progress reaches 1, so between the
-  intro and outro windows these nodes are identity operations.
-
-  Args:
-    macro_name: Name of the enclosing Fusion MacroOperator.
-
-  Returns:
-    Rendered node definitions, in graph order.
-  """
-  p_expr = _anim_progress_expr(macro_name)
-  style_expr = _active_trans_style_expr(macro_name)
-
-  # Precomputed signed multipliers for horizontal/vertical transition mirror.
-  # mh/mv are -1 or 1 (multiply a direction).
-  mh = f"iif({macro_name}.TransitionMirrorH > 0.5, -1, 1)"
-  mv = f"iif({macro_name}.TransitionMirrorV > 0.5, -1, 1)"
-
-  # Transition curve (smooth ease-out cubic: 1 - (1 - p)^3).
-  # inv_p is the remaining "closedness" (1 at the hidden end, 0 when flat), so
-  # every style amount below is written as `amount * inv_p` and fades to 0.
-  ease_p = f"(1 - pow(1 - ({p_expr}), 3))"
-  inv_p = f"(1 - ({ease_p}))"
-
-  # 1 = Paper Unfold (3D), 2 = Crumple Ball, 3 = Airplane Glide, 4 = Flat Pop.
-  # `floor(style + 0.5) == k` rounds the float combo index before comparing.
-  # Amounts: Displace refraction (fraction of frame), DVE rotations in
-  # degrees, DVE ZMove in scene units, Transform Center in normalized 0..1.
-  crumple_str_expr = (
-      f"iif(floor({style_expr} + 0.5) == 2, 0.22 * ({inv_p}), "
-      f"iif(floor({style_expr} + 0.5) == 1, 0.045 * ({inv_p}), 0))"
-  )
-  dve_yrot_expr = (
-      f"iif(floor({style_expr} + 0.5) == 1, "
-      f"({mh}) * 88 * ({inv_p}), "
-      f"iif(floor({style_expr} + 0.5) == 3, "
-      f"({mh}) * 35 * ({inv_p}), 0))"
-  )
-  dve_xrot_expr = (
-      f"iif(floor({style_expr} + 0.5) == 1, "
-      f"({mv}) * 24 * ({inv_p}), "
-      f"iif(floor({style_expr} + 0.5) == 3, "
-      f"({mv}) * (-28) * ({inv_p}), 0))"
-  )
-  dve_zmove_expr = f"iif(floor({style_expr} + 0.5) == 2, 1.6 * ({inv_p}), 0)"
-  # Glide (3) travels TransitionDistance along TransitionAngle (degrees ->
-  # radians via pi / 180); Flat Pop (4) drops in from 0.35 below center.
-  glide_center_expr = (
-      "Point("
-      f"0.5 + iif(floor({style_expr} + 0.5) == 3, "
-      f"({mh}) * {macro_name}.TransitionDistance * ({inv_p}) * "
-      f"cos({macro_name}.TransitionAngle * pi / 180), 0), "
-      f"0.5 + iif(floor({style_expr} + 0.5) == 3, "
-      f"({mv}) * {macro_name}.TransitionDistance * ({inv_p}) * "
-      f"sin({macro_name}.TransitionAngle * pi / 180), "
-      f"iif(floor({style_expr} + 0.5) == 4, "
-      f"({mv}) * (-0.35) * ({inv_p}), 0))"
-      ")"
-  )
-  # Scale-in per style. The max(0.001/0.05, ...) floors keep Transform.Size
-  # strictly positive so the cutout never collapses to a zero-size image.
-  glide_size_expr = (
-      f"iif(floor({style_expr} + 0.5) == 4, "
-      f"max(0.001, {ease_p}), "
-      f"iif(floor({style_expr} + 0.5) == 2, "
-      f"max(0.05, 0.25 + 0.75 * ({ease_p})), "
-      f"iif(floor({style_expr} + 0.5) == 1, "
-      f"max(0.05, 0.4 + 0.6 * ({ease_p})), 1)))"
-  )
-  glide_angle_expr = (
-      f"iif(floor({style_expr} + 0.5) == 3, "
-      f"({mh}) * ({macro_name}.TransitionAngle * 0.4) * ({inv_p}), "
-      f"iif(floor({style_expr} + 0.5) == 2, "
-      f"({mh}) * 35 * ({inv_p}), 0))"
-  )
-
-  return [
-      _node(
-          "CrumpleDisplace",
-          "Displace",
-          [
-              _value("Type", "1"),
-              _value("XOffset", "-0.5"),
-              _value("YOffset", "-0.5"),
-              _expr_block("XRefraction", "0.0", crumple_str_expr),
-              _expr_block("YRefraction", "0.0", crumple_str_expr),
-              _link_block("Input", "MediaPaperOverlay"),
-              _link_block("Foreground", "PaperCreaseNoise"),
-          ],
-          (1320, 82.5),
-      ),
-      _node(
-          "FoldDVE",
-          "DVE",
-          [
-              _expr_block("XRotation", "0.0", dve_xrot_expr),
-              _expr_block("YRotation", "0.0", dve_yrot_expr),
-              _expr_block("ZMove", "0.0", dve_zmove_expr),
-              _link_block("Input", "CrumpleDisplace"),
-          ],
-          (1430, 82.5),
-      ),
-      _node(
-          "GlideTransform",
-          "Transform",
-          [
-              _expr_block("Center", "{ 0.5, 0.5 }", glide_center_expr),
-              _expr_block("Size", "1.0", glide_size_expr),
-              _expr_block("Angle", "0.0", glide_angle_expr),
-              _link_block("Input", "FoldDVE"),
-          ],
-          (1540, 82.5),
-      ),
-  ]
-
-
 def _core_shadow_nodes(macro_name: str) -> list[str]:
-  """Builds the drop shadow under the animated cutout.
+  """Builds the drop shadow under the cutout.
 
   `CutoutShadow` (Shadow) offsets a soft copy of the alpha by
   `ShadowDistance` (normalized frame units) along `ShadowAngle` (degrees,
   converted with `pi / 180`) around the 0.5, 0.5 rest point, softened by
-  `ShadowBlur` and faded by `ShadowStrength`. It sits after the transition
-  nodes so the shadow follows the folding/gliding cutout.
+  `ShadowBlur` and faded by `ShadowStrength`. It reads the finished cutout
+  (`MediaPaperOverlay`) and sits before the stop-motion jitter and master
+  transform, so the shadow moves with the paper.
 
   Args:
     macro_name: Name of the enclosing Fusion MacroOperator.
@@ -1445,7 +1178,7 @@ def _core_shadow_nodes(macro_name: str) -> list[str]:
               ),
               _expr_block("Softness", "0.018", f"{macro_name}.ShadowBlur"),
               _expr_block("Alpha", "0.65", f"{macro_name}.ShadowStrength"),
-              _link_block("Input", "GlideTransform"),
+              _link_block("Input", "MediaPaperOverlay"),
           ],
           (1650, 82.5),
       ),
@@ -1554,14 +1287,15 @@ def _render_core_cutout_nodes(
     PaperBaseColor x PaperFiberNoise x PaperCreaseNoise (Multiply merges) ->
       PaperSheetTextured, masked by the border matte -> PaperCutoutShape
     PaperCutoutShape + MediaClipTransform -> CompositeSubjectOnPaper ->
-      MediaPaperOverlay (crease multiply) -> CrumpleDisplace -> FoldDVE ->
-      GlideTransform -> CutoutShadow -> StopMotionJitter -> MasterTransform
-      -> PosterizeTime (TimeStretcher; the macro's MainOutput1)
+      MediaPaperOverlay (crease multiply) -> CutoutShadow ->
+      StopMotionJitter -> MasterTransform -> PosterizeTime (TimeStretcher;
+      the macro's MainOutput1)
 
-  CrumpleDisplace, FoldDVE, and GlideTransform implement the intro/outro
-  styles; all other nodes are steady-state look controls. Each stage is
-  built by one `_core_*_nodes` helper; the emission order below is the
-  order the nodes appear in the `.setting` file and is pinned by
+  Every node is a steady-state look control; the macro has no intro/outro
+  animation (the former CrumpleDisplace/FoldDVE/GlideTransform nodes were
+  identity operations with both styles set to None and were removed). Each
+  stage is built by one `_core_*_nodes` helper; the emission order below is
+  the order the nodes appear in the `.setting` file and is pinned by
   `test_generated_settings_sha256_pinned`.
 
   Args:
@@ -1580,7 +1314,6 @@ def _render_core_cutout_nodes(
       *_core_border_nodes(macro_name, step_t),
       *_core_paper_texture_nodes(macro_name, step_t),
       *_core_composite_nodes(macro_name),
-      *_core_transition_nodes(macro_name),
       *_core_shadow_nodes(macro_name),
       *_core_finishing_nodes(macro_name, step_t),
   ]
@@ -1602,7 +1335,7 @@ def build_effect_setting() -> str:
   """
   macro_name = "PaperCutoutFX"
   groups = _core_cutout_control_groups()
-  default_open = ("MediaSourceGroup", "PaperBorderGroup", "TransitionGroup")
+  default_open = ("MediaSourceGroup", "PaperBorderGroup")
   group_defaults = _render_group_defaults(groups, default_open)
   user_controls = _render_user_controls(groups, default_open)
   core_nodes = _render_core_cutout_nodes(macro_name, "SourceClipInput")
