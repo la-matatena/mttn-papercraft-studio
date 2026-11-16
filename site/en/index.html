@@ -37,7 +37,7 @@
         <div>
           <span class="eyebrow">v3.1 · OpenFX 1.4 · C++17 · MIT</span>
           <h1>Handmade paper looks, right on the Edit page.</h1>
-          <p class="lead">Organic stop-motion cutouts, torn cardstock borders, paper intro and outro animations, a paper fold-and-unfold transition, and paper Foley sounds for DaVinci Resolve 20 and 21, without opening Fusion and without watermarks.</p>
+          <p class="lead">Organic stop-motion cutouts, torn cardstock borders, a paper fold-and-unfold transition, and paper Foley sounds for DaVinci Resolve 20 and 21, without opening Fusion and without watermarks.</p>
           <div class="actions">
             <a class="btn primary" href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">Download the latest release</a>
             <a class="btn" href="https://github.com/la-matatena/mttn-papercraft-studio">View on GitHub</a>
@@ -96,7 +96,7 @@
         <div class="grid">
           <article class="card"><span class="icon" aria-hidden="true">✂️</span><h3>Paper Cutout FX</h3><p>Turns any clip, title, transparent PNG, or green-screen shot (with a built-in keyer) into an animated paper cutout with a torn cardstock border.</p></article>
           <article class="card"><span class="icon" aria-hidden="true">🗞️</span><h3>Paper Fold &amp; Unfold</h3><p>A transition that unfolds a clip from a folded paper packet or folds it away, with the paper back, staged creases, and a shadow.</p></article>
-          <article class="card"><span class="icon" aria-hidden="true">📄</span><h3>Paper intros and outros</h3><p>Animates the start and end of the clip with Paper Unfold (3D) real folds, Crumple Ball, Paper Airplane Glide, or Flat Cutout Pop.</p></article>
+          <article class="card"><span class="icon" aria-hidden="true">📄</span><h3>Cutouts that fold in and out</h3><p>To animate a cutout in or out, place Paper Fold &amp; Unfold at the start or end of the clip: it detects the cutout and keeps a single torn border.</p></article>
           <article class="card"><span class="icon" aria-hidden="true">🎞️</span><h3>Tactile stop-motion</h3><p>Held frames, position and rotation jitter, and a 3D drop shadow for a handmade finish.</p></article>
         </div>
       </div>
@@ -113,13 +113,13 @@
           <table style="--label-1: 'Section'; --label-2: 'What it does';">
             <thead><tr><th scope="col">Section</th><th scope="col">What it does</th></tr></thead>
             <tbody>
-              <tr><th scope="row">1. Media Source and Placement</th><td>Switches between the timeline clip and the built-in sticker, and frames artwork inside the cutout.</td></tr>
-              <tr><th scope="row">2. Green Screen and Matte Cleanup</th><td>Extracts the subject from solid green or blue backdrops with spill suppression.</td></tr>
+              <tr><th scope="row">1. Media Source &amp; Placement</th><td>Frames the clip artwork inside the cutout with scale, position, and rotation.</td></tr>
+              <tr><th scope="row">2. Green Screen &amp; Matte Cleanup</th><td>Extracts the subject from solid green or blue backdrops with spill suppression.</td></tr>
               <tr><th scope="row">3. Torn Paper Cutout Border</th><td>Expands a procedural ragged cardstock collar around any alpha shape.</td></tr>
-              <tr><th scope="row">4. Paper Grain and Fold Creases</th><td>Adds multi-octave fiber grain and ridged fold creases.</td></tr>
-              <tr><th scope="row">5. Intro and Outro Paper Animations</th><td>Paper Unfold (3D) real folds, Crumple Ball, Paper Airplane Glide, or Flat Cutout Pop entrances and exits.</td></tr>
-              <tr><th scope="row">6. 3D Drop Shadow</th><td>Soft directional depth shadows behind the cutout.</td></tr>
-              <tr><th scope="row">7. Stop-Motion and Master Transform</th><td>Quantizes motion into stepped holds and adds subtle tactile wobble.</td></tr>
+              <tr><th scope="row">4. Paper Grain &amp; Fold Creases</th><td>Adds multi-octave fiber grain and ridged fold creases.</td></tr>
+              <tr><th scope="row">5. 3D Drop Shadow</th><td>Soft directional depth shadows behind the cutout.</td></tr>
+              <tr><th scope="row">6. Stop-Motion &amp; Master Transform</th><td>Quantizes motion into stepped holds (every 6 frames by default: a 4 fps look at 24 fps) and adds subtle tactile wobble.</td></tr>
+              <tr><th scope="row">7. Advanced</th><td>Closed by default: source mode (clip or built-in sticker), premultiplied alpha, fiber detail, grain and crease scale, and texture seed.</td></tr>
             </tbody>
           </table>
         </div>
@@ -144,10 +144,10 @@
           <p>Real-world stereo 48 kHz 24-bit WAV recordings in the public domain (<code>CC0</code> / <code>Public Domain</code>). Import them into a Power Bin to reuse them across projects.</p>
         </div>
         <div class="sfx">
-          <article class="card"><h3>01_Paper_Unfold.wav</h3><p>Crisp folded sheet spread for the Paper Fold &amp; Unfold transition and Paper Unfold (3D) intros and outros.</p></article>
-          <article class="card"><h3>02_Paper_Crumple.wav</h3><p>Organic stereo paper-ball crumple for Crumple Ball animations.</p></article>
-          <article class="card"><h3>03_Paper_Glide_Flip.wav</h3><p>Fast page flip and air swoosh for Paper Airplane Glide and quick cuts.</p></article>
-          <article class="card"><h3>04_Paper_Rip_Tear.wav</h3><p>Clean dry fiber tear for torn cardstock borders and Flat Cutout Pop.</p></article>
+          <article class="card"><h3>01_Paper_Unfold.wav</h3><p>Crisp folded sheet spread for the Paper Fold &amp; Unfold transition.</p></article>
+          <article class="card"><h3>02_Paper_Crumple.wav</h3><p>Organic stereo paper-ball crumple for crumpled-paper gags and textures.</p></article>
+          <article class="card"><h3>03_Paper_Glide_Flip.wav</h3><p>Fast page flip and air swoosh for quick cuts and page turns.</p></article>
+          <article class="card"><h3>04_Paper_Rip_Tear.wav</h3><p>Clean dry fiber tear for torn cardstock borders and cutouts that pop into frame.</p></article>
         </div>
       </div>
     </section>

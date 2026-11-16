@@ -24,7 +24,7 @@ Cloning `la-matatena/mttn-papercraft-studio` provides every source file, test, h
 | `docs/developer_guide.md` | Build, standalone compilation, test execution, and extension guide |
 | `docs/images/` | Preview of the **Paper Fold & Unfold** transition rendered by the C++ kernel |
 | `site/` | Bilingual GitHub Pages landing page (`site/index.html` in Spanish, `site/en/index.html` in English) |
-| `ofx/papercraft_kernel.h` and `ofx/papercraft_kernel.cc` | Platform-independent C++17 paper cutout, SDF border, intro and outro animation, fold and unfold renderer, and compositing kernels |
+| `ofx/papercraft_kernel.h` and `ofx/papercraft_kernel.cc` | Platform-independent C++17 paper cutout, SDF border, stop-motion, fold and unfold renderer, and compositing kernels |
 | `ofx/papercraft_ofx_plugin.cc` | OpenFX 1.4 registration of the filter and transition, parameters, suites, and multi-thread dispatch |
 | `ofx/papercraft_ofx_test.cc` | GoogleTest OpenFX mock host and `dlopen` dynamic plugin test suite |
 | `ofx/papercraft_kernel_internal.h` and `ofx/papercraft_kernel_test.cc` | Internal kernel helpers exposed for tests (hidden from the plugin exports) and the direct kernel unit test suite |
@@ -164,7 +164,7 @@ When modifying or extending the plugin, update matching code and tests across ea
 5. Add a targeted GoogleTest regression test in `ofx/papercraft_ofx_test.cc`.
 
 > [!NOTE]
-> Keep existing parameter identifiers stable, even when their names no longer match their purpose. For example, the intro and outro group is still named `TransitionGroup` and the **Glide Angle** control is still `transitionAngle`, so projects saved with earlier versions keep their values.
+> Keep existing parameter identifiers stable, even when their names no longer match their purpose or the control moves to another group. For example, **Source Mode** is still `sourceMode` after moving into the `AdvancedGroup` page group. When you retire a control, keep its ID defined but hidden (`kOfxParamPropSecret = 1`, outside any visible group) and ignore its value in the kernel, as Paper Cutout FX does for the removed intro and outro controls (`introStyle`, `introFrames`, `outroStyle`, `outroFrames`, `transitionAngle`, `glideDistance`, `mirrorTransH`, `mirrorTransV`), so projects saved with earlier versions still open without errors.
 
 ### Add a fold pattern
 

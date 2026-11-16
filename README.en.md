@@ -10,7 +10,7 @@
 [![Platform: macOS & Linux](https://img.shields.io/badge/platform-macOS%20Universal%20%7C%20Linux%20x86__64-6a4fb3.svg)](docs/developer_guide.md)
 [![Brand: La Matatena](https://img.shields.io/badge/La%20Matatena-MTTN-8367c7.svg)](https://github.com/la-matatena)
 
-**MTTN PaperCraft Studio** (by **[La Matatena](https://la-matatena.com)** · [@la-matatena](https://github.com/la-matatena)) adds organic stop-motion paper cutouts, torn cardstock borders, paper intro and outro animations, a paper fold-and-unfold transition, and 24-bit stereo paper Foley sound effects directly on the DaVinci Resolve 20 and 21 Edit pages without opening Fusion. Both DaVinci Resolve Free and DaVinci Resolve Studio run the native OpenFX 1.4 C++17 plugin without watermarks.
+**MTTN PaperCraft Studio** (by **[La Matatena](https://la-matatena.com)** · [@la-matatena](https://github.com/la-matatena)) adds organic stop-motion paper cutouts, torn cardstock borders, a paper fold-and-unfold transition, and 24-bit stereo paper Foley sound effects directly on the DaVinci Resolve 20 and 21 Edit pages without opening Fusion. Both DaVinci Resolve Free and DaVinci Resolve Studio run the native OpenFX 1.4 C++17 plugin without watermarks.
 
 ![Paper Fold & Unfold: a clip unfolds from a folded paper packet (top) and a PNG logo unfolds over transparency (bottom)](docs/images/paper_fold_unfold.png)
 
@@ -106,10 +106,10 @@ The transition mimics a printed sheet unfolding in stop-motion: the clip arrives
 | Between two full-frame clips | The incoming clip unfolds over the outgoing one |
 | Between two clips with transparency (PNGs, titles) | The outgoing clip folds away, then the incoming clip unfolds |
 
-To force a behavior, choose **Unfold Incoming Clip**, **Fold Outgoing Clip**, or **Fold Out, Then Unfold In**. The last one works like a paper dip to black: the outgoing clip folds away, the frame is briefly empty around the midpoint (black on `V1`, the lower tracks on `V2+`), and then the incoming clip unfolds. Upper tracks (`V2+`) keep their transparency, so a PNG logo can unfold over the video on the track below. You can also apply **Paper Cutout FX** and **Paper Fold & Unfold** to the same clip: **Paper Cutout FX** defaults **Intro Style** and **Outro Style** to `None` so it won't fight timeline transitions, and **Paper Fold & Unfold** automatically detects the cutout to keep a single torn border and hand its 3D shadow directly into the cutout's resting shadow. The transition length on the timeline sets the speed, and **Stop-Motion Steps** sets how many distinct poses you see.
+To force a behavior, choose **Unfold Incoming Clip**, **Fold Outgoing Clip**, or **Fold Out, Then Unfold In**. The last one works like a paper dip to black: the outgoing clip folds away, the frame is briefly empty around the midpoint (black on `V1`, the lower tracks on `V2+`), and then the incoming clip unfolds. Upper tracks (`V2+`) keep their transparency, so a PNG logo can unfold over the video on the track below. To animate a cutout in or out, combine **Paper Cutout FX** with **Paper Fold & Unfold** at the start or end of the clip: **Paper Fold & Unfold** automatically detects the cutout to keep a single torn border and hand its 3D shadow directly into the cutout's resting shadow. The transition length on the timeline sets the speed, and **Stop-Motion Steps** sets how many distinct poses you see.
 
 > [!NOTE]
-> Version 3.0 removed the Paper Cutout FX generator and the **Paper Unfold**, **Paper Crumple**, and **Paper Rip Wipe** transitions. If an older project used them, DaVinci Resolve shows them as unavailable; remove them from the timeline. Version 3.1 adds **Paper Fold & Unfold** as a new transition (with a new identifier), and the **Paper Unfold (3D)** style of Paper Cutout FX now folds the cutout along real creases.
+> Version 3.0 removed the Paper Cutout FX generator and the **Paper Unfold**, **Paper Crumple**, and **Paper Rip Wipe** transitions. If an older project used them, DaVinci Resolve shows them as unavailable; remove them from the timeline. Version 3.1 adds **Paper Fold & Unfold** as a new transition (with a new identifier). Paper Cutout FX no longer has built-in intro and outro animations: projects created with earlier versions open normally, but the intro and outro settings (**Intro Style**, **Outro Style**) saved in them no longer apply. Use **Paper Fold & Unfold** instead.
 
 ## Inspector controls reference
 
@@ -117,13 +117,15 @@ To force a behavior, choose **Unfold Incoming Clip**, **Fold Outgoing Clip**, or
 
 | Section | Key controls | Behavior |
 | :--- | :--- | :--- |
-| **1. Media Source and Placement** | **Source Mode**, **Premultiplied Source Alpha**, **Media Scale**, **Media Position**, **Media Rotation** | Switches between timeline clip input and built-in La Matatena sticker, and frames artwork inside the cutout |
-| **2. Green Screen and Matte Cleanup** | **Enable Green Screen Key**, **Screen Color**, **Key Gain**, **Key Balance**, **Edge Choke (px)** | Extracts subject matte from solid green or blue backdrops with spill suppression |
-| **3. Torn Paper Cutout Border** | **Enable Paper Border**, **Border Width**, **Torn Edge Roughness**, **Tear Frequency**, **Tear Fiber Detail**, **Edge Boil Speed**, **Paper Cardstock Color** | Expands a procedural ragged cardstock collar around any extracted alpha shape |
-| **4. Paper Grain and Fold Creases** | **Paper Grain Strength**, **Grain Scale**, **Fold Crease Strength**, **Crease Scale**, **Media Texture Overlay**, **Texture Seed** | Adds multi-octave fiber grain and ridged fold creases |
-| **5. Intro and Outro Paper Animations** | **Intro Style**, **Intro Duration (Frames)**, **Outro Style**, **Outro Duration (Frames)**, **Glide Angle**, **Glide Distance**, **Mirror Animation H**, **Mirror Animation V** | Animates **Paper Unfold (3D)** (real creases with the paper back showing; **Glide Angle** also turns the fold direction), **Crumple Ball**, **Paper Airplane Glide**, or **Flat Cutout Pop** entrances and exits |
-| **6. 3D Drop Shadow** | **Shadow Opacity**, **Shadow Angle**, **Shadow Distance**, **Shadow Softness** | Casts soft directional depth shadows behind the rotating cutout |
-| **7. Stop-Motion and Master Transform** | **Enable Stop-Motion**, **Hold Frames (Step)**, **Position Jitter**, **Rotation Jitter**, **Master Position**, **Master Scale**, **Master Rotation**, **Flip Horizontal**, **Flip Vertical** | Quantizes frame motion into stepped holds and adds subtle frame-by-frame tactile wobble |
+| **1. Media Source & Placement** | **Media Scale**, **Media Position**, **Media Rotation** | Frames the timeline clip artwork inside the cutout |
+| **2. Green Screen & Matte Cleanup** | **Enable Green Screen Key**, **Screen Color**, **Key Gain**, **Key Balance**, **Edge Choke (px)** | Extracts subject matte from solid green or blue backdrops with spill suppression |
+| **3. Torn Paper Cutout Border** | **Enable Paper Border**, **Border Width**, **Torn Edge Roughness**, **Tear Frequency**, **Edge Boil Speed**, **Paper Cardstock Color** | Expands a procedural ragged cardstock collar around any extracted alpha shape |
+| **4. Paper Grain & Fold Creases** | **Paper Grain Strength**, **Fold Crease Strength**, **Media Texture Overlay** | Adds multi-octave fiber grain and ridged fold creases |
+| **5. 3D Drop Shadow** | **Shadow Opacity**, **Shadow Angle**, **Shadow Distance**, **Shadow Softness** | Casts soft directional depth shadows behind the rotating cutout |
+| **6. Stop-Motion & Master Transform** | **Enable Stop-Motion**, **Hold Frames (Step)**, **Position Jitter**, **Rotation Jitter**, **Master Position**, **Master Scale**, **Master Rotation**, **Flip Horizontal**, **Flip Vertical** | Quantizes frame motion into stepped holds (every 6 frames by default: a 4 fps look at 24 fps) and adds subtle frame-by-frame tactile wobble |
+| **7. Advanced** (closed by default) | **Source Mode**, **Premultiplied Source Alpha**, **Tear Fiber Detail**, **Grain Scale**, **Crease Scale**, **Texture Seed** | Technical controls: switches between the timeline clip and the built-in La Matatena sticker, fixes straight (non-premultiplied) alpha, and tunes fiber detail, grain and crease scale, and the texture seed |
+
+To animate a cutout in or out, place the **Paper Fold & Unfold** transition at the start or end of the clip.
 
 ### Paper Fold & Unfold
 
@@ -137,10 +139,10 @@ To force a behavior, choose **Unfold Incoming Clip**, **Fold Outgoing Clip**, or
 
 Import the `Paper_SFX/` directory into a DaVinci Resolve Power Bin to reuse the four real recorded 48 kHz, 24-bit stereo WAV files across projects (see authors and public-domain licenses in [`Paper_SFX/CREDITS.md`](Paper_SFX/CREDITS.md)):
 
-- `01_Paper_Unfold.wav`: Crisp folded sheet unfold for the **Paper Fold & Unfold** transition and **Paper Unfold (3D)** entrances and exits.
-- `02_Paper_Crumple.wav`: Organic stereo paper-ball crumple for **Crumple Ball** animations.
-- `03_Paper_Glide_Flip.wav`: Fast page flip and air swoosh for **Paper Airplane Glide** moves.
-- `04_Paper_Rip_Tear.wav`: Clean dry fiber tear for torn cardstock borders and **Flat Cutout Pop** accents.
+- `01_Paper_Unfold.wav`: Crisp folded sheet unfold for the **Paper Fold & Unfold** transition.
+- `02_Paper_Crumple.wav`: Organic stereo paper-ball crumple for crumpled-paper gags and textures.
+- `03_Paper_Glide_Flip.wav`: Fast page flip and air swoosh for quick cuts and page turns.
+- `04_Paper_Rip_Tear.wav`: Clean dry fiber tear for torn cardstock borders and cutouts that pop into frame.
 
 ## Optional legacy `.drfx` templates
 
@@ -153,7 +155,6 @@ Version 3.1 renders **Paper Cutout FX** about 30% faster than 3.0.0 and produces
 | Scenario | 3.0.0 | 3.1 |
 | :--- | ---: | ---: |
 | 1080p, cutout at rest | 9.8 ms | 7.0 ms |
-| 1080p, **Crumple Ball** intro | 21.5 ms | 15.1 ms |
 | 1080p, green screen without border | 9.0 ms | 6.8 ms |
 | 2160p (UHD), cutout at rest | 27.1 ms | 19.1 ms |
 
