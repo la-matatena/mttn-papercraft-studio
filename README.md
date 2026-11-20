@@ -122,6 +122,17 @@ El archivo validado `MTTN_PaperCraft_Studio.drfx` se incluye para quienes prefie
 
 ## Optimizar la fluidez de reproducción y renderizado
 
+La versión 3.0.1 renderiza alrededor de un 30 % más rápido que la 3.0.0 y produce exactamente la misma imagen, píxel por píxel. Tiempos por fotograma medidos en un Mac con Apple M4 Pro (14 núcleos):
+
+| Escenario | 3.0.0 | 3.0.1 |
+| :--- | ---: | ---: |
+| 1080p, recorte en reposo | 10.8 ms | 7.0 ms |
+| 1080p, entrada **Crumple Ball** | 22.5 ms | 14.7 ms |
+| 1080p, pantalla verde sin borde | 11.5 ms | 7.0 ms |
+| 2160p (UHD), recorte en reposo | 28.3 ms | 20.2 ms |
+
+Para mantener la reproducción fluida en proyectos pesados:
+
 - Cambia **Playback** > **Render Cache** a **Smart** o **User** una vez que hayas ajustado los parámetros del recorte.
 - Reduce temporalmente **Playback** > **Timeline Proxy Resolution** a **Half** o **Quarter** al ajustar los tiempos de las animaciones stop-motion.
 

@@ -1,8 +1,8 @@
 # PaperCraft Studio Pro developer and build guide
 
 This guide helps engineers build, test, package, compile standalone OpenFX
-bundles, and extend PaperCraft Studio Pro 3.0.0 inside Blaze or from the
-exported repository archive. Version 3.0.0 ships a single OpenFX filter,
+bundles, and extend PaperCraft Studio Pro 3.0.1 inside Blaze or from the
+exported repository archive. Version 3.0.1 ships a single OpenFX filter,
 **Paper Cutout FX** (`com.papercraft.CutoutFX`).
 
 ## Before you begin

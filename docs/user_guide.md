@@ -1,6 +1,6 @@
 # PaperCraft Studio Pro user guide
 
-This guide helps video editors install PaperCraft Studio Pro 3.0.0, apply the
+This guide helps video editors install PaperCraft Studio Pro 3.0.1, apply the
 **Paper Cutout FX** torn paper filter on the DaVinci Resolve 20 and 21 Edit
 pages, tune Inspector controls, and mix the 24 included Paper SFX audio clips.
 

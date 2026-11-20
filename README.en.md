@@ -122,6 +122,17 @@ The validated `MTTN_PaperCraft_Studio.drfx` archive remains included for Fusion-
 
 ## Improve timeline playback and renders
 
+Version 3.0.1 renders about 30% faster than 3.0.0 and produces exactly the same image, pixel for pixel. Per-frame times measured on an Apple M4 Pro Mac (14 cores):
+
+| Scenario | 3.0.0 | 3.0.1 |
+| :--- | ---: | ---: |
+| 1080p, cutout at rest | 10.8 ms | 7.0 ms |
+| 1080p, **Crumple Ball** intro | 22.5 ms | 14.7 ms |
+| 1080p, green screen without border | 11.5 ms | 7.0 ms |
+| 2160p (UHD), cutout at rest | 28.3 ms | 20.2 ms |
+
+To keep playback smooth in heavy projects:
+
 - Set **Playback** > **Render Cache** to **Smart** or **User** after finalizing your cutout parameters.
 - Lower **Playback** > **Timeline Proxy Resolution** to **Half** or **Quarter** when timing stop-motion animations.
 

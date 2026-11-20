@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <functional>
@@ -25,9 +26,14 @@ namespace papercraft {
 namespace ofx {
 namespace {
 
-constexpr int kPluginCount = 1;
+constexpr int kPluginCount = 2;
 constexpr int kVersionMajor = 3;
-constexpr int kVersionMinor = 0;
+constexpr int kVersionMinor = 1;
+
+enum class PluginRole {
+  kCutout = 0,
+  kFoldTransition = 1,
+};
 
 struct HostSuites {
   OfxHost* host = nullptr;
@@ -37,9 +43,9 @@ struct HostSuites {
   const OfxMultiThreadSuiteV1* thread = nullptr;
 };
 
-HostSuites& MutableSuites() {
-  static HostSuites suites;
-  return suites;
+HostSuites& MutableSuites(PluginRole role) {
+  static std::array<HostSuites, kPluginCount> suites;
+  return suites[static_cast<std::size_t>(role)];
 }
 
 bool StrEq(const char* a, const char* b) {
@@ -70,10 +76,13 @@ class ScopedOfxImage {
 };
 
 struct PluginInstance {
+  PluginRole role = PluginRole::kCutout;
   OfxImageClipHandle output_clip = nullptr;
   OfxImageClipHandle source_clip = nullptr;
+  OfxImageClipHandle source_from_clip = nullptr;
+  OfxImageClipHandle source_to_clip = nullptr;
 
-  // Cutout FX parameters.
+  // Cutout FX & shared parameters.
   OfxParamHandle source_mode = nullptr;
   OfxParamHandle source_premult = nullptr;
   OfxParamHandle media_scale = nullptr;
@@ -118,27 +127,45 @@ struct PluginInstance {
   OfxParamHandle master_angle = nullptr;
   OfxParamHandle flip_h = nullptr;
   OfxParamHandle flip_v = nullptr;
+
+  // Paper Fold & Unfold transition parameters.
+  OfxParamHandle transition_progress = nullptr;
+  OfxParamHandle fold_action = nullptr;
+  OfxParamHandle fold_pattern = nullptr;
+  OfxParamHandle fold_stages = nullptr;
+  OfxParamHandle direction_angle = nullptr;
+  OfxParamHandle fold_depth = nullptr;
+  OfxParamHandle stop_motion_steps = nullptr;
+  OfxParamHandle jitter_amount = nullptr;
 };
 
+// Shared state for one multiThread dispatch. Workers pull small chunks of rows
+// from `next_row` so fast threads (and performance cores) keep working while
+// rows covering the paper cutout, which cost much more than empty background
+// rows, are spread across all threads.
 struct ParallelDispatchContext {
-  int y_start = 0;
+  std::atomic<int> next_row{0};
   int y_end = 0;
+  int chunk = 1;
   const std::function<void(int y)>* row_fn = nullptr;
 };
 
-void ParallelThreadWorker(unsigned int thread_index, unsigned int thread_max,
-                          void* custom_arg) {
+void ParallelThreadWorker(unsigned int /*thread_index*/,
+                          unsigned int thread_max, void* custom_arg) {
   auto* ctx = static_cast<ParallelDispatchContext*>(custom_arg);
   if (ctx == nullptr || ctx->row_fn == nullptr || thread_max == 0) {
     return;
   }
-  const int total = ctx->y_end - ctx->y_start;
-  const int begin = ctx->y_start + (total * static_cast<int>(thread_index)) /
-                                       static_cast<int>(thread_max);
-  const int end = ctx->y_start + (total * static_cast<int>(thread_index + 1)) /
-                                     static_cast<int>(thread_max);
-  for (int y = begin; y < end; ++y) {
-    (*ctx->row_fn)(y);
+  while (true) {
+    const int begin =
+        ctx->next_row.fetch_add(ctx->chunk, std::memory_order_relaxed);
+    if (begin >= ctx->y_end) {
+      return;
+    }
+    const int end = std::min(ctx->y_end, begin + ctx->chunk);
+    for (int y = begin; y < end; ++y) {
+      (*ctx->row_fn)(y);
+    }
   }
 }
 
@@ -492,7 +519,7 @@ OfxStatus HandleDescribe(OfxImageEffectHandle effect) {
 
   const int version[2] = {kVersionMajor, kVersionMinor};
   s.prop->propSetIntN(props, kOfxPropVersion, 2, version);
-  s.prop->propSetString(props, kOfxPropVersionLabel, 0, "3.0.0");
+  s.prop->propSetString(props, kOfxPropVersionLabel, 0, "3.0.1");
 
   s.prop->propSetString(props, kOfxImageEffectPropSupportedContexts, 0,
                         kOfxImageEffectContextFilter);
@@ -1063,7 +1090,11 @@ OfxStatus HandleRender(OfxImageEffectHandle effect,
       }
       return;
     }
-    ParallelDispatchContext ctx{y_start, y_end, &row_fn};
+    ParallelDispatchContext ctx;
+    ctx.next_row.store(y_start, std::memory_order_relaxed);
+    ctx.y_end = y_end;
+    ctx.chunk = std::max(1, total / static_cast<int>(workers * 8));
+    ctx.row_fn = &row_fn;
     if (s.thread->multiThread(ParallelThreadWorker, workers, &ctx) !=
         kOfxStatOK) {
       for (int y = y_start; y < y_end; ++y) {

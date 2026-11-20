@@ -14,7 +14,7 @@ background Fusion render passes that increase timeline caching latency, risk
 opaque matte clipping on `V2` or higher overlay tracks, and break when host
 updates change node defaults.
 
-PaperCraft Studio Pro 3.0.0 solves this bottleneck by compiling the **Paper
+PaperCraft Studio Pro 3.0.1 solves this bottleneck by compiling the **Paper
 Cutout FX** filter as a self-contained C++17 OpenFX 1.4 bundle
 (`PaperCraftStudioPro.ofx.bundle`) that runs directly inside the Edit page
 OpenFX host while shipping deterministic Python builders for 48 kHz, 24-bit
@@ -173,7 +173,7 @@ through `DispatchAction`:
 | :------------------------ | :----------------- | :------------------- |
 | `com.papercraft.CutoutFX` | Filter             | **Paper Cutout FX**  |
 
-The descriptor reports version `3.0` (version label `3.0.0`). The
+The descriptor reports version `3.0` (version label `3.0.1`). The
 `HandleDescribeInContext` action returns `kOfxStatErrMissingHostFeature` for
 every context other than Filter, so the host never instantiates the plugin as
 a generator or transition.
@@ -211,7 +211,10 @@ The plugin advertises `kOfxImageEffectRenderFullySafe` and sets
 `parallel_for` lambda (`ParallelRowsFn`) delegates scanline ranges
 `[y_start, y_end)` to the host `OfxMultiThreadSuiteV1` pool (`multiThread`),
 falling back to sequential execution if the host omits the threading suite or
-runs with a single worker.
+runs with a single worker. Workers pull small chunks of rows from a shared
+atomic counter instead of taking one fixed slice each. Rows that cross the
+paper cutout cost far more than empty background rows, so dynamic chunks keep
+every core busy, including the efficiency cores on Apple silicon.
 
 The `HandleDescribe` action explicitly sets `kOfxImageEffectPropSupportsTiles`
 to `0` on `CutoutFX` and disables tiling on both clip descriptors. Because torn
@@ -255,10 +258,14 @@ To generate an organic torn cardstock collar around arbitrary keyed shapes,
 `BuildSubjectSignedDistanceField` constructs a signed Euclidean distance field
 on a dynamically scaled coarse grid bounded by `kMaxSdfDim = 960` columns (and a
 minimum `540`-row target stride before clamping). After evaluating the subject
-matte in parallel across coarse rows, `DistanceTransform2D` executes the
-Felzenszwalb-Huttenlocher parabolic lower-envelope distance transform across
-columns and rows in parallel (`O(W * H)` linear time with zero heap allocations
-inside worker loops thanks to stack-allocated `std::array` scratch arrays):
+matte in parallel across coarse rows, `DistanceTransform2D` computes an exact
+squared Euclidean distance transform in `O(W * H)` linear time. Because the
+input mask is binary, the column pass reduces to the distance to the nearest
+feature cell in each column and runs as two cache-friendly linear sweeps over
+blocks of columns. The row pass runs the Felzenszwalb-Huttenlocher parabolic
+lower-envelope transform with exact 64-bit integer intersections instead of a
+float division per step. Both passes produce bit-identical values to the
+classic float implementation:
 
 $$D(p) = \min_{q} \left( (p - q)^2 + f(q) \right)$$
 

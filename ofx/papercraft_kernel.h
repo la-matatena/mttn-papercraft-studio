@@ -64,6 +64,54 @@ enum class CutoutAnimStyle {
   kFlatPop = 4,
 };
 
+// Action mode for the Edit-page Paper Fold & Unfold transition.
+enum class FoldTransitionAction {
+  kAuto = 0,           // Unfold at clip start, fold at clip end, smart on cuts.
+  kUnfoldIn = 1,       // Incoming clip unfolds over outgoing clip.
+  kFoldOut = 2,        // Outgoing clip folds up to reveal incoming clip.
+  kFoldAndUnfold = 3,  // Outgoing clip folds away, then incoming clip unfolds.
+};
+
+// Hinge layout preset for multi-stage paper folding/unfolding.
+enum class FoldPattern {
+  kCraftFlaps = 0,      // Asymmetric halves + angled edge/corner flaps.
+  kMapGrid = 1,         // Orthogonal map/poster folds.
+  kAccordion = 2,       // Parallel pleat strips along unfold angle.
+  kOrigamiCorners = 3,  // Four inward diagonal corner flaps + center fold.
+};
+
+// Parameter bundle for the Edit-page Paper Fold & Unfold transition.
+struct PaperFoldTransitionParams {
+  float progress = 0.5f;  // Host-animated [0, 1] transition progress.
+  int fold_action = 0;
+  int fold_pattern = 0;
+  int fold_stages = 4;  // [2, 5] sequential fold stages.
+  float direction_angle_deg = 0.0f;
+  float fold_depth = 0.55f;
+  bool mirror_h = false;
+  bool mirror_v = false;
+
+  // Optional torn cardstock border & paper backside/crease look.
+  bool enable_border = true;
+  float border_width_norm = 0.018f;
+  float tear_roughness_norm = 0.012f;
+  float tear_frequency = 24.0f;
+  float paper_r = 0.965f;
+  float paper_g = 0.945f;
+  float paper_b = 0.895f;
+  float grain_strength = 0.38f;
+  float crease_strength = 0.52f;
+  int random_seed = 7;
+
+  // Stop-motion stepping, shadows, & source alpha mode.
+  bool enable_stop_motion = true;
+  int stop_motion_steps = 10;
+  float jitter_amount = 0.25f;
+  float shadow_opacity = 0.62f;
+  float shadow_softness_norm = 0.020f;
+  bool source_is_premultiplied = true;
+};
+
 // Parameter bundle for the Paper Cutout FX filter renderer.
 struct CutoutParams {
   // Media source & placement.
@@ -147,6 +195,21 @@ void RenderCutoutFrame(const CutoutParams& params, const ImageView& source,
                        const ImageView& output, const PixelRect& canvas_bounds,
                        const PixelRect& render_window,
                        const ParallelRowsFn& parallel_for);
+
+// Quantizes normalized [0, 1] transition progress into stop-motion hold steps
+// while preserving exact 0.0 and 1.0 endpoints.
+float ComputeSteppedTransitionProgress(const PaperFoldTransitionParams& params);
+
+// Renders the Edit-page Paper Fold & Unfold transition between `source_from`
+// and `source_to` (either of which may be disconnected/transparent when placed
+// at the start or end of a standalone timeline clip).
+void RenderPaperFoldTransition(const PaperFoldTransitionParams& params,
+                               const ImageView& source_from,
+                               const ImageView& source_to,
+                               const ImageView& output,
+                               const PixelRect& canvas_bounds,
+                               const PixelRect& render_window,
+                               const ParallelRowsFn& parallel_for);
 
 }  // namespace papercraft
 
