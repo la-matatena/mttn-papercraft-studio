@@ -4,6 +4,7 @@
 
 [![CI & Release](https://github.com/la-matatena/mttn-papercraft-studio/actions/workflows/ci-release.yml/badge.svg)](https://github.com/la-matatena/mttn-papercraft-studio/actions/workflows/ci-release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/la-matatena/mttn-papercraft-studio?color=8367c7&label=release)](https://github.com/la-matatena/mttn-papercraft-studio/releases/latest)
+[![Sitio web](https://img.shields.io/badge/sitio%20web-la--matatena.github.io-8367c7.svg)](https://la-matatena.github.io/mttn-papercraft-studio/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-8367c7.svg)](LICENSE)
 [![OpenFX 1.4 C++17](https://img.shields.io/badge/OpenFX-1.4%20C%2B%2B17-6a4fb3.svg)](ofx/Info.plist)
 [![DaVinci Resolve 20 | 21](https://img.shields.io/badge/DaVinci%20Resolve-20%20%7C%2021%20Free%20%26%20Studio-8367c7.svg)](docs/user_guide.md)
