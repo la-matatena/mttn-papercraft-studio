@@ -6,98 +6,174 @@
   <meta name="color-scheme" content="dark">
   <title>MTTN PaperCraft Studio · Recortes de papel stop-motion para DaVinci Resolve</title>
   <meta name="description" content="Plugin OpenFX nativo para DaVinci Resolve 20 y 21: recortes de papel stop-motion (Paper Cutout FX), transición Paper Fold &amp; Unfold, bordes de cartulina rasgada y 4 sonidos Foley reales de papel. Gratis y sin marcas de agua.">
-  <meta name="theme-color" content="#15121e">
+  <meta name="theme-color" content="#161513">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="alternate" hreflang="es" href="https://la-matatena.github.io/mttn-papercraft-studio/">
   <link rel="alternate" hreflang="en" href="https://la-matatena.github.io/mttn-papercraft-studio/en/">
   <meta property="og:title" content="MTTN PaperCraft Studio">
   <meta property="og:description" content="Recortes de papel stop-motion, transición Paper Fold &amp; Unfold y Foley de papel en la página Edit de DaVinci Resolve.">
+  <meta property="og:image" content="https://la-matatena.github.io/mttn-papercraft-studio/images/hero-paper.webp">
   <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <a class="skip" href="#main">Saltar al contenido</a>
-  <header class="topbar">
-    <div class="wrap">
-      <a class="brand" href="./"><img src="icon.svg" alt="" width="30" height="30">MTTN PaperCraft Studio</a>
-      <nav class="nav" aria-label="Principal">
-        <a href="#efectos">Efectos</a>
-        <a href="#controles">Controles</a>
-        <a href="#sonidos">Sonidos</a>
-        <a href="#instalar">Instalar</a>
-        <a href="https://github.com/la-matatena/mttn-papercraft-studio">GitHub</a>
-        <a class="lang" href="en/" hreflang="en" lang="en">English</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="./" aria-current="page">
+        <img src="icon.svg" alt="" width="24" height="24">
+        <span>MTTN PaperCraft Studio</span>
+      </a>
+      <nav class="site-nav" aria-label="Principal">
+        <button class="menu-button" type="button" popovertarget="site-menu" popovertargetaction="toggle" aria-controls="site-menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16"/>
+          </svg>
+          <span>Menú</span>
+        </button>
+        <ul id="site-menu" class="site-menu" popover="auto">
+          <li><a href="#efectos">Efectos</a></li>
+          <li><a href="#controles">Controles</a></li>
+          <li><a href="#sonidos">Sonidos</a></li>
+          <li><a href="#instalar">Instalar</a></li>
+          <li><a href="https://github.com/la-matatena/mttn-papercraft-studio">GitHub</a></li>
+          <li><a class="nav-lang" href="en/" hreflang="en" lang="en">English</a></li>
+        </ul>
       </nav>
     </div>
   </header>
 
   <main id="main">
     <section class="hero">
-      <div class="wrap hero-grid split">
-        <div>
-          <span class="eyebrow">v3.1 · OpenFX 1.4 · C++17 · MIT</span>
-          <h1>Estética de papel hecho a mano, directo en la página Edit.</h1>
-          <p class="lead">Recortes stop-motion orgánicos, bordes de cartulina rasgada, una transición de papel que se dobla y se desdobla, y sonidos Foley de papel para DaVinci Resolve 20 y 21, sin abrir Fusion y sin marcas de agua.</p>
-          <div class="actions">
-            <a class="btn primary" href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">Descargar la última versión</a>
-            <a class="btn" href="https://github.com/la-matatena/mttn-papercraft-studio">Ver en GitHub</a>
+      <div class="hero-scene">
+        <div class="hero-media">
+          <img src="images/hero-paper.webp" width="1376" height="768" fetchpriority="high"
+               alt="Hojas de cartulina crema, gris piedra y violeta apagado dobladas en pliegues con bordes rasgados sobre una mesa oscura de trabajo">
+        </div>
+        <div class="wrap">
+          <div class="hero-content">
+            <h1>Estética de papel hecho a mano, directo en la página Edit</h1>
+            <p class="lead">Recortes stop-motion orgánicos, bordes de cartulina rasgada, una transición de papel que se dobla y se desdobla, y sonidos Foley reales para DaVinci Resolve 20 y 21, sin abrir Fusion y sin marcas de agua.</p>
+            <div class="actions">
+              <a class="btn primary" href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">Descargar v3.1</a>
+              <a class="btn" href="https://github.com/la-matatena/mttn-papercraft-studio">Ver en GitHub</a>
+            </div>
           </div>
-          <ul class="chips" aria-label="Compatibilidad">
+        </div>
+      </div>
+      <div class="hero-rail">
+        <div class="wrap hero-rail-inner">
+          <span class="rail-version">
+            <span class="crop-mark" aria-hidden="true"></span>
+            <span>v3.1 · OpenFX 1.4 · C++17 · MIT</span>
+          </span>
+          <ul class="rail-list" aria-label="Compatibilidad">
             <li>DaVinci Resolve 20 y 21</li>
             <li>Free y Studio</li>
             <li>macOS Universal</li>
             <li>Linux x86_64</li>
           </ul>
         </div>
-        <svg class="paper-art" viewBox="0 0 400 320" role="img" aria-label="Ilustración de dos recortes de cartulina rasgada con la estampa de La Matatena">
-          <defs>
-            <filter id="torn" x="-10%" y="-10%" width="120%" height="120%">
-              <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="4" seed="7"/>
-              <feDisplacementMap in="SourceGraphic" scale="16"/>
-            </filter>
-            <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="9"/>
-            </filter>
-            <filter id="grain">
-              <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="2" result="noise"/>
-              <feColorMatrix in="noise" type="saturate" values="0"/>
-              <feComponentTransfer><feFuncA type="linear" slope="0.12"/></feComponentTransfer>
-              <feComposite in2="SourceGraphic" operator="in"/>
-            </filter>
-            <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#9f85e3"/>
-              <stop offset="1" stop-color="#583da0"/>
-            </linearGradient>
-          </defs>
-          <g transform="rotate(10 220 160)">
-            <g class="wobble back">
-              <rect x="110" y="40" width="220" height="230" rx="6" fill="#000" opacity="0.45" filter="url(#shadow)" transform="translate(10 14)"/>
-              <rect x="110" y="40" width="220" height="230" rx="6" fill="#d5c7f7" filter="url(#torn)"/>
-            </g>
-          </g>
-          <g class="wobble">
-            <rect x="70" y="50" width="240" height="220" rx="6" fill="#000" opacity="0.5" filter="url(#shadow)" transform="translate(12 16)"/>
-            <rect x="70" y="50" width="240" height="220" rx="6" fill="#f4efe6" filter="url(#torn)"/>
-            <rect x="92" y="72" width="196" height="176" rx="4" fill="url(#ink)" filter="url(#torn)"/>
-            <image href="icon.svg" x="140" y="110" width="100" height="100"/>
-            <rect x="70" y="50" width="240" height="220" fill="#fff" filter="url(#grain)"/>
-            <path d="M190 52 L194 268" stroke="#000" stroke-opacity="0.08" stroke-width="2"/>
-          </g>
-        </svg>
       </div>
     </section>
 
     <section id="efectos">
       <div class="wrap">
         <div class="section-head">
+          <span class="section-kicker"><span class="crop-mark" aria-hidden="true"></span> 01 · OpenFX nativo</span>
           <h2>Dos herramientas nativas en la categoría MTTN PaperCraft Studio</h2>
-          <p>Arrastra <strong>Paper Cutout FX</strong> desde <strong>Effects</strong> &gt; <strong>Open FX</strong> sobre tus clips y la transición <strong>Paper Fold &amp; Unfold</strong> desde <strong>Open FX</strong> &gt; <strong>Transitions</strong> a tus puntos de edición, como cualquier efecto de Resolve. Ambas se ejecutan en C++17 multihilo, sin la sobrecarga del grafo de nodos de Fusion: un fotograma 1080p de <strong>Paper Cutout FX</strong> tarda unos 7 ms en un Mac con Apple M4 Pro, alrededor de un 30 % menos que en la versión 3.0.</p>
+          <p>Arrastra <strong>Paper Cutout FX</strong> desde <strong>Effects</strong> &gt; <strong>Open FX</strong> sobre tus clips y la transición <strong>Paper Fold &amp; Unfold</strong> desde <strong>Open FX</strong> &gt; <strong>Transitions</strong> a tus puntos de edición, como cualquier efecto de Resolve. Ambas se ejecutan en C++17 multihilo (0 MB de VRAM), sin la sobrecarga del grafo de nodos de Fusion.</p>
         </div>
-        <div class="grid">
-          <article class="card"><span class="icon" aria-hidden="true">✂️</span><h3>Paper Cutout FX</h3><p>Convierte cualquier clip, título, PNG transparente o toma con pantalla verde (con extracción integrada) en un recorte de papel animado con borde de cartulina rasgada.</p></article>
-          <article class="card"><span class="icon" aria-hidden="true">🗞️</span><h3>Paper Fold &amp; Unfold</h3><p>Transición que desdobla un clip desde un paquete de papel doblado o lo dobla para que salga, con reverso de papel, pliegues por etapas y sombra.</p></article>
-          <article class="card"><span class="icon" aria-hidden="true">📄</span><h3>Recortes que se doblan y se despliegan</h3><p>Para animar la entrada o la salida de un recorte, coloca Paper Fold &amp; Unfold al inicio o al final del clip: detecta el recorte y mantiene un único borde rasgado.</p></article>
-          <article class="card"><span class="icon" aria-hidden="true">🎞️</span><h3>Stop-motion táctil</h3><p>Fotogramas sostenidos, vibración de posición y rotación, y sombra 3D para un acabado hecho a mano.</p></article>
+
+        <figure class="specimen">
+          <div class="specimen-bar">
+            <span class="specimen-title">
+              <span class="crop-mark" aria-hidden="true"></span>
+              <span>Paper Fold &amp; Unfold · Secuencia de pliegue en cuadro completo y recorte alfa</span>
+            </span>
+            <span>100 % CPU · 0 MB VRAM</span>
+          </div>
+          <div class="specimen-frame">
+            <img src="images/paper-fold-unfold.webp" width="1440" height="404" loading="lazy"
+                 alt="Cuatro etapas del despliegue de Paper Fold &amp; Unfold sobre un clip a cuadro completo arriba y sobre un recorte alfa con borde rasgado abajo">
+          </div>
+        </figure>
+
+        <div class="plugin-grid">
+          <article class="plugin-card">
+            <div class="plugin-card-head">
+              <svg class="line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="6" cy="6" r="3"/>
+                <circle cx="6" cy="18" r="3"/>
+                <line x1="20" y1="4" x2="8.12" y2="15.88"/>
+                <line x1="14.47" y1="14.48" x2="20" y2="20"/>
+                <line x1="8.12" y1="8.12" x2="12" y2="12"/>
+              </svg>
+              <span class="plugin-path">Effects &gt; Open FX</span>
+            </div>
+            <h3>Paper Cutout FX</h3>
+            <p>Convierte cualquier clip, título, PNG transparente o toma con pantalla verde (con extracción integrada) en un recorte de papel animado con borde de cartulina rasgada.</p>
+          </article>
+
+          <article class="plugin-card">
+            <div class="plugin-card-head">
+              <svg class="line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="9" y1="15" x2="15" y2="15"/>
+              </svg>
+              <span class="plugin-path">Open FX &gt; Transitions</span>
+            </div>
+            <h3>Paper Fold &amp; Unfold</h3>
+            <p>Transición que desdobla un clip desde un paquete de papel doblado o lo dobla para que salga, con reverso de papel, pliegues por etapas y sombra.</p>
+          </article>
+        </div>
+
+        <div class="trait-row">
+          <article class="trait-cell">
+            <div class="trait-head">
+              <svg class="line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                <polyline points="2 17 12 22 22 17"/>
+                <polyline points="2 12 12 17 22 12"/>
+              </svg>
+              <h3>Recortes que se doblan y despliegan</h3>
+            </div>
+            <p>Coloca Paper Fold &amp; Unfold al inicio o al final de un recorte: detecta el contorno alfa y conserva un único borde rasgado.</p>
+          </article>
+
+          <article class="trait-cell">
+            <div class="trait-head">
+              <svg class="line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="4" width="20" height="16" rx="2"/>
+                <path d="M7 4v16M17 4v16M2 9h5M2 15h5M17 9h5M17 15h5"/>
+              </svg>
+              <h3>Stop-motion táctil</h3>
+            </div>
+            <p>Fotogramas sostenidos, vibración sutil de posición y rotación, y sombra 3D direccional para un acabado físico hecho a mano.</p>
+          </article>
+
+          <article class="trait-cell bench-cell">
+            <div class="trait-head">
+              <span class="crop-mark" aria-hidden="true"></span>
+              <h3>Rendimiento 1080p en Apple M4 Pro</h3>
+            </div>
+            <div class="bench-numbers">
+              <div>
+                <span class="metric-val">1.4 ms</span>
+                <span class="metric-note">Logo PNG</span>
+              </div>
+              <div>
+                <span class="metric-val">6.0 ms</span>
+                <span class="metric-note">Cuadro completo</span>
+              </div>
+            </div>
+            <p>Hasta 4× más rápido en Paper Cutout FX frente a la versión 3.1.0.</p>
+          </article>
         </div>
       </div>
     </section>
@@ -105,32 +181,51 @@
     <section id="controles" class="alt">
       <div class="wrap">
         <div class="section-head">
+          <span class="section-kicker"><span class="crop-mark" aria-hidden="true"></span> 02 · Inspector</span>
           <h2>Todo se ajusta desde el Inspector</h2>
           <p>Controles organizados por secciones tanto para el efecto <strong>Paper Cutout FX</strong> como para la transición <strong>Paper Fold &amp; Unfold</strong>.</p>
         </div>
-        <h3 id="cutout-controls-heading" class="table-group-title">Paper Cutout FX (efecto)</h3>
+
+        <h3 id="cutout-controls-heading" class="table-group-title">
+          <span>Paper Cutout FX</span>
+          <span class="table-group-meta">Efecto · 7 secciones</span>
+        </h3>
         <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cutout-controls-heading">
           <table style="--label-1: 'Sección'; --label-2: 'Qué hace';">
-            <thead><tr><th scope="col">Sección</th><th scope="col">Qué hace</th></tr></thead>
+            <thead>
+              <tr>
+                <th scope="col">Sección</th>
+                <th scope="col">Qué hace</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><th scope="row">1. Media Source &amp; Placement</th><td>Encuadra la imagen del clip dentro del recorte con escala, posición y rotación.</td></tr>
-              <tr><th scope="row">2. Green Screen &amp; Matte Cleanup</th><td>Extrae al sujeto de fondos verdes o azules con supresión de contaminación de color.</td></tr>
-              <tr><th scope="row">3. Torn Paper Cutout Border</th><td>Genera un borde procedural de cartulina rasgada alrededor de la silueta alfa.</td></tr>
-              <tr><th scope="row">4. Paper Grain &amp; Fold Creases</th><td>Añade textura de fibra de papel multicapa y pliegues marcados.</td></tr>
-              <tr><th scope="row">5. 3D Drop Shadow</th><td>Sombra suave y direccional con profundidad detrás del recorte.</td></tr>
-              <tr><th scope="row">6. Stop-Motion &amp; Master Transform</th><td>Cuantiza el movimiento en fotogramas sostenidos (cada 6 fotogramas por defecto: aspecto de 4 fps a 24 fps) y añade una vibración táctil sutil.</td></tr>
-              <tr><th scope="row">7. Advanced</th><td>Cerrada por defecto: modo de origen (clip o estampa integrada), alfa premultiplicado, detalle de fibras, escala del grano y de los pliegues, y semilla de textura.</td></tr>
+              <tr><th scope="row"><span class="row-idx">01</span>Media Source &amp; Placement</th><td>Encuadra la imagen del clip dentro del recorte con escala, posición y rotación.</td></tr>
+              <tr><th scope="row"><span class="row-idx">02</span>Green Screen &amp; Matte Cleanup</th><td>Extrae al sujeto de fondos verdes o azules con supresión de contaminación de color.</td></tr>
+              <tr><th scope="row"><span class="row-idx">03</span>Torn Paper Cutout Border</th><td>Genera un borde procedural de cartulina rasgada alrededor de la silueta alfa.</td></tr>
+              <tr><th scope="row"><span class="row-idx">04</span>Paper Grain &amp; Fold Creases</th><td>Añade textura de fibra de papel multicapa y pliegues marcados.</td></tr>
+              <tr><th scope="row"><span class="row-idx">05</span>3D Drop Shadow</th><td>Sombra suave y direccional con profundidad detrás del recorte.</td></tr>
+              <tr><th scope="row"><span class="row-idx">06</span>Stop-Motion &amp; Master Transform</th><td>Cuantiza el movimiento en fotogramas sostenidos (cada 6 fotogramas por defecto: aspecto de 4 fps a 24 fps) y añade una vibración táctil sutil.</td></tr>
+              <tr><th scope="row"><span class="row-idx">07</span>Advanced</th><td>Cerrada por defecto: modo de origen (clip o estampa integrada), alfa premultiplicado, detalle de fibras, escala del grano y de los pliegues, y semilla de textura.</td></tr>
             </tbody>
           </table>
         </div>
-        <h3 id="fold-controls-heading" class="table-group-title">Paper Fold &amp; Unfold (transición)</h3>
+
+        <h3 id="fold-controls-heading" class="table-group-title">
+          <span>Paper Fold &amp; Unfold</span>
+          <span class="table-group-meta">Transición · 3 secciones</span>
+        </h3>
         <div class="table-scroll" tabindex="0" role="region" aria-labelledby="fold-controls-heading">
           <table style="--label-1: 'Sección'; --label-2: 'Qué hace';">
-            <thead><tr><th scope="col">Sección</th><th scope="col">Qué hace</th></tr></thead>
+            <thead>
+              <tr>
+                <th scope="col">Sección</th>
+                <th scope="col">Qué hace</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><th scope="row">1. Fold &amp; Unfold</th><td>Elige modo automático o manual de pliegue/despliegue, patrón (Craft Flaps, Map Grid, Accordion, Origami Corners), etapas (2 a 5), dirección, profundidad 3D y recorrido del paquete.</td></tr>
-              <tr><th scope="row">2. Paper Look</th><td>Borde opcional de cartulina rasgada mientras la hoja está doblada, color y grano del reverso, y marcas de pliegue que se desvanecen al abrirse.</td></tr>
-              <tr><th scope="row">3. Stop-Motion &amp; Shadow</th><td>Poses sostenidas con vibración de mano, sombra proyectada bajo el paquete y sombreado direccional en las solapas.</td></tr>
+              <tr><th scope="row"><span class="row-idx">01</span>Fold &amp; Unfold</th><td>Elige modo automático o manual de pliegue/despliegue, patrón (Craft Flaps, Map Grid, Accordion, Origami Corners), etapas (2 a 5), dirección, profundidad 3D y recorrido del paquete.</td></tr>
+              <tr><th scope="row"><span class="row-idx">02</span>Paper Look</th><td>Borde opcional de cartulina rasgada mientras la hoja está doblada, color y grano del reverso, y marcas de pliegue que se desvanecen al abrirse.</td></tr>
+              <tr><th scope="row"><span class="row-idx">03</span>Stop-Motion &amp; Shadow</th><td>Poses sostenidas con vibración de mano, sombra proyectada bajo el paquete y sombreado direccional en las solapas.</td></tr>
             </tbody>
           </table>
         </div>
@@ -140,14 +235,47 @@
     <section id="sonidos">
       <div class="wrap">
         <div class="section-head">
+          <span class="section-kicker"><span class="crop-mark" aria-hidden="true"></span> 03 · Audio Foley</span>
           <h2>4 sonidos Foley reales de papel incluidos</h2>
           <p>Grabaciones reales en estéreo a 48 kHz y 24 bits bajo dominio público (<code>CC0</code> / <code>Public Domain</code>). Impórtalas en un Power Bin para usarlas en todos tus proyectos.</p>
         </div>
-        <div class="sfx">
-          <article class="card"><h3>01_Paper_Unfold.wav</h3><p>Despliegue nítido de pliego doblado para la transición Paper Fold &amp; Unfold.</p></article>
-          <article class="card"><h3>02_Paper_Crumple.wav</h3><p>Arrugado orgánico en bola estéreo para gags y texturas de papel arrugado.</p></article>
-          <article class="card"><h3>03_Paper_Glide_Flip.wav</h3><p>Barrido y giro rápido de hoja para cortes rápidos y cambios de página.</p></article>
-          <article class="card"><h3>04_Paper_Rip_Tear.wav</h3><p>Rasgado seco de fibra para bordes de cartulina rasgada y recortes que aparecen de golpe.</p></article>
+
+        <div class="sfx-list">
+          <article class="sfx-row">
+            <h3 class="sfx-name">01_Paper_Unfold.wav</h3>
+            <svg class="sfx-wave" viewBox="0 0 112 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 12v0M10 10v4M16 7v10M22 4v16M28 6v12M34 9v6M40 5v14M46 8v8M52 10v4M58 7v10M64 9v6M70 11v2M76 9v6M82 10v4M88 11v2M94 11v2M100 12v0M106 12v0"/>
+            </svg>
+            <p>Despliegue nítido de pliego doblado para la transición Paper Fold &amp; Unfold.</p>
+            <span class="sfx-dur">1.30 s · 48 kHz / 24-bit</span>
+          </article>
+
+          <article class="sfx-row">
+            <h3 class="sfx-name">02_Paper_Crumple.wav</h3>
+            <svg class="sfx-wave" viewBox="0 0 112 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 10v4M10 6v12M16 4v16M22 8v8M28 3v18M34 5v14M40 9v6M46 4v16M52 6v12M58 3v18M64 7v10M70 5v14M76 8v8M82 4v16M88 7v10M94 9v6M100 10v4M106 11v2"/>
+            </svg>
+            <p>Arrugado orgánico en bola estéreo para gags y texturas de papel arrugado.</p>
+            <span class="sfx-dur">1.92 s · 48 kHz / 24-bit</span>
+          </article>
+
+          <article class="sfx-row">
+            <h3 class="sfx-name">03_Paper_Glide_Flip.wav</h3>
+            <svg class="sfx-wave" viewBox="0 0 112 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 12v0M10 11v2M16 10v4M22 8v8M28 5v14M34 3v18M40 6v12M46 9v6M52 10v4M58 11v2M64 12v0M70 12v0M76 12v0"/>
+            </svg>
+            <p>Barrido y giro rápido de hoja para cortes rápidos y cambios de página.</p>
+            <span class="sfx-dur">0.56 s · 48 kHz / 24-bit</span>
+          </article>
+
+          <article class="sfx-row">
+            <h3 class="sfx-name">04_Paper_Rip_Tear.wav</h3>
+            <svg class="sfx-wave" viewBox="0 0 112 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+              <path d="M4 11v2M10 4v16M16 2v20M22 6v12M28 4v16M34 7v10M40 5v14M46 9v6M52 10v4M58 11v2M64 12v0M70 12v0"/>
+            </svg>
+            <p>Rasgado seco de fibra para bordes de cartulina rasgada y recortes que aparecen de golpe.</p>
+            <span class="sfx-dur">0.61 s · 48 kHz / 24-bit</span>
+          </article>
         </div>
       </div>
     </section>
@@ -155,15 +283,18 @@
     <section id="instalar" class="alt">
       <div class="wrap">
         <div class="section-head">
+          <span class="section-kicker"><span class="crop-mark" aria-hidden="true"></span> 04 · Instalación</span>
           <h2>Instalación</h2>
           <p>Usa DaVinci Resolve descargado desde Blackmagic Design: la edición de la Mac App Store no puede cargar plugins OpenFX de terceros.</p>
         </div>
         <ol class="steps">
           <li>
+            <span class="step-num">01</span>
             <h3>Descarga</h3>
             <p>Descarga y descomprime <code>MTTN_PaperCraft_Studio_Full_Bundle.zip</code> desde <a href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">GitHub Releases</a>.</p>
           </li>
           <li>
+            <span class="step-num">02</span>
             <h3>Instala en macOS o Linux</h3>
             <p>En macOS, haz doble clic en el instalador o ejecútalo desde Terminal dentro de la carpeta descomprimida (añade <code>--user</code> sin administrador; usa <code>./ofx/</code> si clonaste el repositorio):</p>
             <pre><code>./Install_PaperCraft_<wbr>OpenFX_macOS.command</code></pre>
@@ -171,6 +302,7 @@
             <pre><code>./install_linux_ofx.sh</code></pre>
           </li>
           <li>
+            <span class="step-num">03</span>
             <h3>Reinicia Resolve</h3>
             <p>Abre <strong>Effects</strong> &gt; <strong>Open FX</strong> &gt; <strong>MTTN PaperCraft Studio</strong> y arrastra un efecto sobre tu clip, o la transición desde <strong>Open FX</strong> &gt; <strong>Transitions</strong>.</p>
           </li>
@@ -180,19 +312,42 @@
 
     <section id="docs">
       <div class="wrap">
-        <div class="section-head"><h2>Documentación</h2></div>
-        <div class="grid three">
-          <a class="card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/user_guide.md"><h3>Guía de usuario</h3><p>Instalación, flujos en la página Edit, parámetros del Inspector, mezcla de SFX y solución de problemas.</p></a>
-          <a class="card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/design_doc.md"><h3>Documento de diseño</h3><p>Arquitectura, integración con OpenFX 1.4, campos de distancia con signo y audio Foley real.</p></a>
-          <a class="card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/developer_guide.md"><h3>Guía de desarrollo</h3><p>Estructura del repositorio, compilación en macOS y Linux, y suites de verificación.</p></a>
+        <div class="section-head">
+          <span class="section-kicker"><span class="crop-mark" aria-hidden="true"></span> 05 · Referencia</span>
+          <h2>Documentación</h2>
+        </div>
+        <div class="docs-grid">
+          <a class="doc-card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/user_guide.md">
+            <div class="doc-card-head">
+              <h3>Guía de usuario</h3>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg>
+            </div>
+            <p>Instalación, flujos en la página Edit, parámetros del Inspector, mezcla de SFX y solución de problemas.</p>
+          </a>
+          <a class="doc-card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/design_doc.md">
+            <div class="doc-card-head">
+              <h3>Documento de diseño</h3>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg>
+            </div>
+            <p>Arquitectura, integración con OpenFX 1.4, campos de distancia con signo y audio Foley real.</p>
+          </a>
+          <a class="doc-card" href="https://github.com/la-matatena/mttn-papercraft-studio/blob/main/docs/developer_guide.md">
+            <div class="doc-card-head">
+              <h3>Guía de desarrollo</h3>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg>
+            </div>
+            <p>Estructura del repositorio, compilación en macOS y Linux, y suites de verificación.</p>
+          </a>
         </div>
       </div>
     </section>
 
     <section class="cta alt">
-      <div class="wrap">
-        <h2>Dale textura a tu próximo video</h2>
-        <p>Gratis y de código abierto bajo licencia MIT. Desarrollado por La Matatena.</p>
+      <div class="wrap cta-band">
+        <div class="cta-copy">
+          <h2>Dale textura a tu próximo video</h2>
+          <p>Gratis y de código abierto bajo licencia MIT. Desarrollado por La Matatena.</p>
+        </div>
         <div class="actions">
           <a class="btn primary" href="https://github.com/la-matatena/mttn-papercraft-studio/releases/latest">Descargar</a>
           <a class="btn" href="https://la-matatena.github.io/mttn-autosubs-tool/">Conoce MTTN AutoSubs Tool</a>
@@ -211,5 +366,62 @@
       </nav>
     </div>
   </footer>
+
+  <script type="module">
+    if (!Object.hasOwn(HTMLElement.prototype, "popover")) {
+      import("https://unpkg.com/@oddbird/popover-polyfill@latest/dist/popover.min.js");
+    }
+
+    const header = document.querySelector(".site-header");
+    const inner = document.querySelector(".header-inner");
+    const menu = document.getElementById("site-menu");
+
+    if (header && inner && menu) {
+      let lastWidth = 0;
+
+      const syncNav = () => {
+        const width = header.clientWidth;
+        const isWide = header.classList.contains("is-wide");
+        if (!isWide && width <= lastWidth) return;
+        lastWidth = width;
+
+        const wasOpen =
+          menu.hasAttribute("popover") &&
+          (menu.matches(":popover-open") || menu.classList.contains(":popover-open"));
+
+        header.classList.add("is-measuring", "is-wide");
+        menu.removeAttribute("popover");
+        const fits = inner.scrollWidth <= inner.clientWidth;
+
+        if (!fits) {
+          header.classList.remove("is-wide");
+          menu.setAttribute("popover", "auto");
+          if (wasOpen && typeof menu.showPopover === "function") {
+            try {
+              menu.showPopover();
+            } catch {
+              /* Ignore if polyfill has not finished initializing. */
+            }
+          }
+        }
+        requestAnimationFrame(() => header.classList.remove("is-measuring"));
+      };
+
+      menu.addEventListener("click", (event) => {
+        if (
+          event.target.closest("a") &&
+          menu.hasAttribute("popover") &&
+          typeof menu.hidePopover === "function"
+        ) {
+          menu.hidePopover();
+        }
+      });
+
+      const ro = new ResizeObserver(syncNav);
+      ro.observe(header);
+      ro.observe(menu);
+      syncNav();
+    }
+  </script>
 </body>
 </html>
